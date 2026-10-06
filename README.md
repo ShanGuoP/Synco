@@ -23,6 +23,8 @@ Windows 桌面应用（64 位），不需要管理员权限，照片始终只待
 - **蒙版随时改**：以 PNG 原地存在项目目录里，橡皮可擦回，最多回退 8 笔
 - **对比**：原图与成图中缝可拖、可缩放平移，1:1 看真实像素，满意再「下载成图」
 - **提示词预设**：常用的修图指令存成模板反复用，负面词与步数/CFG 都能覆盖默认值
+- **画布（图生图）**：不依赖照片也能开工——从白纸起稿，写一句话整幅交给云端生成；
+  草稿自动落盘，成图挂在同一项目的历史里
 - **拖拽导入**：一次多张，也可以把整个文件夹直接拖到首页的导入卡上
 - **明暗主题**：跟随系统 / 纸白 / 墨黑，画布四周始终是中性深底，判色不被界面底色带偏
 
@@ -30,7 +32,7 @@ Windows 桌面应用（64 位），不需要管理员权限，照片始终只待
 
 ## 下载与安装
 
-从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco_0.1.0_x64-setup.exe`**，双击安装
+从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco_0.2.0_x64-setup.exe`**，双击安装
 （装到当前用户目录，不需要管理员权限；安装界面是简体中文）。装完从开始菜单启动 **Synco**。
 
 > Releases 里还没有东西时，见下面的[从源码构建](#从源码构建)。
@@ -177,7 +179,7 @@ Synco 自己不带模型，它是**调度台 + 缝合内核**。下面二选一�
 git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # 得到 synco.exe / synco-tools.exe / synco-desktop.exe
-npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_0.1.0_x64-setup.exe
+npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_0.2.0_x64-setup.exe
 ```
 
 只想跑起来看看，不用打包：
@@ -220,7 +222,8 @@ Copyright 2026 ShanGuoP
 
 ### 第三方资源
 
-界面字体 **思源宋体 / Noto Serif SC**（`public/fonts/NotoSerifSC-VF.ttf`）单独适用 **SIL Open Font License 1.1**，
+界面字体 **思源宋体 / Noto Serif SC**（`public/fonts/NotoSerifSC-VF.ttf` 为完整字源，运行时加载按常用字
+子集化的 `NotoSerifSC-VF.woff2`，字表由 `tools/make-font-chars.py` 生成）单独适用 **SIL Open Font License 1.1**，
 不受上面的 Apache-2.0 覆盖：
 
 ```
