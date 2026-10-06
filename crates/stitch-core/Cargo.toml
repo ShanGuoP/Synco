@@ -1,0 +1,10 @@
+[package]
+name = "stitch-core"
+description = "云端局部重绘的裁切-缝合内核：形态学膨胀走 imageproc，重采样走 fast_image_resize，native 与 wasm32 共用"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fast_image_resize = { version = "6.1.0", features = ["rayon"] }
+imageproc = "0.27.0"

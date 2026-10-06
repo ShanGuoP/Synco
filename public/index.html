@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<!-- 不写 maximum-scale：画布之外的那此页面（列表、设置）在手机上要能捏合放大 -->
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/png" sizes="32x32" href="/public/icons/synco-32.png">
+<link rel="apple-touch-icon" href="/public/icons/synco-180.png">
+<meta name="theme-color" content="#14181d">
+<title>Synco</title>
+<script>
+  /* 首帧之前就把底色定下来：等 JS 模块跑起来再上色，深色档下会先闪一下纸白 */
+  try {
+    var m = localStorage.getItem('synco.theme') || 'system';
+    document.documentElement.dataset.theme =
+      m === 'light' || m === 'dark' ? m
+        : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  } catch (e) { /* 读不到就按纸白走，:root 本身就是亮色 */ }
+</script>
+<link rel="stylesheet" href="/public/css/tokens.css">
+<link rel="stylesheet" href="/public/css/base.css">
+<link rel="stylesheet" href="/public/css/components.css">
+<link rel="stylesheet" href="/public/css/home.css">
+<link rel="stylesheet" href="/public/css/project.css">
+<link rel="stylesheet" href="/public/css/editor.css">
+</head>
+<body>
+
+<!-- 外壳：左侧栏 + 顶栏 + 滚动内容区 -->
+<div class="shell" id="shell">
+  <aside class="rail">
+    <div class="rail__brand">
+      <!-- 描边跟着文字色走：写死 #1a1917 的话，墨黑主题下这个标在深底上会看不见 -->
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M18 6h-6.5a4 4 0 0 0 0 8h1a4 4 0 0 1 0 8H6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="18" cy="6" r="2.6" fill="currentColor"/>
+        <circle cx="12" cy="14" r="2.4" fill="var(--spot)"/>
+        <circle cx="6" cy="22" r="2.6" fill="currentColor"/>
+      </svg>
+      <span class="nowrap">Synco</span>
+    </div>
+
+    <nav class="rail__nav" id="railNav" aria-label="主导航"></nav>
+
+    <div class="rail__group" id="railRecentLabel" hidden>最近打开</div>
+    <div class="rail__list" id="railRecent"></div>
+
+    <div class="rail__spacer"></div>
+    <div class="rail__foot" id="railFoot"></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar" data-tauri-drag-region="deep">
+      <div class="topbar__zone topbar__zone--l" id="topLeft"></div>
+      <div class="topbar__zone topbar__zone--c">
+        <label class="search" id="searchBox">
+          <svg class="icon icon--sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4"/><path d="m15.6 15.6 4 4"/></svg>
+          <input class="search__input" id="searchInput" type="search" placeholder="搜索所有项目" autocomplete="off" spellcheck="false">
+          <kbd class="kbd search__key">/</kbd>
+        </label>
+      </div>
+      <div class="topbar__zone topbar__zone--r" id="topRight"></div>
+    </header>
+
+    <div class="scroll" id="scroll">
+      <section class="view" id="viewHome"></section>
+      <section class="view" id="viewProject"></section>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑器：全屏覆盖层 -->
+<div class="editor" id="editor" hidden></div>
+
+<script type="module" src="/public/js/app.js"></script>
+</body>
+</html>

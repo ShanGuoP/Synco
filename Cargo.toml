@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/stitch-core", "crates/server", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# 不写 panic = "abort"：服务与桌面壳同进程，一次 abort 会把用户在飞的云端任务一起带走；
+# 留着 unwind 让单条请求失败、进程活着

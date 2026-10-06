@@ -1,0 +1,27 @@
+# 运行时数据：照片、成图、SQLite 库、生成的安装脚本
+# 库里存着明文 API key，目录里是你的原片，一律不进版本库
+/data/
+
+# 构建产物与临时物
+/target/
+/tmp/
+*.log
+
+# Windows 自己写的东西
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+/crates/data/
+
+# tauri-build 每次构建都会重新生成，不必进库
+/src-tauri/gen/
+
+# 内部设计文档，不随公开仓库发布
+/RUST重构方案.md
+/功能方案-2026-10.md

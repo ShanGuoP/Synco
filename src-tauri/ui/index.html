@@ -1,0 +1,13 @@
+<!doctype html>
+<!--
+  这个页面正常情况下永远看不到。
+  窗口的真实地址是同进程起的 http://127.0.0.1:<port>（界面由 axum 发，见 crates/server/src/assets.rs），
+  tauri.conf.json 的 frontendDist 只要求"有个存在的目录"，所以这里放一个占位。
+  真看见它了，说明服务没起来或窗口指错了地址。
+-->
+<meta charset="utf-8">
+<title>Synco</title>
+<p style="font: 14px/1.7 system-ui; padding: 24px">
+  这一页不该出现：工坊的界面由本机服务提供。<br>
+  如果你看到了它，说明本地服务没起来——把 Synco 关掉了重开一次，还不行就看 exe 同目录的日志。
+</p>

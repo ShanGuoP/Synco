@@ -1,0 +1,134 @@
+/* ============================================================
+   项目页（图库）：页头 / 批量操作条 / 图片网格
+   图注式排版：照片带墨框，信息走下方小字，不用玻璃胶囊压在画面上
+   ============================================================ */
+
+/* ---------- 页头：章节扉页（返回键 · 标题块 · 动作组） ---------- */
+.pj-hd {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-5); padding-bottom: var(--s-3);
+  border-bottom: 2px solid var(--line-strong);
+}
+.pj-hd > div { min-width: 0; }
+.pj-hd__t { font-family: var(--f-display); font-size: var(--f-2xl); font-weight: 700; letter-spacing: .5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pj-hd__meta { font-family: var(--f-mono); font-size: var(--f-xs); letter-spacing: .5px; color: var(--txt-3); display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.pj-hd__tools { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ---------- 批量操作条 ---------- */
+.bulk-row {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: var(--s-3); margin-bottom: var(--s-6);
+}
+.bulk {
+  display: flex; align-items: center; gap: var(--s-2);
+  height: 44px; padding: 0 var(--s-3);
+  background: var(--bg-card); border: 1px solid var(--line-hi); border-radius: var(--r-2);
+  color: var(--txt-2); font: inherit; font-size: var(--f-sm); letter-spacing: .3px; text-align: left; cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.bulk:hover:not(:disabled) { background: var(--wash); color: var(--txt); border-color: var(--line-strong); }
+.bulk:active:not(:disabled) { transform: none; }
+.bulk:disabled { opacity: .35; cursor: not-allowed; }
+.bulk b { margin-left: auto; font-family: var(--f-mono); font-size: var(--f-xs); color: var(--spot-txt); font-variant-numeric: tabular-nums; }
+.bulk:hover:not(:disabled) b { color: var(--txt-inv); }
+.bulk.is-on { background: var(--spot-dim); border-color: var(--spot); color: var(--spot-txt); }
+.bulk--go { background: var(--spot); border-color: var(--spot); color: var(--txt-inv); font-weight: 600; }
+.bulk--go b { color: var(--txt-inv); }
+.bulk--go:hover:not(:disabled) { background: var(--danger); border-color: var(--danger); }
+
+/* ---------- 图片网格 ---------- */
+.igrid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(186px, 1fr));
+  gap: var(--s-6) var(--s-4);
+}
+.icard {
+  position: relative; background: transparent;
+  border: 1px solid transparent; cursor: pointer;
+  animation: card-in var(--t-slow) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 22ms);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+}
+.icard:hover { box-shadow: var(--sh-2); }
+.icard:active { transform: none; }
+.icard:focus-visible { box-shadow: var(--focus); }
+
+.icard__cov {
+  position: relative; height: var(--cov-h, 168px); overflow: hidden;
+  background: var(--bg-panel); border: 1px solid var(--line-hi); border-radius: var(--r-1);
+}
+.icard__cov > img { width: 100%; height: 100%; object-fit: cover; }
+/* 记录还在、原图 PNG 没了（清过 data/projects）：给一块明说的空位，而不是让浏览器摆碎图标 */
+.icard__gone {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: repeating-linear-gradient(45deg, var(--bg-panel), var(--bg-panel) 8px, var(--bg-card) 8px, var(--bg-card) 16px);
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: .4px; color: var(--spot-txt); text-align: center; padding: 0 8px;
+}
+/* 遮罩涂抹过的区域在缩略图上以金色半透明叠一层 */
+.icard__mask { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .38; mix-blend-mode: screen; pointer-events: none; }
+
+/* 左下角角标（尺寸 / 状态）：白底墨框 */
+.icard__badge {
+  position: absolute; left: 0; bottom: 0; z-index: 2;
+  display: flex; align-items: center; gap: 5px;
+  padding: 1px 6px;
+  background: var(--txt-inv); border-top: 1px solid var(--line-hi); border-right: 1px solid var(--line-hi); border-bottom-right-radius: var(--r-1);
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .4px; color: var(--txt); pointer-events: none;
+}
+.icard__badge i { font-style: normal; color: var(--spot-txt); }
+
+/* 状态色挂在左下角角标的左边框上。原来右上角还有一个 9×9 带白描边的小方块，
+   看起来像第二个复选框（勾选已经在左上角了），状态文字角标里也已经有，故删。 */
+.icard__badge.st-run  { border-left: 3px solid var(--ochre); }
+.icard__badge.st-done { border-left: 3px solid var(--green); }
+.icard__badge.st-err  { border-left: 3px solid var(--danger); }
+.icard__badge.st-skip { border-left: 3px solid var(--spot); }
+
+/* 勾选框：悬停或已选才出现 */
+.icard__cb {
+  position: absolute; left: 6px; top: 6px; z-index: 3;
+  display: grid; place-items: center; width: 20px; height: 20px;
+  background: var(--txt-inv); border: 1.5px solid var(--line-hi); border-radius: var(--r-1);
+  color: transparent; cursor: pointer; padding: 0;
+  opacity: 0; transform: scale(.85);
+  transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease-out),
+              background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.icard:hover .icard__cb, .icard.is-sel .icard__cb, .icard__cb:focus-visible { opacity: 1; transform: none; }
+.icard__cb:hover { border-color: var(--spot); }
+.icard.is-sel .icard__cb { background: var(--spot); border-color: var(--spot); color: var(--txt-inv); }
+
+/* 悬停浮现的操作遮罩：编辑 / 删除 */
+.icard__acts {
+  position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: var(--s-2);
+  background: rgba(26, 25, 23, .55);
+  opacity: 0; transition: opacity var(--t) var(--ease);
+}
+.icard:hover .icard__acts, .icard:focus-within .icard__acts { opacity: 1; }
+.icard__acts .btn { transform: translateY(6px); transition: transform var(--t) var(--ease-out), opacity var(--t) var(--ease);
+  --btn-fg: var(--txt-inv); --btn-bd: rgba(246, 242, 234, .65); --btn-bg: rgba(26, 25, 23, .45);
+  --btn-bg-hi: var(--spot); --btn-fg-hi: var(--txt-inv); }
+.icard:hover .icard__acts .btn { transform: none; }
+
+/* 选中态：专色描边 + 一层淡底，勾在图上的标记而不是发光 */
+.icard.is-sel { border-color: var(--spot); background: var(--spot-dim); }
+.icard.is-sel .icard__cov { border-color: var(--line-strong); }
+
+.icard__ft { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) 0 0; font-family: var(--f-mono); font-size: 10px; letter-spacing: .3px; color: var(--txt-3); }
+.icard__ft .nm { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--txt-2); font-family: var(--f-body); font-size: var(--f-sm); }
+
+/* 生成中：封面顶边一条走马灯进度 */
+.icard__run { position: absolute; left: 0; right: 0; top: 0; height: 3px; z-index: 3; overflow: hidden; background: rgba(26, 25, 23, .14); }
+.icard__run i { position: absolute; inset: 0 auto 0 0; width: 36%; background: var(--spot); animation: run-slide 1.35s var(--ease) infinite; }
+@keyframes run-slide { 0% { left: -36%; } 100% { left: 100%; } }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 900px) {
+  .pj-hd { grid-template-columns: auto 1fr; }
+  .pj-hd__tools { grid-column: 1 / -1; }
+  .bulk-row { grid-template-columns: repeat(2, 1fr); }
+  .igrid { grid-template-columns: repeat(2, 1fr); gap: var(--s-5) var(--s-3); }
+  .icard__cov { height: 132px; }
+  /* 触屏没有 hover：勾选框常驻，操作走长按/按钮不太现实，这里保持入口可见 */
+  .icard__cb { opacity: 1; transform: none; }
+  .icard__acts { display: none; }
+}
