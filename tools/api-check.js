@@ -106,7 +106,7 @@ const SWEEP = [
   ['文件白名单', 'GET', '/file/app.db'],
   ['静态首页', 'GET', '/'],
   ['静态脚本', 'GET', '/public/js/app.js'],
-  ['静态字体', 'GET', '/public/fonts/NotoSerifSC-VF.ttf'],
+  ['静态字体', 'GET', '/public/fonts/NotoSerifSC-VF.woff2'],
   ['未知路由', 'GET', '/api/nonsense'],
   ['未知页面', 'GET', '/nope'],
 ];

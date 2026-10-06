@@ -1,6 +1,12 @@
 # 生成字体子集字表：GB2312 全表（6763 汉字 + 符号区）+ ASCII + 中西文常用标点。
 # 用法：python tools/make-font-chars.py  →  tools/font-chars.txt
 # 字表覆盖日常文本（文件名、报错文案）99%+；字表外生僻字由浏览器回退系统字体。
+#
+# 重新生成子集字体：完整字源 TTF（25MB）已退役出工作区，git 历史留档。取回并重跑：
+#   git checkout 2a57949 -- public/fonts/NotoSerifSC-VF.ttf   # 退役前的任一提交都行
+#   pip install fonttools brotli
+#   python -m fontTools.subset public/fonts/NotoSerifSC-VF.ttf --text-file=tools/font-chars.txt \
+#       --flavor=woff2 --layout-features='*' --output-file=public/fonts/NotoSerifSC-VF.woff2
 import sys
 
 chars = set()
