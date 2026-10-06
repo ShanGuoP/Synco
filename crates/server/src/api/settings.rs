@@ -43,6 +43,19 @@ pub async fn workflow_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Respo
     })))
 }
 
+/// 把工作流文件里的节点摊出来。角色映射接管提交之前，人得先看得见自己文件里有什么。
+/// 只认库里存着的那条路径：这个接口不接路径参数，免得变成一个任意本地文件的读取口。
+pub async fn workflow_inspect(State(ctx): State<Shared>) -> Result<Response> {
+    let p = cfg::workflow_path(&ctx);
+    if p.trim().is_empty() {
+        return Ok(bad("还没设置工作流文件路径"));
+    }
+    match cfg::inspect(Path::new(&p)) {
+        Ok(v) => Ok(ok(v)),
+        Err(e) => Ok(bad(e)),
+    }
+}
+
 pub async fn cfg_get(State(ctx): State<Shared>) -> Result<Response> {
     let c = cfg::get_cfg(&ctx);
     Ok(ok(serde_json::json!({

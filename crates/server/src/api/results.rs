@@ -9,9 +9,29 @@ use crate::service::{comfy, reclaim};
 use crate::state::Shared;
 use crate::{service::imagesvc, util};
 use axum::body::Bytes;
-use axum::extract::{Path as APath, State};
+use axum::extract::{Path as APath, Query, State};
 use axum::response::Response;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
+
+/// 结果集合：项目页「派生查看」的数据源。`?project_id=` 列整项目，`&image_id=` 收窄到一张。
+/// 与 `/api/images/{id}` 的差别是这条没有副作用（不判云端僵尸、不补派生档），也不锁在 8 条。
+pub async fn results_list(State(ctx): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Result<Response> {
+    let num = |k: &str| q.get(k).and_then(|s| s.parse::<i64>().ok());
+    let limit = num("limit").unwrap_or(400).clamp(1, 2000);
+    let rows = match (num("project_id"), num("image_id")) {
+        (_, Some(iid)) => rres::list_for_image(&ctx, iid, limit + 1)?,
+        (Some(pid), None) => rres::list_for_project(&ctx, pid, limit + 1)?,
+        _ => return Ok(bad("要带 project_id 或 image_id")),
+    };
+    let truncated = rows.len() as i64 > limit;
+    let out: Vec<Value> = rows
+        .into_iter()
+        .take(if truncated { limit as usize } else { usize::MAX })
+        .map(|r| dto::result_json(&ctx, &r))
+        .collect();
+    Ok(ok(serde_json::json!({ "results": out, "truncated": truncated })))
+}
 
 pub async fn run_post(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
@@ -40,6 +60,10 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
         return Ok(serde_json::json!({ "image_id": img_id, "skipped": true, "reason": "图片已不存在" }));
     };
     let skipped = |reason: &str| serde_json::json!({ "image_id": img_id, "skipped": true, "reason": reason });
+    // 画稿不能进局部重绘：它没有"蒙版外要保持"这回事，裁切与缝合对它没有意义
+    if i.is_sketch() {
+        return Ok(skipped("这是画稿，请在画布里点「生成」"));
+    }
     let Some(mask_path) = i.mask_path.clone() else { return Ok(skipped("未涂遮罩")) };
     // 库里有过这行不等于盘上还有这个文件：先读会在 readFileSync 抛 ENOENT，报错只对开发者可读
     if !util::file_alive(&ctx.data, &Value::String(i.orig_path.clone())) {
@@ -47,6 +71,10 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     }
     if !util::file_alive(&ctx.data, &Value::String(mask_path.clone())) {
         return Ok(skipped("遮罩文件已不在磁盘上，重涂一次再提交"));
+    }
+    // 先判参数再上传：0 步 0 CFG（云端那一行的形状）进了 KSampler 不会报错，只会出一张废图
+    if let Err(e) = comfy::sample_args(&settings) {
+        return Ok(skipped(&e));
     }
     let photo_bytes = std::fs::read(ctx.data.join(&i.orig_path)).map_err(|e| format!("读原图失败：{e}"))?;
     // 涂抹层现在存的是 proxy 分辨率，而工作流里 DrawMaskOnImage 要和原图同尺寸，先上采样

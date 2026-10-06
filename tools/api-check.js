@@ -84,8 +84,9 @@ const SWEEP = [
   ['预设 重名', 'POST', '/api/presets', { name: '默认预设' }],
   ['预设 无名字', 'POST', '/api/presets', { name: '   ' }],
   ['预设 列表', 'GET', '/api/presets'],
-  ['预设 更新', 'POST', '/api/presets/1/update', { name: '改名', steps: 30, scope: 'global' }],
-  ['预设 删除', 'POST', '/api/presets/1/delete'],
+  // 更新与删除的真实行为在「提示词短语 / 预设查重自检」里逐条断言，这里只探"不存在的那一条"
+  ['预设 更新 不存在', 'POST', '/api/presets/999999/update', { name: '改名', steps: 30, scope: 'global' }],
+  ['预设 删除 不存在', 'POST', '/api/presets/999999/delete', {}],
   ['后端列表', 'GET', '/api/backends'],
   ['后端 登记', 'POST', '/api/backends', { url: '127.0.0.1:9999', label: '冒烟' }],
   ['后端 移除', 'POST', '/api/backends/remove', { url: 'http://127.0.0.1:9999' }],
@@ -197,11 +198,146 @@ async function m3SelfCheck(base, dataDir) {
   const st = await req(base, 'GET', '/api/settings');
   ok('设置接口回显当前档位', st.body.proxy_edge === 1024, JSON.stringify(st.body).slice(0, 160));
 
+  // M4 的回归：云端行是 0 步 0 CFG，串回本机这条路的提交必须被挡下而不是跑出一张废图
+  const run0 = await req(base, 'POST', '/api/run', { image_ids: [iid], settings: { prompt: 'x', steps: 0, cfg: 0 } });
+  const sk0 = (run0.body.results || [])[0] || {};
+  ok('本机提交拒收云端形状的 0 步 0 CFG', sk0.skipped === true && /步数/.test(String(sk0.reason || '')), JSON.stringify(run0.body).slice(0, 180));
+
   // 派生档要跟着图一起删掉，不然目录只涨不落
   await req(base, 'DELETE', `/api/images/${iid}`);
   const pidDir = path.join(dataDir, 'projects', String(p.body.id));
   const filesLeft = fs.existsSync(pidDir) ? fs.readdirSync(pidDir) : ['目录已删'];
   ok('删图连带清掉派生档', filesLeft.length === 0 || filesLeft[0] === '目录已删', JSON.stringify(filesLeft));
+  return fails;
+}
+
+// ---- M1 项目改名 / 空项目的行为自检 -------------------------------------------
+// 改名是纯库操作：断言它一个文件都不碰，比断它回什么更有价值
+async function m1SelfCheck(base, dataDir) {
+  const fails = [];
+  const ok = (name, cond, detail) => {
+    console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond ? '' : '：' + detail}`);
+    if (!cond) fails.push(name);
+  };
+  const p = await req(base, 'POST', '/api/projects', { name: '  带空格  ', files: [{ name: 'a.png', b64: PNG, w: 2, h: 2 }] });
+  const pid = p.body.id;
+  ok('建项目把名字 trim 掉', p.body.name === '带空格', JSON.stringify(p.body.name));
+  const iid0 = p.body.image_ids[0];
+  // 后台派生档会往项目目录里补 _thumb.jpg，先等它落定，否则"改名没动文件"会被它绊倒
+  for (let i = 0; i < 24 && !(await req(base, 'GET', `/api/images/${iid0}`)).body.thumb_url; i++) {
+    await new Promise(r => setTimeout(r, 150));
+  }
+  const tree = () => {
+    const d = path.join(dataDir, 'projects', String(pid));
+    return fs.existsSync(d) ? fs.readdirSync(d).sort() : ['目录不存在'];
+  };
+  const before = tree();
+  await new Promise(r => setTimeout(r, 1100));   // updated_at 只有秒级精度，隔一秒才测得出推进（方案 D4）
+  const d0 = await req(base, 'GET', `/api/projects/${pid}`);
+  const r = await req(base, 'POST', `/api/projects/${pid}/rename`, { name: '改过的名字' });
+  ok('改名回 200 与新名', r.status === 200 && r.body.name === '改过的名字', JSON.stringify(r.body));
+  ok('改名不动盘上任何文件', JSON.stringify(tree()) === JSON.stringify(before), `${before} → ${tree()}`);
+  const d1 = await req(base, 'GET', `/api/projects/${pid}`);
+  ok('详情读回新名', d1.body.project?.name === '改过的名字', JSON.stringify(d1.body.project?.name));
+  ok('改名推进了 updated_at（首页排序键）', String(d1.body.project?.updated_at) > String(d0.body.project?.updated_at),
+    `${d0.body.project?.updated_at} → ${d1.body.project?.updated_at}`);
+  const bad = await req(base, 'POST', `/api/projects/${pid}/rename`, { name: '   ' });
+  ok('纯空格名被拒 400', bad.status === 400, `${bad.status} ${JSON.stringify(bad.body)}`);
+  const gone = await req(base, 'POST', '/api/projects/99999/rename', { name: 'x' });
+  ok('改不存在的项目回 404', gone.status === 404, `${gone.status}`);
+  const long = await req(base, 'POST', `/api/projects/${pid}/rename`, { name: '长'.repeat(80) });
+  ok('超长名字裁到 60 字', long.body.name === '长'.repeat(60), String(long.body.name).length);
+  const empty = await req(base, 'POST', '/api/projects', { name: '空项目' });
+  ok('零张照片也建得出项目', empty.status === 200 && Array.isArray(empty.body.image_ids) && !empty.body.image_ids.length, JSON.stringify(empty.body).slice(0, 120));
+  const ed = await req(base, 'GET', `/api/projects/${empty.body.id}`);
+  ok('空项目读得回且不带封面', ed.status === 200 && Array.isArray(ed.body.images) && !ed.body.images.length, JSON.stringify(ed.body).slice(0, 120));
+  const nl = await req(base, 'POST', '/api/projects', {});
+  ok('没给名字落到兜底显示名', nl.body.name === '未命名项目', JSON.stringify(nl.body.name));
+  return fails;
+}
+
+// ---- 提示词短语 / 预设查重（方案 M3：短语可自定义 + name_taken 补漏）--------------
+async function phraseSelfCheck(base) {
+  const fails = [];
+  const ok = (name, cond, detail) => {
+    console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond ? '' : '：' + detail}`);
+    if (!cond) fails.push(name);
+  };
+  const seeded = await req(base, 'GET', '/api/presets?kind=phrase');
+  const rows = seeded.body || [];
+  ok('出厂 7 条短语已播种进库', Array.isArray(rows) && rows.length === 7, `${rows.length} 条`);
+  ok('短语列表里不混进参数预设', rows.every(r => r.kind === 'phrase'), JSON.stringify(rows.slice(0, 2).map(r => r.kind)));
+  const presets0 = await req(base, 'GET', '/api/presets');
+  ok('默认只列预设桶', (presets0.body || []).every(r => r.kind !== 'phrase'), JSON.stringify((presets0.body || []).slice(0, 3).map(r => r.kind)));
+
+  const add = await req(base, 'POST', '/api/presets', { kind: 'phrase', name: '自检短语', prompt: '画面干净一点' });
+  ok('新建短语落库', add.status === 200 && add.body.kind === 'phrase' && add.body.name === '自检短语', JSON.stringify(add.body).slice(0, 140));
+  const dup = await req(base, 'POST', '/api/presets', { kind: 'phrase', name: '自检短语', prompt: '再一句' });
+  ok('同名短语被拒', dup.status === 400, `${dup.status} ${JSON.stringify(dup.body)}`);
+  const empty = await req(base, 'POST', '/api/presets', { kind: 'phrase', name: '空的', prompt: '   ' });
+  ok('空内容短语被拒', empty.status === 400, `${empty.status} ${JSON.stringify(empty.body)}`);
+  const cross = await req(base, 'POST', '/api/presets', { kind: 'preset', name: '自检短语', prompt: 'p' });
+  ok('预设与短语分桶，同名不互相挡', cross.status === 200, `${cross.status} ${JSON.stringify(cross.body).slice(0, 120)}`);
+
+  // 改名/换作用域以前完全不查重，于是一条全局 X 和项目里的 X 能并存显示成两条
+  const a = await req(base, 'POST', '/api/presets', { name: '甲预设', prompt: 'a' });
+  const b = await req(base, 'POST', '/api/presets', { name: '乙预设', prompt: 'b' });
+  const clash = await req(base, 'POST', `/api/presets/${b.body.id}/update`, { name: '甲预设', prompt: 'b' });
+  ok('改名撞名被拒（以前不查）', clash.status === 400, `${clash.status} ${JSON.stringify(clash.body)}`);
+  const scopeClash = await req(base, 'POST', '/api/presets', { name: '乙预设', prompt: 'c', project_id: 5 });
+  ok('跨作用域同名也被拒', scopeClash.status === 400, `${scopeClash.status} ${JSON.stringify(scopeClash.body)}`);
+  const same = await req(base, 'POST', `/api/presets/${a.body.id}/update`, { name: '甲预设', prompt: 'a2', scope: 'global' });
+  ok('自己改自己不算撞名', same.status === 200 && same.body.prompt === 'a2', `${same.status} ${JSON.stringify(same.body).slice(0, 120)}`);
+
+  const long = await req(base, 'POST', '/api/presets', { name: '长文', prompt: '指'.repeat(5000), negative: '负'.repeat(3000) });
+  ok('指令与负面有上限', String(long.body.prompt || '').length === 4000 && String(long.body.negative || '').length === 2000,
+    `prompt ${String(long.body.prompt || '').length} / negative ${String(long.body.negative || '').length}`);
+
+  // 守卫要求 POST 带 application/json，delete 这类无体请求要给个 {}
+  for (const r of [add, cross, a, b, long]) await req(base, 'POST', `/api/presets/${r.body.id}/delete`, {});
+  const after = await req(base, 'GET', '/api/presets?kind=phrase');
+  ok('删完回到出厂 7 条', (after.body || []).length === 7, `${(after.body || []).length} 条`);
+  return fails;
+}
+
+// ---- 工作流两种格式 / 节点清点（方案 M7 第一步）----------------------------------
+async function workflowSelfCheck(base, dataDir) {
+  const fails = [];
+  const ok = (name, cond, detail) => {
+    console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond ? '' : '：' + detail}`);
+    if (!cond) fails.push(name);
+  };
+  const apiWf = path.join(dataDir, 'wf-api.json');
+  fs.writeFileSync(apiWf, JSON.stringify({
+    '3': { class_type: 'UNETLoader', inputs: { unet_name: 'qwen_bf16.safetensors', weight_dtype: 'default' } },
+    '8': { class_type: 'CLIPLoader', inputs: { clip_name: 'clipA.safetensors', type: 'qwen' } },
+    '9': { class_type: 'VAELoader', inputs: { vae_name: 'vaeA.safetensors' } },
+    '11': { class_type: 'TextEncodeQwenImage21', inputs: { prompt: 'API 里的默认正向', negative_prompt: 'API 里的默认负面' } },
+    '14': { class_type: 'KSampler', inputs: { model: ['3', 0], seed: 1, steps: 28, cfg: 4.5, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1 } },
+    '4': { class_type: 'LoraLoaderModelOnly', inputs: { model: ['3', 0], lora_name: 'loraX.safetensors', strength_model: 0.66 } },
+  }));
+  const slashed = apiWf.replace(/\\/g, '/');
+  const set = await req(base, 'POST', '/api/settings/workflow', { path: slashed });
+  ok('API 导出被认出来', set.body.cfg_source === 'workflow', JSON.stringify(set.body).slice(0, 200));
+  const c = (await req(base, 'GET', '/api/cfg')).body;
+  ok('参数按名字读到（不再靠控件下标）', c.steps === 28 && c.negative === 'API 里的默认负面', JSON.stringify({ steps: c.steps, negative: c.negative }));
+  ok('LoRA 链读得到且带强度', (c.loras || []).length === 1 && c.loras[0].name === 'loraX.safetensors' && c.loras[0].strength === 0.66, JSON.stringify(c.loras).slice(0, 160));
+  const insp = await req(base, 'GET', '/api/workflow/inspect');
+  ok('清点认出 API 格式与节点数', insp.status === 200 && insp.body.format === 'api' && insp.body.total === 6, JSON.stringify(insp.body).slice(0, 140));
+  ok('清点报得出缺缝合那一对', insp.body.stitch_pair_ok === false && (insp.body.known_missing || []).includes('InpaintStitchImproved'), JSON.stringify(insp.body.known_missing));
+  const junk = path.join(dataDir, 'wf-junk.json');
+  fs.writeFileSync(junk, JSON.stringify({ hello: { world: 1 } }));
+  // 这个接口不接路径参数：带了也只会按库里存的那条走（免得变成任意本地文件的读取口）
+  const q = await req(base, 'GET', '/api/workflow/inspect?path=' + encodeURIComponent(junk.replace(/\\/g, '/')));
+  ok('清点忽略路径参数', q.status === 200 && q.body.format === 'api', `${q.status} ${JSON.stringify(q.body).slice(0, 120)}`);
+
+  // 认得出格式、但一个已知节点都没有：以前这里照样标 workflow，等于谎称参数读自你的文件
+  const emptyWf = path.join(dataDir, 'wf-empty.json');
+  fs.writeFileSync(emptyWf, JSON.stringify({ nodes: [], links: [] }));
+  const set2 = await req(base, 'POST', '/api/settings/workflow', { path: emptyWf.replace(/\\/g, '/') });
+  ok('读不到已知节点时不谎称读自工作流', set2.body.cfg_source === 'builtin' && /没有本管线认识的节点/.test(String(set2.body.cfg_error)), JSON.stringify(set2.body).slice(0, 220));
+  const set3 = await req(base, 'POST', '/api/settings/workflow', { path: path.join(dataDir, 'nope.json').replace(/\\/g, '/') });
+  ok('文件不存在说得不含糊', set3.body.cfg_source === 'builtin' && String(set3.body.cfg_error).includes('不存在'), JSON.stringify(set3.body).slice(0, 160));
   return fails;
 }
 
@@ -223,17 +359,26 @@ async function main() {
   console.log('\n路径穿越（回归：这几条曾经能读到 app.db）');
   const tv = await traversalCheck(base);
 
+  console.log('\nM1 项目改名 / 空项目自检');
+  const m1 = await m1SelfCheck(base, dataDir);
+
   console.log('\nM3 服务端图像化 / 队列自检');
   const m3 = await m3SelfCheck(base, dataDir);
+
+  console.log('\n提示词短语 / 预设查重自检');
+  const ph = await phraseSelfCheck(base);
+
+  console.log('\n工作流两种格式 / 节点清点自检');
+  const wf = await workflowSelfCheck(base, dataDir);
   proc.kill();
-  if (bad || m3.length || tv.length) console.log('\n—— 服务输出 ——\n' + log.join('').split('\n').slice(-40).join('\n'));
+  if (bad || m1.length || m3.length || ph.length || wf.length || tv.length) console.log('\n—— 服务输出 ——\n' + log.join('').split('\n').slice(-40).join('\n'));
   if (!process.argv.includes('--keep')) {
     // 进程还在退的时候 Windows 会锁着目录，等一会儿再删，删不掉也不算失败
     await new Promise(r => setTimeout(r, 600));
     try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { console.log(`（临时目录留着了：${dataDir}）`); }
   }
-  console.log(`\n端点扫查失败 ${bad} 个；穿越回归失败 ${tv.length} 条；M3 自检失败 ${m3.length} 项`);
-  process.exit(bad || tv.length || m3.length ? 1 : 0);
+  console.log(`\n失败计数 → 端点扫查 ${bad} · 穿越 ${tv.length} · M1 ${m1.length} · M3 ${m3.length} · 短语 ${ph.length} · 工作流 ${wf.length}`);
+  process.exit(bad || tv.length || m1.length || m3.length || ph.length || wf.length ? 1 : 0);
 }
 
 main().catch(e => { console.error(e); process.exit(2); });

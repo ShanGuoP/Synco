@@ -11,22 +11,34 @@ use axum::response::Response;
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// 报错时说清楚撞的是哪一个桶：短语与预设共用一张表、共用一套增删改
+fn what(kind: &str) -> &'static str {
+    if kind == rpre::KIND_PHRASE { "短语" } else { "预设" }
+}
+
+/// `?kind=preset`（默认）列参数预设，`?kind=phrase` 列提示词短语
 pub async fn presets_list(State(ctx): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Result<Response> {
-    let rows = rpre::list(&ctx, q.get("project_id").and_then(|s| s.parse::<i64>().ok()))?;
+    let kind = rpre::norm_kind(q.get("kind").map(|s| s.as_str()));
+    let rows = rpre::list(&ctx, q.get("project_id").and_then(|s| s.parse::<i64>().ok()), &kind)?;
     Ok(ok(Value::Array(rows.iter().map(dto::preset_json).collect())))
 }
 
 pub async fn presets_add(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
+    let kind = rpre::norm_kind(body.get("kind").and_then(|v| v.as_str()));
     let f = dto::preset_fields(&body);
     if f.name.is_empty() {
-        return Ok(bad("给预设起个名字"));
+        return Ok(bad(format!("给{w}起个名字", w = what(&kind))));
+    }
+    // 短语只用到 prompt 那一格；空的"一句话"没地方生效，收进来只会变成一条打不响的胶囊
+    if kind == rpre::KIND_PHRASE && f.prompt.trim().is_empty() {
+        return Ok(bad("这句短语要并入指令，内容是空的就没法保存"));
     }
     let pid = body.get("project_id").and_then(|x| x.as_i64());
-    if rpre::name_taken(&ctx, &f.name, pid)? {
-        return Ok(bad("已经有同名预设了"));
+    if rpre::name_taken(&ctx, &f.name, &kind, None)? {
+        return Ok(bad(format!("已经有同名{w}了", w = what(&kind))));
     }
-    let id = rpre::insert(&ctx, &f.name, pid, &f)?;
+    let id = rpre::insert(&ctx, &f.name, pid, &kind, &f)?;
     Ok(ok(dto::preset_json(&rpre::by_id(&ctx, id)?.unwrap_or(Value::Null))))
 }
 
@@ -43,9 +55,18 @@ pub async fn preset_update(State(ctx): State<Shared>, APath(id): APath<String>, 
     let body = body_of(raw).await?;
     let pid = path_id(&id)?;
     let Some(cur) = rpre::by_id(&ctx, pid)? else { return Ok(err(404, "预设不存在")) };
+    // 桶跟着库里这一行走：改名/改内容不会把一条短语悄悄变成一份预设
+    let kind = rpre::norm_kind(cur.get("kind").and_then(|v| v.as_str()));
     let f = dto::preset_fields(&body);
     if f.name.is_empty() {
-        return Ok(bad("给预设起个名字"));
+        return Ok(bad(format!("给{w}起个名字", w = what(&kind))));
+    }
+    if kind == rpre::KIND_PHRASE && f.prompt.trim().is_empty() {
+        return Ok(bad("这句短语要并入指令，内容是空的就没法保存"));
+    }
+    // 改名与换作用域以前完全不查名，于是一条全局 "X" 和项目里的 "X" 能同时存在，列表显示成两条
+    if rpre::name_taken(&ctx, &f.name, &kind, Some(pid))? {
+        return Ok(bad(format!("已经有同名{w}了", w = what(&kind))));
     }
     // scope: 'global' 升到全局，数字串则收到某个项目内，没带就维持原作用域
     let project_id = match &body.get("scope").cloned().unwrap_or(Value::Null) {

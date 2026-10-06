@@ -10,7 +10,15 @@
   border-bottom: 2px solid var(--line-strong);
 }
 .pj-hd > div { min-width: 0; }
-.pj-hd__t { font-family: var(--f-display); font-size: var(--f-2xl); font-weight: 700; letter-spacing: .5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pj-hd__t {
+  display: flex; align-items: center; gap: var(--s-2); min-width: 0; max-width: 100%;
+  margin: 0; padding: 0; background: none; border: 0; color: inherit; text-align: left; cursor: pointer;
+  font-family: var(--f-display); font-size: var(--f-2xl); font-weight: 700; letter-spacing: .5px; line-height: 1.2;
+}
+.pj-hd__n { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pj-hd__t:hover .pj-hd__n { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 4px; }
+.pj-hd__t .ic { flex: none; display: flex; color: var(--txt-3); opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+.pj-hd__t:hover .ic, .pj-hd__t:focus-visible .ic { opacity: 1; }
 .pj-hd__meta { font-family: var(--f-mono); font-size: var(--f-xs); letter-spacing: .5px; color: var(--txt-3); display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
 .pj-hd__tools { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
 
@@ -83,6 +91,18 @@
 .icard__badge.st-err  { border-left: 3px solid var(--danger); }
 .icard__badge.st-skip { border-left: 3px solid var(--spot); }
 
+/* 派生查看角标：常驻右上角（不是 hover 才出现的动作层，窄屏也要点得到）。
+   数字 = 库里这张图的成图条数，跟着每次项目详情重算。 */
+.icard__derived {
+  position: absolute; right: 0; top: 0; z-index: 3;
+  display: flex; align-items: center; gap: 4px; padding: 1px 6px;
+  background: var(--txt-inv); border-bottom: 1px solid var(--line-hi); border-left: 1px solid var(--line-hi);
+  border-bottom-left-radius: var(--r-1);
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .4px; color: var(--txt-2); cursor: pointer;
+}
+.icard__derived svg { width: 12px; height: 12px; color: var(--spot); }
+.icard__derived:hover { color: var(--txt); border-bottom-color: var(--spot); border-left-color: var(--spot); }
+
 /* 勾选框：悬停或已选才出现 */
 .icard__cb {
   position: absolute; left: 6px; top: 6px; z-index: 3;
@@ -132,3 +152,7 @@
   .icard__cb { opacity: 1; transform: none; }
   .icard__acts { display: none; }
 }
+
+/* ---------- 画稿卡片（图生图画布） ---------- */
+/* 画稿是墨+透明底的 PNG：垫白纸、用 contain，整张草稿一眼看全（照片卡仍是 cover 铺满） */
+.icard__cov > img.icard__sketch { object-fit: contain; background: #fff; }

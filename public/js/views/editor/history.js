@@ -6,7 +6,14 @@ import { fmtStamp, fmtNum } from '../../core/format.js';
 
 const settingsOf = r => { try { return JSON.parse(r.settings_json || 'null'); } catch { return null; } };
 
-export function createHistory({ onPick, onRestore, onFork, onDel }) {
+/**
+ * 结果历史列表。编辑器左栏与项目页的「派生查看」弹窗共用这一个组件：
+ * 数据由外面喂进来（setResults），回调不给就不画那个动作，所以弹窗里只有看/删。
+ * @param {{onPick?:Function, onRestore?:Function, onFork?:Function, onDel?:Function, bare?:boolean, emptyHint?:string}} opt
+ */
+export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, emptyHint }) {
+  /* 空态文案默认说编辑器的话；画布那条线没有遮罩和「提交生成」，进来时自己给一句 */
+  const emptyText = emptyHint || '这张图还没有提交过生成。涂好遮罩后点下方「提交生成」。';
   let mode = 'all';
   let list = [];
   let active = null;
@@ -27,16 +34,18 @@ export function createHistory({ onPick, onRestore, onFork, onDel }) {
     const rows = list.filter(r => (mode === 'ok' ? r.status === 'done' && !r.final_dead : true));
     if (!rows.length) {
       fill(listBox, el('p', { class: 'muted', style: { padding: '14px 6px', lineHeight: '1.7' },
-        text: list.length ? '这个筛选下没有记录。' : '这张图还没有提交过生成。涂好遮罩后点下方「提交生成」。' }));
+        text: list.length ? '这个筛选下没有记录。' : emptyText }));
       return;
     }
     fill(listBox, rows.map(r => {
       const s = settingsOf(r);
       const nl = s && s.loras ? s.loras.filter(x => x.enabled).length : null;
-      /* 云端记录别拿步数/CFG 去解释 */
-      const c = s && s.cloud;
-      const body = c ? [c.model, c.quality].filter(Boolean).join(' · ') || '云端'
-                     : `${r.steps}步 CFG${fmtNum(r.cfg, 0.5)}${nl != null ? ` · LoRA ${nl}` : ''}`;
+      /* 云端记录别拿步数/CFG 去解释：判据用行上的 backend，
+         批量那条写库时 settings_json 里没有 cloud 这一节，早先只看 s.cloud 会漏掉它 */
+      const c = settingsOf(r)?.cloud;
+      const body = r.backend === 'cloud'
+        ? [c?.model, c?.quality].filter(Boolean).join(' · ') || '云端'
+        : `${r.steps}步 CFG${fmtNum(r.cfg, 0.5)}${nl != null ? ` · LoRA ${nl}` : ''}`;
       const meta = `${fmtStamp(r.created_at).slice(5)} · ${body}`;
       /* 状态是 done 但 PNG 不在盘上（清过 data/projects、手工删过文件）：缩略图与对比都没有左边可画，
          这里按"文件丢失"渲染，比摆一张碎图标诚实 */
@@ -59,12 +68,12 @@ export function createHistory({ onPick, onRestore, onFork, onDel }) {
         /* 这一列在 .pre-list（overflow 滚动容器）里，自绘气泡会被裁掉一截：
            实测 174px 宽的提示只有 33px 落在面板内，剩下的被切了。改用原生 title，浏览器画的浮层不受我们布局的裁剪。 */
         el('span.pre-it__acts', {},
-          el('button.pre-it__btn', {
+          onRestore ? el('button.pre-it__btn', {
             type: 'button', title: s ? '回填这组参数，改完自己点提交' : '这条没存参数', disabled: !s,
             html: icon('sliders', { cls: 'icon icon--sm' }),
             'aria-label': '回填这组参数',
-            onclick: e => { e.stopPropagation(); onRestore?.(r); },
-          }),
+            onclick: e => { e.stopPropagation(); onRestore(r); },
+          }) : null,
           !gone && r.final_url && onFork ? el('button.pre-it__btn', {
             type: 'button', title: '把这张成图另存为项目里的新图，之后在它上面涂',
             html: icon('copy', { cls: 'icon icon--sm' }),
@@ -90,8 +99,8 @@ export function createHistory({ onPick, onRestore, onFork, onDel }) {
     onPick?.(r);
   }
 
-  const node = el('aside.ed-pre', {},
-    el('div.col-hd', {}, el('h3', { html: icon('layers', { cls: 'icon icon--sm' }) + '<span>结果历史</span>' })),
+  const node = el(bare ? 'div' : 'aside', { class: `ed-pre${bare ? ' ed-pre--bare' : ''}` },
+    bare ? null : el('div.col-hd', {}, el('h3', { html: icon('layers', { cls: 'icon icon--sm' }) + '<span>结果历史</span>' })),
     el('div.col-sub', {}, seg),
     listBox,
   );

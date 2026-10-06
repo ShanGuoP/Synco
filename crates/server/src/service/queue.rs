@@ -54,6 +54,8 @@ fn sync_gate(want: usize) {
 /// 一批里有一张坏了不该把已经排好的撤掉。返回 `(行, 图片)` 的配对，前端好挂轮询。
 pub fn enqueue(ctx: &Shared, image_ids: &[i64], settings: &Value, rerun_of: Option<i64>) -> Result<(Vec<(i64, i64)>, Vec<Value>)> {
     let prompt = settings.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    // 反向涂抹时"一笔没涂"是合法输入（= 整幅重绘），所以不要求遮罩文件存在
+    let invert = settings.get("invert").and_then(Value::as_bool).unwrap_or(false);
     let model = cloud::settings(ctx).model;
     let mut ids = Vec::new();
     let mut skipped = Vec::new();
@@ -70,11 +72,18 @@ pub fn enqueue(ctx: &Shared, image_ids: &[i64], settings: &Value, rerun_of: Opti
                 continue;
             }
         };
+        // 画稿走的是 canvas 那条（整幅生成、不缝合），批量重绘这里要显式挡掉并给可读理由，
+        // 而不是让它去报"原图文件已丢失"
+        if img.is_sketch() {
+            bad("这是画稿，请在画布里点「生成」".into());
+            continue;
+        }
         if !util::file_alive(&ctx.data, &Value::String(img.orig_path.clone())) {
             bad("原图文件已不在磁盘上（data/projects 被清过？）".into());
             continue;
         }
-        let mask_ok = match img.mask_path.as_deref() {
+        // 反向涂抹时"一笔没涂"是合法输入（= 整幅重绘），不要求遮罩存在或可读
+        let mask_ok = invert || match img.mask_path.as_deref() {
             Some(m) if util::file_alive(&ctx.data, &Value::String(m.to_string())) => true,
             Some(_) => {
                 bad("遮罩文件已不在磁盘上，重涂一次再提交".into());
@@ -170,16 +179,27 @@ async fn run_job(ctx: &Shared, id: i64) {
 async fn run_inner(ctx: &Shared, row: &entity::ResultRow) -> std::result::Result<(), String> {
     let img = rimg::by_id(ctx, row.image_id).map_err(|e| e.to_string())?
         .ok_or_else(|| "图片已不存在，这一张没法跑".to_string())?;
+    if img.is_sketch() {
+        return run_sketch(ctx, row, img).await;
+    }
     let prompt = row.prompt.clone();
+    let settings = row.settings();
     let pre = {
         let ctx = ctx.clone();
         let img = img.clone();
-        tokio::task::spawn_blocking(move || prepare(&ctx, &img)).await
+        let settings = settings.clone();
+        tokio::task::spawn_blocking(move || prepare(&ctx, &img, &settings)).await
     }
     .map_err(|e| format!("裁切线程崩了：{e}"))??;
-    let bytes = cloud::edit(ctx, pre.crop.clone(), pre.mask.clone(), &prompt, Some(&pre.size))
-        .await
-        .map_err(|e| e.chars().take(300).collect::<String>())?;
+    let bytes = cloud::edit(
+        ctx,
+        pre.crop.clone(),
+        if pre.no_mask { None } else { Some(pre.mask.clone()) },
+        &prompt,
+        Some(&pre.size),
+    )
+    .await
+    .map_err(|e| e.chars().take(300).collect::<String>())?;
     let ctx2 = ctx.clone();
     let id = row.id;
     tokio::task::spawn_blocking(move || compose(&ctx2, id, &img, pre, &bytes))
@@ -197,6 +217,8 @@ fn finish(ctx: &Shared, id: i64, r: std::result::Result<(), String>) {
 struct Prepared {
     crop: Vec<u8>,
     mask: Vec<u8>,
+    /// 反向涂抹且一笔没涂 = 整幅重绘，这时不带 mask 这个 part
+    no_mask: bool,
     size: String,
     base: stitch_core::Rgba,
     alpha: stitch_core::Alpha,
@@ -205,25 +227,37 @@ struct Prepared {
 }
 
 /// 读原图 + 蒙版，折出裁切区。全程在原图分辨率上做，浏览器只需要交出 proxy 分辨率的涂抹层。
-fn prepare(ctx: &Shared, img: &Image) -> std::result::Result<Prepared, String> {
+///
+/// 裁切目标长边取**这一行提交时的快照**（`settings.edge`），不是跑到的那一刻的全局设置：
+/// 精修页的尺寸胶囊以前写进 settings 却没人读，等于一个骗人的旋钮。
+/// `settings.invert` 同理按行生效（反向涂抹只开云端这条路）。
+fn prepare(ctx: &Shared, img: &Image, settings: &Value) -> std::result::Result<Prepared, String> {
     let s = cloud::settings(ctx);
+    let edge = util::number_of(settings.get("edge")).filter(|n| *n >= 1.0).map(|n| n.clamp(512.0, 3840.0) as i64);
     let params = StitchParams {
         expand: s.stitch_expand as f64,
         context: stitch_core::DEFAULT_CONTEXT,
-        crop_edge: s.stitch_edge.max(1) as u32,
+        crop_edge: edge.unwrap_or(s.stitch_edge.max(1)) as u32,
         feather: s.stitch_feather as f64,
         levels: stitch_core::DEFAULT_LEVELS,
+        invert: settings.get("invert").and_then(Value::as_bool).unwrap_or(false),
     };
     let photo = codec::decode(&std::fs::read(ctx.data.join(&img.orig_path)).map_err(|e| format!("读原图失败：{e}"))?)?;
-    let mask = codec::decode(&std::fs::read(ctx.data.join(img.mask_path.as_deref().unwrap_or(""))).map_err(|e| format!("读遮罩失败：{e}"))?)?;
-    match build_crop_payload(&photo, &mask.alpha(), &params) {
+    // 反向涂抹且没存过遮罩 = 一笔没保 = 整幅重绘，这时没有遮罩文件是合法输入；正向仍然要拦
+    let mask_alpha = match img.mask_path.as_deref().filter(|m| util::file_alive(&ctx.data, &Value::String(m.to_string()))) {
+        Some(m) => codec::decode(&std::fs::read(ctx.data.join(m)).map_err(|e| format!("读遮罩失败：{e}"))?)?.alpha(),
+        None if params.invert => stitch_core::Alpha::new(img.w.max(1) as usize, img.h.max(1) as usize),
+        None => return Err("遮罩上没有可用笔迹，涂一处再提交".into()),
+    };
+    match build_crop_payload(&photo, &mask_alpha, &params) {
         Build::Payload(p) => Ok(Prepared {
             // 云端按 fit 后的档位收图，所以 size 由裁切区自己说了算
             crop: codec::encode_png(&p.image),
             mask: codec::encode_png(&p.mask),
+            no_mask: p.no_mask,
             size: format!("{}x{}", p.image.w, p.image.h),
             base: photo,
-            alpha: mask.alpha(),
+            alpha: mask_alpha,
             crop_box: p.crop,
             params,
         }),
@@ -244,6 +278,77 @@ fn compose(ctx: &Shared, id: i64, img: &Image, pre: Prepared, bytes: &[u8]) -> s
     let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), format!("r{id}_{}_final.png", util::now_ms())]);
     std::fs::write(ctx.data.join(&rel), codec::encode_png(&final_img)).map_err(|e| format!("写成图失败：{e}"))?;
     // 缩略图失败不影响这一张成图：历史列回落到 final_url 就行
+    let thumb = imagesvc::result_thumb(ctx, id, img.project_id, &rel);
+    rres::set_done(ctx, id, &rel, thumb.as_deref()).map_err(|e| e.to_string())
+}
+
+/// 画布的一次生成：画稿拍到白底当输入图，**不带遮罩**，回来的图直接是成图。
+///
+/// 这里没有裁切与缝合——画布不存在"蒙版外要保持"这件事。状态机、并发闸、
+/// 重启续跑都照用队列这一套，所以只有"准备载荷"和"落盘"两段是画布自己的。
+async fn run_sketch(ctx: &Shared, row: &entity::ResultRow, img: Image) -> std::result::Result<(), String> {
+    let prompt = row.prompt.clone();
+    let (png, size) = {
+        let ctx2 = ctx.clone();
+        let img2 = img.clone();
+        tokio::task::spawn_blocking(move || prepare_sketch(&ctx2, &img2))
+            .await
+            .map_err(|e| format!("画布线程崩了：{e}"))??
+    };
+    let bytes = cloud::edit(ctx, png, None, &prompt, Some(&size))
+        .await
+        .map_err(|e| e.chars().take(300).collect::<String>())?;
+    let id = row.id;
+    let ctx2 = ctx.clone();
+    tokio::task::spawn_blocking(move || compose_sketch(&ctx2, id, &img, &bytes))
+        .await
+        .map_err(|e| format!("落盘线程崩了：{e}"))?
+}
+
+fn prepare_sketch(ctx: &Shared, img: &Image) -> std::result::Result<(Vec<u8>, String), String> {
+    let raw = std::fs::read(ctx.data.join(&img.orig_path)).map_err(|e| format!("读不到画稿：{e}"))?;
+    let rgba = codec::decode(&raw)?;
+    sketch_fit(rgba.w, rgba.h)?;
+    let flat = codec::flatten(&rgba, [255, 255, 255]);
+    Ok((codec::encode_png(&flat), format!("{}x{}", rgba.w, rgba.h)))
+}
+
+/// 云端接口对图片尺寸的硬约束（长边 ≤3840、比例 ≤3:1、像素 65.5 万~829 万）。
+/// 建画布时按这一条拒过一次，提交时再判一次：库里可能躺着别的入口写进来的行。
+pub fn sketch_fit(w: usize, h: usize) -> std::result::Result<(), String> {
+    use stitch_core::geom::{EDGE_MAX, PX_MAX, PX_MIN, RATIO_MAX};
+    if w == 0 || h == 0 {
+        return Err("画布尺寸是 0".into());
+    }
+    let long = w.max(h);
+    let ratio = long as f64 / w.min(h) as f64;
+    let px = w as u64 * h as u64;
+    if long > EDGE_MAX as usize || ratio > RATIO_MAX || !(PX_MIN..=PX_MAX).contains(&px) {
+        return Err(format!(
+            "画布 {w}×{h} 超出云端允许范围（长边≤{}、比例≤{RATIO_MAX}:1、像素 {}~{}）",
+            EDGE_MAX,
+            PX_MIN,
+            PX_MAX
+        ));
+    }
+    Ok(())
+}
+
+fn compose_sketch(ctx: &Shared, id: i64, img: &Image, bytes: &[u8]) -> std::result::Result<(), String> {
+    if ctx.job_cancelled(id) {
+        return Err("已手动中断，这一张的结果不再采用".into());
+    }
+    // 先解一次再落盘：坏图进了库就会变成"卡片在、点开是空的"
+    let decoded = codec::decode(bytes)?;
+    if decoded.w == 0 || decoded.h == 0 {
+        return Err("云端回来的图是空的".into());
+    }
+    let rel = util::rel_path(&[
+        "projects".into(),
+        img.project_id.to_string(),
+        format!("c{id}_{}_final.png", util::now_ms()),
+    ]);
+    imagesvc::write_bytes(&ctx.data.join(&rel), bytes).map_err(|e| format!("写成图失败：{e}"))?;
     let thumb = imagesvc::result_thumb(ctx, id, img.project_id, &rel);
     rres::set_done(ctx, id, &rel, thumb.as_deref()).map_err(|e| e.to_string())
 }
@@ -270,5 +375,17 @@ mod tests {
         assert_eq!(gate().available_permits(), 6, "上调要能一路开到上限");
         sync_gate(1);
         assert_eq!(gate().available_permits(), 1);
+    }
+
+    /// 建画布时按同一口径拒过，提交时再判一次：库里可能躺着别的入口写进来的行
+    #[test]
+    fn 画布尺寸按云端硬约束判() {
+        assert!(sketch_fit(1024, 1024).is_ok());
+        assert!(sketch_fit(2048, 1536).is_ok(), "3:2 的 3MP 该过");
+        assert!(sketch_fit(4000, 6000).is_err(), "长边与像素都顶破了");
+        assert!(sketch_fit(800, 200).is_err(), "4:1 超比例");
+        assert!(sketch_fit(700, 700).is_err(), "49 万像素低于下限");
+        assert!(sketch_fit(0, 0).is_err());
+        assert!(sketch_fit(1, 4000).is_err());
     }
 }

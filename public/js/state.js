@@ -19,10 +19,21 @@ export const store = createStore({
   stats: {},               // projectId -> {total, masked} 由详情请求补齐
   comfy: null,             // 当前生效的 ComfyUI 后端地址
   cloud: null,             // 云端局部重绘配置（base/模型/挡位/外扩羽化），key 不回传
+  phrases: [],             // 修图界面的提示词短语（库里 kind='phrase'），以前是 JS 里写死的 7 条
 });
 
-/** 生成走哪条线：云端那套给没装 ComfyUI 的机器用 */
-export const isCloud = () => store.peek('cloud')?.kind === 'cloud';
+/**
+ * 生成走哪条线：项目里选过的模式优先，没选过才看全局设置。
+ * 模式存在项目参数（settings.mode）里，所以"这个项目走云端、那个走本机"是各记各的；
+ * 每次提交带的就是这个值，results.backend 按行记下用了哪条。
+ */
+export function effMode() {
+  const m = store.peek('settings')?.mode;
+  if (m === 'cloud' || m === 'comfyui') return m;
+  return store.peek('cloud')?.kind === 'cloud' ? 'cloud' : 'comfyui';
+}
+
+export const isCloud = () => effMode() === 'cloud';
 
 /** 云端没有独立的负面提示词位，并进正向一句发过去 */
 export function cloudPrompt(settings) {
@@ -58,7 +69,7 @@ const pick = (src, keys, fb) => {
   for (const k of keys) if (src && src[k] !== undefined && src[k] !== null) out[k] = src[k];
   return out;
 };
-const KEYS = ['prompt', 'negative', 'steps', 'cfg', 'seed', 'randomSeed', 'loras', 'edge'];
+const KEYS = ['prompt', 'negative', 'steps', 'cfg', 'seed', 'randomSeed', 'loras', 'edge', 'mode'];
 
 /** 项目记忆的参数 > 工作流默认；LoRA 以工作流为骨架、按名字合并强度/开关 */
 export function resolveSettings(saved, cfg) {
@@ -107,6 +118,15 @@ export async function loadProjects() {
   const projects = await api.projects();
   store.set({ projects, projectsAt: Date.now() }, 'projects');
   return projects;
+}
+
+/** 短语读的是全局桶：胶囊是通用工具，不该每个项目各配一套 */
+export async function loadPhrases() {
+  let rows = [];
+  try { rows = await api.presets(null, 'phrase'); }
+  catch (e) { store.set({ phrases: [] }, 'phrases'); return { rows: [], error: e.message }; }
+  store.set({ phrases: rows }, 'phrases');
+  return { rows, error: '' };
 }
 
 export async function loadProject(id) {
@@ -176,7 +196,9 @@ export function stateOf(img) {
   if (job && job.state === 'err') return 'err';
   if (job && job.state === 'skip') return 'skip';
   if (job && job.state === 'done') return 'done';
-  if (img.has_result) return 'done';
+  // 结果数来自项目详情（result_done = 库里已成图的条数）：刷新后也认得出这张出过图。
+  // 早先这里读 img.has_result，而那个字段没有任何端点会发，只有本次会话轮询写进去过一次。
+  if (img.result_done > 0) return 'done';
   if (!img.has_mask) return 'nomask';
   return 'ready';
 }

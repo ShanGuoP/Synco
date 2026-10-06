@@ -26,6 +26,10 @@ pub struct Image {
     pub w: i64,
     pub h: i64,
     pub created_at: Option<String>,
+    /// `photo` = 导入的照片，`sketch` = 画布里的画稿。
+    /// 画稿也有 orig_path（它就是那张画稿的 PNG），但**不能**进修图那条链路：
+    /// 没有"蒙版外要保持"这回事，裁切与缝合对它没有意义。路由全靠这一列判。
+    pub kind: String,
 }
 
 impl Image {
@@ -41,11 +45,16 @@ impl Image {
             w: int(v.get("w")),
             h: int(v.get("h")),
             created_at: own(v.get("created_at")),
+            kind: own(v.get("kind")).unwrap_or_else(|| "photo".into()),
         }
     }
 
     pub fn has_mask(&self) -> bool {
         self.mask_path.is_some()
+    }
+
+    pub fn is_sketch(&self) -> bool {
+        self.kind == "sketch"
     }
 }
 
@@ -65,6 +74,9 @@ pub struct ResultRow {
     pub maskoverlay_path: Option<String>,
     pub thumb_path: Option<String>,
     pub backend: String,
+    /// 提交那一刻的参数快照。云端队列按这一行的 `edge`/`invert` 出图，
+    /// 而不是按跑到的那一刻的全局设置——设置改在两张中间不该让后一张变样。
+    pub settings_json: Option<String>,
 }
 
 impl ResultRow {
@@ -82,7 +94,16 @@ impl ResultRow {
             thumb_path: own(v.get("thumb_path")),
             // 老行没这一列时按本机链路解释，历史云端结果才不会被拿步数/种子去说明
             backend: own(v.get("backend")).unwrap_or_else(|| "comfyui".into()),
+            settings_json: v.get("settings_json").and_then(|x| x.as_str()).map(str::to_string),
         }
+    }
+
+    /// 这一行提交时的参数快照；坏 JSON 与没存过都当空对象
+    pub fn settings(&self) -> Value {
+        self.settings_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
     }
 
     /// 云端行没有 prompt_id：本机那套轮询接不回来

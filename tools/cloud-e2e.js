@@ -83,13 +83,28 @@ function startMock() {
     req.on('data', b => bufs.push(b));
     req.on('end', () => {
       const body = Buffer.concat(bufs);
-      hits.push({ url: req.url, bytes: body.length });
+      // 记下 form 里的 size 与有没有 mask part：断言"尺寸胶囊真落到这一枪"与"画稿不带遮罩"要靠它
+      const text = body.toString('latin1');
+      const size = /name="size"\r\n\r\n([^\r\n]+)/.exec(text);
+      const prompt = /name="prompt"\r\n\r\n([^\r\n]*)/.exec(text);
+      hits.push({
+        url: req.url, bytes: body.length,
+        size: size ? size[1] : null,
+        hasMask: /name="mask"/.test(text),
+        prompt: prompt ? prompt[1] : '',
+      });
       const start = body.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
       if (start < 0) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end('{"error":"mock 没收到 PNG"}'); }
       const end = body.indexOf('\r\n--', start);
       const pngBytes = body.subarray(start, end < 0 ? body.length : end);
+      // 反向那一次要回一张"完全不一样"的图，才验得出保住的主体确实没被动过
+      let reply = pngBytes;
+      if (/INVERT/.test(prompt ? prompt[1] : '')) {
+        const iw = pngBytes.readUInt32BE(16), ih = pngBytes.readUInt32BE(20);
+        reply = png(iw, ih, () => [0, 255, 0, 255]);
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ data: [{ b64_json: pngBytes.toString('base64') }] }));
+      res.end(JSON.stringify({ data: [{ b64_json: reply.toString('base64') }] }));
     });
   });
   return new Promise(res => srv.listen(0, '127.0.0.1', () => res({ srv, port: srv.address().port, hits })));
@@ -191,6 +206,29 @@ async function main() {
 
   const done = (await req(srv.base, 'GET', `/api/results/${rows[0]}`)).body;
   check('成图带 320 缩略档（历史列不再解码 24MP）', /_thumb\.jpg$/.test(String(done.thumb_url || '')), JSON.stringify(done.thumb_url));
+
+  // 项目页角标的数据源：结果数与最新成图档由项目详情一次算出来（旧的 has_result 没有任何端点会发）
+  const pj = (await req(srv.base, 'GET', `/api/projects/${proj.body.id}`)).body;
+  const irow = (pj.images || []).find(x => x.id === iid) || {};
+  check('项目详情带真实结果数', irow.result_count === 2 && irow.result_done === 2, JSON.stringify({ count: irow.result_count, done: irow.result_done }));
+  check('角标用的最新成图小档给得出', /_thumb\.jpg$/.test(String(irow.latest_result_url || '')), JSON.stringify(irow.latest_result_url));
+  const col = await req(srv.base, 'GET', `/api/results?project_id=${proj.body.id}`);
+  check('结果集合端点列得出整项目', col.status === 200 && (col.body.results || []).length === 2, JSON.stringify(col.body).slice(0, 160));
+  const one = await req(srv.base, 'GET', `/api/results?image_id=${iid}&limit=1`);
+  check('集合能按单图收窄并尊重 limit', (one.body.results || []).length === 1 && one.body.truncated === true, JSON.stringify(one.body).slice(0, 160));
+  const noArgs = await req(srv.base, 'GET', '/api/results');
+  check('集合缺参数时明说而不是回全库', noArgs.status === 400, `${noArgs.status} ${JSON.stringify(noArgs.body)}`);
+
+  // 尺寸胶囊（方案的 D3）：以前前端把它写进 settings，服务端从来没人读
+  const hitBefore = mock.hits.length;
+  const qEdge = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid], settings: { prompt: '把涂到的地方调亮', edge: 2048 } });
+  const ridEdge = (qEdge.body.results || [])[0]?.result_id;
+  const stEdge = await waitRows(srv.base, [ridEdge], ['done', 'error']);
+  const sizes = mock.hits.slice(hitBefore).map(h => h.size);
+  const baseSize = mock.hits[hitBefore - 1]?.size;
+  check('这一枪按 2048 档出图（edge 落到请求上）', stEdge[0] === 'done' && parseInt(String(sizes[sizes.length - 1])) > parseInt(String(baseSize)),
+    `默认 ${baseSize} → edge=2048 ${sizes.join(',')}`);
+  check('没带 edge 的请求仍按设置里的 stitch_edge', String(baseSize || '').startsWith('1024'), JSON.stringify(baseSize));
   const finalBuf = (await req(srv.base, 'GET', done.final_url)).body;
   check('成图尺寸与原图一致', pngSize(finalBuf).w === W && pngSize(finalBuf).h === H, JSON.stringify(pngSize(finalBuf)));
 
@@ -221,6 +259,60 @@ async function main() {
   }).trim().split(/\r?\n/).pop();
   const [bad, n] = out.split('/').map(Number);
   check(`蒙版外逐像素不动（取样 ${n} 点，避开半径 ${SAFE_R}px）`, n > 100 && bad === 0, `不符 ${bad}/${n}`);
+
+  // ---- 反向涂抹（M5）：涂住的主体逐字节不动，其余整幅交给模型。这次 mock 回的是纯绿 ----
+  const qInv = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid], settings: { prompt: 'INVERT 反向圈住主体', invert: true } });
+  const ridInv = (qInv.body.results || [])[0]?.result_id;
+  const stInv = await waitRows(srv.base, [ridInv], ['done', 'error']);
+  check('反向提交能跑到终态', stInv[0] === 'done', JSON.stringify(stInv));
+  const invHit = mock.hits[mock.hits.length - 1];
+  check('反向那次仍带遮罩（涂了就有保留区）', !!invHit && invHit.hasMask === true, JSON.stringify(invHit));
+  if (stInv[0] === 'done') {
+    const inv = (await req(srv.base, 'GET', `/api/results/${ridInv}`)).body;
+    const invBuf = (await req(srv.base, 'GET', inv.final_url)).body;
+    const f3 = path.join(data, 'invert.png');
+    fs.writeFileSync(f3, invBuf);
+    const psInv = [
+      "$ErrorActionPreference='Stop'",
+      'Add-Type -AssemblyName System.Drawing',
+      '$a=[System.Drawing.Bitmap]::new($env:P1)',
+      '$b=[System.Drawing.Bitmap]::new($env:P2)',
+      '$cx=[int]$env:CX;$cy=[int]$env:CY;$rr=[int]$env:RR;$rin=[int]$env:RIN',
+      '$keep=0;$nin=0;$chg=0;$nout=0;$sx=13;$sy=7',
+      'for($i=0;$i -lt 12000;$i++){',
+      '  $sx=(($sx*1103515245+12345) -band 0x7fffffff); $sy=(($sy*1103515245+12345) -band 0x7fffffff)',
+      '  $x=$sx % $a.Width; $y=$sy % $a.Height',
+      '  $d=[math]::Sqrt(($x-$cx)*($x-$cx)+($y-$cy)*($y-$cy))',
+      '  $pa=$a.GetPixel($x,$y); $pb=$b.GetPixel($x,$y)',
+      '  $same=($pa.R -eq $pb.R -and $pa.G -eq $pb.G -and $pa.B -eq $pb.B)',
+      '  if ($d -lt $rin) { $nin++; if ($same) { $keep++ } }',
+      '  elseif ($d -gt ($rr + 400)) { $nout++; if (-not $same) { $chg++ } }',
+      '}',
+      '"$keep/$nin/$chg/$nout"',
+      '$a.Dispose();$b.Dispose()',
+    ].join('\n');
+    const resInv = execFileSync('powershell', ['-NoProfile', '-Command', psInv], {
+      encoding: 'utf8',
+      // 羽化带会吃掉笔迹边缘往里 0.4×外扩 + 约 1.5σ（≈160px），判"保住"要避开这一圈，
+      // 与正向那次用 SAFE_R 避开外扩带是同一个口径
+      env: { ...process.env, P1: f1, P2: f3, CX: String(INK.cx), CY: String(INK.cy), RR: String(INK.r), RIN: String(INK.r - 160) },
+    }).trim().split(/\r?\n/).pop();
+    const [keep, nin, chg, nout] = resInv.split('/').map(Number);
+    check(`反向：圈住的主体逐字节没动（取样 ${nin} 点，半径 ${INK.r - 160} 内）`, nin > 30 && keep === nin, resInv);
+    // 远处应当几乎全换成模型给的内容；配色校正会让个别点碰巧相同，所以按 95% 判
+    check(`反向：主体之外整幅换掉（取样 ${nout} 点）`, nout > 60 && chg / nout > 0.95, resInv);
+
+    // 一笔没涂 = 整幅重绘：这时不造一张全透明遮罩发出去，而是干脆不带 mask 这个 part
+    const b64 = 'data:image/png;base64,' + mask.toString('base64');
+    await req(srv.base, 'POST', `/api/images/${iid}/mask`, {});       // 清空遮罩文件
+    const qAll = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid], settings: { prompt: 'INVERT 整幅重绘', invert: true } });
+    const ridAll = (qAll.body.results || [])[0]?.result_id;
+    const stAll = await waitRows(srv.base, [ridAll], ['done', 'error']);
+    const allHit = mock.hits[mock.hits.length - 1];
+    check('反向且没涂也允许提交', stAll[0] === 'done', JSON.stringify(stAll) + ' ' + JSON.stringify(qAll.body).slice(0, 120));
+    check('没涂时不带 mask part', !!allHit && allHit.hasMask === false, JSON.stringify(allHit));
+    await req(srv.base, 'POST', `/api/images/${iid}/mask`, { b64 });  // 后面的用例还要这张遮罩
+  }
 
   // 重启续跑：排两行下去，中途杀进程，再起——queued 该接着跑，在飞的那次判掉
   const q2 = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid, iid, iid], settings: { prompt: '重启后还要跑完' } });

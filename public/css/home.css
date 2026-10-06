@@ -49,6 +49,8 @@
 .hero-card__d { position: relative; font-size: var(--f-xs); letter-spacing: .4px; color: var(--txt-3); }
 .hero-card__form { position: relative; display: flex; align-items: flex-end; gap: var(--s-3); margin-top: var(--s-3); width: min(320px, 100%); }
 .hero-card__form .input { font-size: var(--f-md); }
+/* 建空项目的次级入口：主行动（导入）之外只留一条细线，别抢焦点 */
+.hero-card__alt { margin-top: var(--s-1); }
 
 /* 信息卡：淡框纸片，顶部一条专色细线做栏目记号 */
 .tile-card {

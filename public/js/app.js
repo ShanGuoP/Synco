@@ -3,11 +3,12 @@
 import { $ } from './core/dom.js';
 import { api } from './core/api.js';
 import { createRouter, go } from './core/router.js';
-import { store, setHome, loadProjects } from './state.js';
+import { store, setHome, loadProjects, loadPhrases } from './state.js';
 import { initShell, setActiveNav, setCrumb, renderRecent, refreshStats, setWorkflowChip } from './shell.js';
 import { renderHome, repaintHome } from './views/home.js';
 import { renderProject, watchJobs } from './views/project.js';
 import { openEditor, closeEditor } from './views/editor/index.js';
+import { openCanvas, closeCanvas } from './views/canvas/index.js';
 import { helpModal, shortcutsModal, flowModal } from './ui/dialogs.js';
 import { settingsModal } from './ui/settings.js';
 import { toastErr } from './ui/toast.js';
@@ -23,6 +24,7 @@ const show = which => {
 const router = createRouter()
   .on('/', async () => {
     closeEditor();
+    closeCanvas();
     show('home');
     setHome({ filter: 'all' });
     setCrumb([]);
@@ -32,6 +34,7 @@ const router = createRouter()
   })
   .on('/f/:filter', async params => {
     closeEditor();
+    closeCanvas();
     show('home');
     setHome({ filter: params.filter });
     setCrumb([]);
@@ -41,6 +44,7 @@ const router = createRouter()
   })
   .on('/p/:id', async params => {
     closeEditor();
+    closeCanvas();
     show('project');
     await renderProject(+params.id);
     const p = store.peek('project');
@@ -48,10 +52,18 @@ const router = createRouter()
     setActiveNav('');
   })
   .on('/p/:id/e/:imgId', async params => {
+    closeCanvas();
     show('project');
     setCrumb([{ label: '主页', href: '/' }, { label: store.peek('project')?.name || '项目', href: `/p/${params.id}` }, { label: '精修' }]);
     setActiveNav('');
     await openEditor(+params.id, +params.imgId);
+  })
+  .on('/p/:id/c/:imgId', async params => {
+    closeEditor();
+    show('project');
+    setCrumb([{ label: '主页', href: '/' }, { label: store.peek('project')?.name || '项目', href: `/p/${params.id}` }, { label: '画布' }]);
+    setActiveNav('');
+    await openCanvas(+params.id, +params.imgId);
   })
   .fallback(() => go('/'));
 
@@ -99,7 +111,7 @@ async function boot() {
   });
 
   try {
-    const [cfg, be, cloud] = await Promise.all([api.cfg(), api.backends(), api.cloud().catch(() => null)]);
+    const [cfg, be, cloud] = await Promise.all([api.cfg(), api.backends(), api.cloud().catch(() => null), loadPhrases()]);
     store.set({ cfg, comfy: be.active, cloud: cloud || { kind: 'comfyui' } }, 'comfy');
     paintChip();
   } catch (e) {

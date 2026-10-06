@@ -218,8 +218,10 @@ pub async fn probe(ctx: &Ctx) -> Value {
     Value::Object(out)
 }
 
-/// 一次裁切区重绘：图 + 同尺寸「透明=重绘」遮罩，回一张 PNG 字节
-pub async fn edit(ctx: &Ctx, image_buf: Vec<u8>, mask_buf: Vec<u8>, prompt: &str, size: Option<&str>) -> Result<Vec<u8>, String> {
+/// 一次裁切区重绘：图 + 同尺寸「透明=重绘」遮罩，回一张 PNG 字节。
+/// `mask` 传 `None` 时**不带这个 part**——反向涂抹一笔没涂就是"整幅重绘"，
+/// 与其造一张全透明的巨图（各家的遮罩体积上限还不一样），不如按接口本来的样子省略。
+pub async fn edit(ctx: &Ctx, image_buf: Vec<u8>, mask_buf: Option<Vec<u8>>, prompt: &str, size: Option<&str>) -> Result<Vec<u8>, String> {
     let s = settings(ctx);
     if s.base.is_empty() {
         return Err("云端还没配置 base_url（设置 → 云端）".into());
@@ -235,11 +237,13 @@ pub async fn edit(ctx: &Ctx, image_buf: Vec<u8>, mask_buf: Vec<u8>, prompt: &str
     };
     let mut form = reqwest::multipart::Form::new()
         .part("image", png("image.png", image_buf))
-        .part("mask", png("mask.png", mask_buf))
         .text("prompt", prompt.to_string())
         .text("model", s.model.clone())
         // 显式要 b64：回 URL 的话地址可能带有效期，还得多一跳去下载
         .text("response_format", "b64_json");
+    if let Some(m) = mask_buf {
+        form = form.part("mask", png("mask.png", m));
+    }
     // 尺寸由调用方按原图比例算好后带过来（发出去的就是这个尺寸，不会拉伸）；没带才用设置里填的
     let sz = size.unwrap_or(&s.size).trim().to_string();
     if !sz.is_empty() {

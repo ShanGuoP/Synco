@@ -35,6 +35,17 @@ pub fn touch(ctx: &Ctx, id: i64) -> Result<()> {
     Ok(())
 }
 
+/// 改名。bump `updated_at` 是有意的：首页排序键就是它，"刚改过 = 刚动过"才不反直觉；
+/// 不 bump 的话改完名首页位置不动，而排序键的语义就坏了。名字纯显示用，路径全按数字 id 走。
+pub fn rename(ctx: &Ctx, id: i64, name: &str) -> Result<usize> {
+    let now = util::now_localtime(&ctx.db());
+    repo::run(
+        ctx,
+        "UPDATE projects SET name=?, updated_at=? WHERE id=?",
+        &[repo::s(name), repo::s(&now), repo::i(id)],
+    )
+}
+
 /// 返回受影响行数：0 表示没有这个项目，handler 要据此回 404
 pub fn set_settings(ctx: &Ctx, id: i64, settings_json: &str) -> Result<usize> {
     let now = util::now_localtime(&ctx.db());

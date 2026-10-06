@@ -1,4 +1,4 @@
-// 设置：后端 / 工作流 / 云端 / 图像档位 / 导出 / ComfyUI 目录 / 预设 / 数据目录 / 关于，一个弹窗装下
+// 设置：后端 / 工作流 / 云端 / 图像档位 / 外观 / 导出 / 短语 / 预设 / 数据目录 / 关于，一个弹窗装下
 'use strict';
 import { el, fill } from '../core/dom.js';
 import { icon } from '../core/icons.js';
@@ -10,11 +10,12 @@ import { modal } from './modal.js';
 import { toastOk, toastErr, toastBusy } from './toast.js';
 import { createBackendsPane } from './backends.js';
 import { createPresetsPane } from './presets.js';
+import { createPhrasesPane } from './phrases.js';
 
 /* 后端地址与 ComfyUI 根目录是同一件事的两半——都在回答"我连的是哪个 ComfyUI"，
    分成两个分区会让人在两边各填一半、自检结果却在另一个分区里 */
 const SECTIONS = [['backend', 'ComfyUI'], ['workflow', '工作流参数'], ['cloud', '云端生成'], ['image', '图像档位'], ['theme', '外观'],
-  ['export', '导出目录'], ['presets', '参数预设'], ['data', '数据目录'], ['about', '关于']];
+  ['export', '导出目录'], ['phrases', '提示词短语'], ['presets', '参数预设'], ['data', '数据目录'], ['about', '关于']];
 const VERIFY_TEXT = { ok: '指纹一致', mismatch: '与基准不符', missing: '文件不在', 'no-baseline': '无基准可比' };
 const gb = n => (n >= 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : n >= 1048576 ? (n / 1048576).toFixed(0) + ' MB' : '—');
 
@@ -52,13 +53,39 @@ function createWorkflowPane() {
 
   const node = el('div.dlg-flow', {},
     el('div', {}, el('h4.dlg-h4', { text: '工作流文件路径' }), inp,
-      el('p.muted', { text: '只用来读默认步数 / CFG / LoRA 链与裁切参数；提交用的计算图由程序自己拼，不依赖这个文件。' }),
+      el('p.muted', { text: '用来读默认步数 / CFG / LoRA 链与裁切参数。UI 导出（save）与 API 导出（Save (API Format)）都认；API 导出按输入名取值，你在文件里挪动节点不会让参数错位。提交用的计算图仍由程序自己拼。' }),
       el('div', { style: { display: 'flex', gap: '8px', marginTop: '10px' } },
         el('button.btn.btn--primary.btn--sm', { type: 'button', text: '保存并校验', onclick: save }),
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', 'data-tip': '列出这个文件里有哪些节点、缺哪些', text: '清点节点', onclick: () => inspectWorkflow() }),
         el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '重新读取', onclick: load }))),
     state);
   load();
   return { node };
+}
+
+/**
+ * 把工作流文件里的节点摊开给人看。角色映射要接管提交（下一步），
+ * 而那张角色表得由人先看清自己文件里有什么才好定。
+ */
+async function inspectWorkflow() {
+  const busy = toastBusy('清点节点…');
+  let d;
+  try { d = await api.workflowInspect(); } catch (e) { busy.close(); toastErr('清点失败', e.message); return; }
+  busy.close();
+  const counts = new Map();
+  for (const n of d.nodes || []) counts.set(n.class_type, (counts.get(n.class_type) || 0) + 1);
+  const row = (k, v) => el('div.set__row', {}, el('b', { text: k }), el('span.set__extra', { text: v }));
+  const body = el('div.dlg-flow', {},
+    el('p.muted', { text: d.format === 'api' ? 'API 导出（按输入名取参数）' : 'UI/litegraph 导出（按控件位置取参数）' } + ` · 共 ${d.total} 个节点`),
+    d.stitch_pair_ok ? null : el('div.set__row.is-bad', {}, el('span.dot', { class: 'dot dot--err' }),
+      el('b', { text: '没看到裁切与缝合那一对节点' }),
+      el('span.set__extra', { text: '「蒙版外逐像素不动」靠 InpaintCropImproved + InpaintStitchImproved 在工作流里完成。现在这一版提交用的是程序自己拼的图，所以这里只是提示。' })),
+    el('h4.dlg-h4', { text: '节点清单' }),
+    ...[...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, n]) => row(k, `${n} 个`)),
+    (d.known_missing || []).length
+      ? el('div', {}, el('h4.dlg-h4', { text: '本管线认识、这个文件里没有的' }), el('p.muted', { text: d.known_missing.join('、') }))
+      : null);
+  return modal({ title: '工作流节点清点', wide: true, body, actions: [{ label: '关闭', kind: 'ghost' }] });
 }
 
 function createCloudPane() {
@@ -527,6 +554,7 @@ export function settingsModal(section = 'backend') {
         : k === 'export' ? createExportPane()
         : k === 'data' ? createDataPane()
         : k === 'about' ? createAboutPane()
+        : k === 'phrases' ? createPhrasesPane()
         : createPresetsPane({ projectId: store.peek('project')?.id || null }));
       fill(pane, built[k].node);
     },

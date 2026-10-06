@@ -26,6 +26,9 @@ pub struct StitchParams {
     /// 贴回 alpha 的模糊半径
     pub feather: f64,
     pub levels: usize,
+    /// 反向涂抹：**涂住的是要保住的**，其余整幅交给模型重绘（圈主体换背景）。
+    /// 语义一次贯穿到裁切框、蒙版取反、贴回权重三处，禁止在调用点各写各的 `if invert`。
+    pub invert: bool,
 }
 
 impl Default for StitchParams {
@@ -36,6 +39,7 @@ impl Default for StitchParams {
             crop_edge: DEFAULT_CROP_EDGE,
             feather: DEFAULT_FEATHER,
             levels: DEFAULT_LEVELS,
+            invert: false,
         }
     }
 }
@@ -49,6 +53,9 @@ pub struct CropPayload {
     /// 裁切区在原图上的位置
     pub crop: Box2,
     pub fit: Fit,
+    /// 反向涂抹且一笔没涂 = 整幅都要重绘，这时**不要带 mask 这个 part**
+    /// （比发一张全透明的巨图稳，也绕开各家的遮罩体积上限）
+    pub no_mask: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -61,22 +68,34 @@ pub enum Build {
 }
 
 /// 从整图 + 涂抹层生成裁切载荷。`base` 是原图分辨率，`mask` 是涂抹层分辨率（可以更低）。
+///
+/// 正向：笔迹 = 要重绘的那块，裁切框围着它建。
+/// 反向（`invert`）：笔迹 = 要保住的那块，要重绘的是"其余"，包围盒就是整幅——
+/// 裁切优化在反向里必然失效，这是这个功能的定义而不是实现取巧。
 pub fn build_crop_payload(base: &Rgba, mask: &Alpha, p: &StitchParams) -> Build {
     let (iw, ih) = (base.w, base.h);
     if mask.w == 0 || mask.h == 0 || iw == 0 || ih == 0 {
         return Build::NoInk;
     }
-    let bb = match ink_bbox(mask, 8) {
-        Some(b) => b,
-        None => return Build::NoInk,
-    };
+    let bb = ink_bbox(mask, 8);
+    if !p.invert && bb.is_none() {
+        return Build::NoInk;
+    }
     let k = iw as f64 / mask.w as f64;
 
-    let pad = (bb.w.max(bb.h) as f64 * k * p.context).round() as usize + 8;
-    let cx0 = (bb.x as f64 * k - p.expand - pad as f64).floor().max(0.0) as usize;
-    let cy0 = (bb.y as f64 * k - p.expand - pad as f64).floor().max(0.0) as usize;
-    let cx1 = ((bb.x + bb.w) as f64 * k + p.expand + pad as f64).ceil().min(iw as f64) as usize;
-    let cy1 = ((bb.y + bb.h) as f64 * k + p.expand + pad as f64).ceil().min(ih as f64) as usize;
+    let (cx0, cy0, cx1, cy1) = match bb {
+        Some(b) if !p.invert => {
+            let pad = (b.w.max(b.h) as f64 * k * p.context).round() as usize + 8;
+            (
+                (b.x as f64 * k - p.expand - pad as f64).floor().max(0.0) as usize,
+                (b.y as f64 * k - p.expand - pad as f64).floor().max(0.0) as usize,
+                ((b.x + b.w) as f64 * k + p.expand + pad as f64).ceil().min(iw as f64) as usize,
+                ((b.y + b.h) as f64 * k + p.expand + pad as f64).ceil().min(ih as f64) as usize,
+            )
+        }
+        // 反向：整幅进裁切区，上下文没有"框外"可留（pad 在这里语义是空的）
+        _ => (0, 0, iw, ih),
+    };
     let (cw, ch) = (cx1 - cx0, cy1 - cy0);
     if cw == 0 || ch == 0 {
         return Build::NoInk;
@@ -90,24 +109,28 @@ pub fn build_crop_payload(base: &Rgba, mask: &Alpha, p: &StitchParams) -> Build 
 
     let image = crop_scale_rgba(base, cx0, cy0, cw, ch, pw, ph);
 
-    // 发给模型的蒙版在涂抹层分辨率上外扩（缩放自动把半径带到原图比例），再裁切缩放
+    // 发给模型的蒙版在涂抹层分辨率上外扩（缩放自动把半径带到原图比例），再裁切缩放。
+    // 外扩的永远是"被涂的那一块"：正向它等于扩大重绘区，反向它等于把保护区再撑一圈，方向天然对。
     let grown = dilate(mask, p.expand / k);
     let sx = (cx0 as f64 / k).round() as usize;
     let sy = (cy0 as f64 / k).round() as usize;
     let sw = (cw as f64 / k).round() as usize;
     let sh = (ch as f64 / k).round() as usize;
     let scaled = crop_scale_alpha(&grown, sx, sy, sw, sh, pw, ph);
-    // 黑底 + destination-out：结果 alpha = 255 − 蒙版 alpha，RGB 恒为 0
+    // 黑底：接口约定 alpha=0 才是重绘。正向取反（涂抹处变透明），反向直接用（涂住处保持不透明）
     let mut msk = Rgba::new(pw, ph);
     for i in 0..pw * ph {
-        msk.px[i * 4 + 3] = 255 - scaled.v[i];
+        msk.px[i * 4 + 3] = if p.invert { scaled.v[i] } else { 255 - scaled.v[i] };
     }
+    // 反向 + 一笔没涂 = 整幅重绘，mask 全透明不如干脆不带这个 part
+    let no_mask = p.invert && bb.is_none();
 
     Build::Payload(CropPayload {
         image,
         mask: msk,
         crop: Box2::new(cx0, cy0, cw, ch),
         fit,
+        no_mask,
     })
 }
 
@@ -126,10 +149,31 @@ fn crop_mask(base: &Rgba, mask: &Alpha, crop: Box2) -> Alpha {
 }
 
 /// 贴回权重（裁切区坐标系）：涂抹区外扩一半再羽化。
+/// 反向涂抹就是这张图的补——**涂住的权重为 0（逐字节保持原图），其余为 1（贴模型）**，
+/// 两条权重的和恒等于 255，这条不变量由 `正向与反向的贴回权重恰好互补` 钉住。
 /// 单独暴露是为了让回归能按"权重是否为 0"分档判漂移，而不是整张一刀切。
 pub fn paste_weights(base: &Rgba, mask: &Alpha, crop: Box2, p: &StitchParams) -> Alpha {
+    paste_from_user(&crop_mask(base, mask, crop), p)
+}
+
+/// 权重的唯一算法：`stitch_inner` 与回归用的 `paste_weights` 必须走这一个口径，
+/// 分开写两次就会在下次调羽化时漂掉。
+fn paste_from_user(user: &Alpha, p: &StitchParams) -> Alpha {
+    // 羽化过渡带必须完整落在模型重绘区（外扩蒙版）内：上限 = 外扩 × 0.6
     let feather = p.feather.min((p.expand * 0.6).round());
-    paste_alpha(&crop_mask(base, mask, crop), p.expand * 0.4, feather)
+    let a = paste_alpha(user, p.expand * 0.4, feather);
+    if p.invert { complement(a) } else { a }
+}
+
+/// 正向权重的补集。分块走线程池：反向时裁切区就是整幅，24MP 逐字节取反不值得单核跑
+fn complement(mut a: Alpha) -> Alpha {
+    let chunk = (a.v.len() / 16).clamp(4096, 1 << 16);
+    par_chunks_mut(&mut a.v, chunk, |blk, _| {
+        for v in blk {
+            *v = 255 - *v;
+        }
+    });
+    a
 }
 
 /// 把模型返回的裁切区校正、融合后贴回整图。
@@ -145,8 +189,6 @@ pub fn stitch_crop_boxed(base: &Rgba, mask: &Alpha, crop: Box2, model: &Rgba, p:
 }
 
 fn stitch_inner(base: &Rgba, mask: &Alpha, crop: Box2, model: &Rgba, p: &StitchParams, boxed: bool) -> Rgba {
-    // 羽化过渡带必须完整落在模型重绘区（外扩蒙版）内：上限 = 外扩 × 0.6
-    let feather = p.feather.min((p.expand * 0.6).round());
     let (cw, ch) = (crop.w, crop.h);
     if cw == 0 || ch == 0 || model.w == 0 || model.h == 0 {
         return base.clone();
@@ -157,10 +199,12 @@ fn stitch_inner(base: &Rgba, mask: &Alpha, crop: Box2, model: &Rgba, p: &StitchP
 
     let user = crop_mask(base, mask, crop);
     let send = dilate(&user, p.expand);
+    // 统计带 = "模型本该原样画回来、用户没涂"的那一圈：正向是重绘区外的外扩环，
+    // 反向是保护区外的外扩环，两个方向都是 send 有值而 user 没有，所以这条不用分档
     color_match(&mut out, &orig, &send, &user);
 
-    // 贴回范围 = 涂抹区外扩一半 + 羽化：接缝带完整落在外扩蒙版内部
-    let alpha = paste_alpha(&user, p.expand * 0.4, feather);
+    // 贴回范围 = 涂抹区外扩一半 + 羽化；反向时取补集，接缝带仍完整落在模型重绘区内
+    let alpha = paste_from_user(&user, p);
     let abox = match ink_bbox(&alpha, 2) {
         Some(b) => b,
         None => return base.clone(),
@@ -314,6 +358,98 @@ mod tests {
         // 只要求不 panic 且结果尺寸对：夹到 round(10*0.6)=6 后过渡带仍在重绘区内
         let res = stitch_crop(&base, &mask, pl.crop, &pl.image, &p);
         assert_eq!(res.w, base.w);
+    }
+
+    /// 反向涂抹的核心不变量：同一份笔迹，正向与反向的贴回权重逐像素互补（和恒为 255）。
+    /// 这条不立住，以后每调一次羽化或外扩，两个方向就会各漂各的。
+    #[test]
+    fn 正向与反向的贴回权重恰好互补() {
+        let (base, mask) = scene(1000, 800);
+        // 两条权重要在同一个裁切框上比，反向的框就是整幅，正向这里也框整幅
+        let crop = Box2::new(0, 0, 1000, 800);
+        let f = StitchParams { expand: 40.0, feather: 18.0, ..StitchParams::default() };
+        let r = StitchParams { invert: true, ..f };
+        let wf = paste_weights(&base, &mask, crop, &f);
+        let wr = paste_weights(&base, &mask, crop, &r);
+        let mut painted_full = 0usize;
+        let mut outside_zero = 0usize;
+        // scene() 的笔迹是 x∈[w/3,w/2)、y∈[h/3,h/2)，取它内部与远角两头
+        for y in 0..crop.h {
+            for x in 0..crop.w {
+                let a = wf.get(x, y) as usize;
+                let b = wr.get(x, y) as usize;
+                assert_eq!(a + b, 255, "({x},{y}) 权重不互补：{a} + {b}");
+                // 涂住的主体**核心**：反向必须完全不贴模型。
+                // 贴着笔迹边缘那一圈是羽化带（正向到不了满分），所以取样往中心收
+                if x > 390 && x < 440 && y > 310 && y < 355 {
+                    painted_full += 1;
+                    assert_eq!(b, 0, "({x},{y}) 反向却在保护区内贴了模型（权重 {b}）");
+                }
+                // 远离笔迹的一角：反向应当整份取模型
+                if x > 940 && y > 740 {
+                    outside_zero += 1;
+                    assert_eq!(b, 255, "({x},{y}) 反向没把远处的背景交给模型（权重 {b}）");
+                }
+            }
+        }
+        assert!(painted_full > 1_000 && outside_zero > 1_000, "取样不够：{painted_full} / {outside_zero}");
+    }
+
+    #[test]
+    fn 反向涂住的逐字节不动_其余换成模型的() {
+        let (base, mask) = scene(1000, 800);
+        let p = StitchParams { expand: 24.0, feather: 10.0, crop_edge: 512, invert: true, ..StitchParams::default() };
+        let Build::Payload(pl) = build_crop_payload(&base, &mask, &p) else { panic!("应该成功") };
+        // 裁切框退化到整幅是反向的定义：要改的是"笔迹之外"，那块包围盒就是全图
+        assert_eq!((pl.crop.x, pl.crop.y), (0, 0));
+        assert_eq!((pl.crop.w, pl.crop.h), (base.w, base.h));
+        let mut model = pl.image.clone();
+        for i in 0..model.w * model.h {
+            model.px[i * 4] = model.px[i * 4].saturating_add(60);
+        }
+        let res = stitch_crop(&base, &mask, pl.crop, &model, &p);
+        let w = paste_weights(&base, &mask, pl.crop, &p);
+        let mut kept = 0usize;
+        let mut swapped = 0usize;
+        for y in 0..base.h {
+            for x in 0..base.w {
+                if w.get(x, y) == 0 {
+                    assert_eq!(res.get(x, y), base.get(x, y), "({x},{y}) 权重 0 却被改动");
+                    kept += 1;
+                } else if y > 600 && x > 600 {
+                    if res.get(x, y) != base.get(x, y) {
+                        swapped += 1;
+                    }
+                }
+            }
+        }
+        assert!(kept > 5_000, "保住的主体只有 {kept} 像素");
+        assert!(swapped > 20_000, "远处的背景几乎没被换掉（{swapped}）");
+    }
+
+    #[test]
+    fn 反向发给模型的蒙版方向是反的() {
+        let (base, mask) = scene(800, 600);
+        let p = StitchParams { invert: true, crop_edge: 512, ..StitchParams::default() };
+        let Build::Payload(pl) = build_crop_payload(&base, &mask, &p) else { panic!("应该成功") };
+        assert!(!pl.no_mask, "涂了笔迹就该带蒙版");
+        let (mw, mh) = (pl.mask.w, pl.mask.h);
+        // 涂抹在原图中央偏上，折算到载荷坐标后应当是"保留"（alpha 255），远处一角是"重绘"（0）
+        assert_eq!(pl.mask.px[(mh * 45 / 100 * mw + mw * 42 / 100) * 4 + 3], 255, "涂住处必须是保留");
+        assert_eq!(pl.mask.px[4 + 3], 0, "画布一角必须交给模型重绘");
+    }
+
+    /// 方案 D10：反向时"一笔没涂"是合法输入 = 整幅重绘，这时不造一张全透明的遮罩发出去
+    #[test]
+    fn 反向没涂也允许提交且不带蒙版() {
+        let (base, mut mask) = scene(800, 600);
+        mask.v.iter_mut().for_each(|v| *v = 0);
+        let p = StitchParams { invert: true, crop_edge: 512, ..StitchParams::default() };
+        let Build::Payload(pl) = build_crop_payload(&base, &mask, &p) else { panic!("反向没有笔迹不该判 NoInk") };
+        assert!(pl.no_mask);
+        assert_eq!((pl.crop.w, pl.crop.h), (800, 600));
+        // 正向同样的空笔迹仍然要拦：那是"什么都没选中"，不是"整幅重绘"
+        assert!(matches!(build_crop_payload(&base, &mask, &StitchParams::default()), Build::NoInk));
     }
 
     /// 分阶段计时：24MP 一趟里最贵的环节要量出来，优化别靠猜

@@ -5,7 +5,7 @@ import { icon } from '../../core/icons.js';
 import { api } from '../../core/api.js';
 import { mountWindowControls } from '../../core/desktop.js';
 import { go } from '../../core/router.js';
-import { store, loadProject, saveSettings, stateOf, toggleSel, selectWhere, invertSel, clearSel, touchImage, diffSettings, settingsFromPreset, setJob, isCloud, cloudPrompt } from '../../state.js';
+import { store, loadProject, saveSettings, stateOf, toggleSel, selectWhere, invertSel, clearSel, touchImage, diffSettings, defaultsFromCfg, settingsFromPreset, setJob, isCloud, effMode, patchSettings, cloudPrompt } from '../../state.js';
 import { submit, adopt, drop } from '../../gen.js';
 import { toastOk, toastErr, toastBusy } from '../../ui/toast.js';
 import { makeSlider } from '../../ui/controls.js';
@@ -50,8 +50,11 @@ function buildShell() {
   const poster = el('img.vp__poster', { alt: '', draggable: 'false' });
   const tileBox = el('div.vp__tiles');
   const mask = el('canvas', { id: 'edMask' });
+  // 反向涂抹的预览层：朱红铺满、笔迹处开洞（涂住的是要保住的）。小尺寸画布由 CSS 拉伸，
+  // 每帧跟着笔迹刷新才付得起——它只是语义提示，不需要边缘精度
+  const invert = el('canvas', { class: 'ed-invert', 'aria-hidden': 'true', hidden: true });
   const cursor = el('div.brush-cur');
-  const layer = el('div.vp__canvas', {}, poster, tileBox, mask);
+  const layer = el('div.vp__canvas', {}, poster, tileBox, mask, invert);
   const tiles = createTileView(tileBox);
   const compare = createCompare({ onClose: syncZoomPills, onRestore: restoreFromResult, onFork: forkResult });
   const vp = el('div.vp', {}, layer, cursor, compare.node);
@@ -125,7 +128,7 @@ function buildShell() {
     railBtn('help', 'book', '帮助', false, helpModal));
 
   const history = createHistory({ onPick: showCompare, onRestore: restoreFromResult, onFork: forkResult, onDel: delResult });
-  const params = createParams({ onSubmit: doSubmit, onStop: stopCurrent });
+  const params = createParams({ onSubmit: doSubmit, onStop: stopCurrent, onMode: applyMode, onInk: applyInvert });
   /* 预设按钮塞进参数列头部，紧挨重置键，不新增一行 */
   const presets = createPresetMenu({ onApply: applyPreset });
   const hd = params.node.querySelector('.col-hd');
@@ -142,7 +145,8 @@ function buildShell() {
   const painter = createPainter({
     mask, cursor,
     onSaved: onMaskSaved,
-    onDirty: () => setFlag('有未保存的涂抹', 'busy'),
+    // 画笔模块每描完一帧才回调一次，反向预览跟着它刷新（每帧一次小尺寸 blit，付得起）
+    onDirty: () => { setFlag('有未保存的涂抹', 'busy'); syncInvertHint(); },
   });
 
   const setFlag = (txt, kind = '') => {
@@ -150,7 +154,7 @@ function buildShell() {
     saveFlag.className = `saveflag${kind === 'busy' ? ' is-busy' : kind === 'ok' ? ' is-ok' : kind === 'err' ? ' is-err' : ''}`;
   };
 
-  return { top, tools, stage, vp, layer, poster, tiles, mask, cursor, hint, hudSize, hudFit, hudOne,
+  return { top, tools, stage, vp, layer, poster, tiles, mask, invert, cursor, hint, hudSize, hudFit, hudOne,
            viewport, painter, compare, brushSlider, brushVal, fname, fdims, saveFlag, setFlag,
            history, params, presets, film, rail, exportBtn, zoomPct };
 }
@@ -240,9 +244,7 @@ async function showImage(imgId) {
   ctx.fname.title = info.name;
   ctx.fdims.textContent = fmtDims(info.w, info.h);
   ctx.params.setCloud(isCloud());
-  ctx.hudSize.textContent = isCloud()
-    ? `${info.w}×${info.h} · 云端裁切缝合 · 未涂区域保持原图`
-    : `${info.w}×${info.h} · 提交时按长边裁到 1024`;
+  paintHud();
   /* 库里有过这行 ≠ 盘上还有这个文件（清过 data/projects、手工删过图都会留下指向空气的记录） */
   ctx.setFlag(info.orig_dead ? '原图文件已丢失' : '', info.orig_dead ? 'err' : '');
 
@@ -264,6 +266,7 @@ async function showImage(imgId) {
   const paint = { w: ctx.poster.naturalWidth || info.w, h: ctx.poster.naturalHeight || info.h };
   const had = await ctx.painter.load(info.w, info.h, info.mask_url, imgId, paint);
   if (stale()) return;
+  syncInvertHint();
   ctx.viewport.fit();
   showHint(!had && !info.orig_dead);
   setTool('brush');
@@ -278,6 +281,21 @@ async function showImage(imgId) {
 
   ctx.history.setResults(info.results, info.last?.status === 'done' ? info.last.id : null);
   ctx.compare.hide();
+  /* 从项目页的派生弹窗点进来：把选中的那条摆到对比层上（弹窗只做看与删，回填走这里）。
+     必须排在 compare.hide() 之后，否则刚开的对比层会被上面那句关掉 */
+  const intent = store.peek('intent');
+  if (intent?.focusResult) {
+    store.set({ intent: null }, 'intent');
+    const hit = info.results.find(x => x.id === intent.focusResult)
+      || (await api.result(intent.focusResult).catch(() => null));
+    if (stale()) return;
+    if (hit?.status === 'done' && !hit.final_dead) {
+      ctx.history.setResults(info.results, hit.id);
+      showCompare(hit);
+    } else {
+      toastErr('这条结果暂时看不了', hit ? String(hit.error || '它还没出图或文件已丢失').slice(0, 120) : '记录已经不在了');
+    }
+  }
   ctx.params.stages.reset();
   ctx.params.setBusy(false);
   ctx.params.clearMarks();
@@ -309,6 +327,90 @@ const showHint = on => {
   if (on) ctx.hint.innerHTML = `${icon('brush', { cls: 'icon icon--sm' })}<span>还没涂遮罩 · 用画笔把要修的区域涂出来</span>`;
 };
 
+/** 左下角那条 HUD：两条出图路的口径不一样，切换之后必须重写，不能停在装载时那一句 */
+function paintHud() {
+  const info = ctx?.info;
+  if (!info) return;
+  const inv = isCloud() && !!store.peek('settings')?.invert;
+  ctx.hudSize.textContent = inv
+    ? `${info.w}×${info.h} · 云端整幅重绘 · 涂住的区域保持原图`
+    : isCloud()
+      ? `${info.w}×${info.h} · 云端裁切缝合 · 未涂区域保持原图`
+      : `${info.w}×${info.h} · 提交时按长边裁到 1024`;
+}
+
+/* ---------------- 反向涂抹（只在这条路上开） ---------------- */
+const HINT_W = 512;
+let spotCache = '';
+
+/** 画布要的是字面色值，CSS 变量拿不到就直接问 computed style，退档用朱红的默认值 */
+function spotColor() {
+  if (!spotCache) {
+    spotCache = getComputedStyle(document.documentElement).getPropertyValue('--spot').trim() || '#c72c2c';
+  }
+  return spotCache;
+}
+
+function invertOn() {
+  return isCloud() && !!(store.peek('settings') || {}).invert;
+}
+
+/** 朱红铺满整幅，再用笔迹按 alpha 挖洞：剩下的红就是"会被重绘的地方" */
+function syncInvertHint() {
+  if (!ctx?.mask) return;
+  const on = invertOn();
+  ctx.stage.classList.toggle('is-invert', on);
+  ctx.invert.hidden = !on;
+  if (!on) return;
+  const m = ctx.mask;
+  const w = HINT_W;
+  const h = Math.max(1, Math.round((HINT_W * m.height) / Math.max(1, m.width)));
+  const c = ctx.invert;
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const x = c.getContext('2d');
+  x.globalCompositeOperation = 'source-over';
+  x.clearRect(0, 0, w, h);
+  x.fillStyle = spotColor();
+  x.fillRect(0, 0, w, h);
+  x.globalCompositeOperation = 'destination-out';
+  x.drawImage(m, 0, 0, w, h);
+  x.globalCompositeOperation = 'source-over';
+}
+
+/** 涂要改的 / 涂要保留的：换的是这一枪的语义，遮罩文件本身不动 */
+function applyInvert(on) {
+  if (!ctx?.imgId) return;
+  const next = !!on;
+  if (next === !!store.peek('settings')?.invert) return;
+  patchSettings({ invert: next });
+  saveSettings().catch(() => { /* 参数写库失败不阻断这次编辑 */ });
+  ctx.params.sync(store.peek('settings'));
+  paintHud();
+  syncInvertHint();
+  ctx.params.line(next
+    ? '反向涂抹：涂住的是要保住的主体，其余整幅交给云端重绘'
+    : '正向涂抹：涂住的那块交给云端重绘，其余逐像素保持原图');
+}
+
+/**
+ * 就地切本机 / 云端。模式记在**这个项目**的参数里（不是全局设置），
+ * 所以"这个项目的活交给云端、下一个还走本机"是各记各的；全局那一栏是没选过时的默认值。
+ */
+function applyMode(next) {
+  if (!ctx?.imgId) return;
+  if (next !== 'cloud' && next !== 'comfyui') return;
+  if (next === effMode()) return;
+  // 反向涂抹只在这条路上成立；切回本机就把它关掉，别让面板上留着一个不会生效的开关
+  patchSettings(next === 'comfyui' ? { mode: next, invert: false } : { mode: next });
+  // 写完就落库：切了模式不提交、下次进这个项目还应该是刚才那一个
+  saveSettings().catch(() => { /* 参数写库失败不阻断这次编辑 */ });
+  ctx.params.setCloud(isCloud());
+  paintHud();
+  ctx.params.line(next === 'cloud'
+    ? '已切到云端：裁一块发一块，没有步数 / CFG / LoRA / 种子可调，负面并进正向一起发'
+    : '已切回本机 ComfyUI：提交前确认 ComfyUI 正跑着，裁切长边固定 1024');
+}
+
 /* ==================== 工具 / 缩放 ==================== */
 function setTool(k) {
   ctx.tool = k;
@@ -326,9 +428,10 @@ function onZoom(k) {
 function onEdit(k) {
   if (k === 'undo') {
     if (!ctx.painter.canUndo) { toastErr('没有可撤销的笔画'); return; }
-    ctx.painter.undo().then(ok => { if (ok) ctx.setFlag('已撤销一笔'); });
+    ctx.painter.undo().then(ok => { if (ok) { ctx.setFlag('已撤销一笔'); syncInvertHint(); } });
   } else if (k === 'clear') {
     ctx.painter.clear();
+    syncInvertHint();
     showHint(true);
   }
 }
@@ -365,11 +468,12 @@ async function onMaskSaved({ empty, b64, id }) {
 /* ==================== 提交生成 ==================== */
 const parseSettings = r => { try { return JSON.parse(r.settings_json || 'null'); } catch { return null; } };
 
-/** 一条结果用什么名义展示：云端没有步数/CFG/种子，别说本机那套话 */
+/** 一条结果用什么名义展示：云端没有步数/CFG/种子，别说本机那套话（批量那条的快照里没有 cloud 节） */
 const resultTag = r => {
   const c = parseSettings(r)?.cloud;
-  return c ? [c.model, c.quality, c.size].filter(Boolean).join(' · ') || '云端'
-           : `${r.steps} 步 · CFG ${r.cfg} · 种子 ${r.seed}`;
+  return r.backend === 'cloud'
+    ? [c?.model, c?.quality, c?.size].filter(Boolean).join(' · ') || '云端'
+    : `${r.steps} 步 · CFG ${r.cfg} · 种子 ${r.seed}`;
 };
 
 /** 套用预设：LoRA 往当前工作流的骨架上贴，本机没有的置灰 */
@@ -430,6 +534,9 @@ async function delResult(r) {
 function backToCanvas() {
   ctx.compare.hide();
   setTool('brush');
+  // 历史行带着当初的 invert（按行存的），回填后预览层要立刻站到同一边
+  syncInvertHint();
+  paintHud();
 }
 
 /** 把某条结果当时的参数搬回面板，等用户自己点提交；种子默认沿用 */
@@ -446,12 +553,25 @@ async function restoreFromResult(r) {
     });
     if (!ok) return;
   }
-  /* 云端记录没有步数/LoRA/种子可回填，正向里还并进了当初的负面，所以只搬指令、不动本地那几行 */
+  /* 云端记录没有步数/LoRA/种子可回填，正向里还并进了当初的负面，所以只搬指令、不动本地那几行。
+     注意必须把 steps/cfg/loras 按**本机这一路**的合法值重取：云端行是 0 步 0 CFG 的形状，
+     整份搬进面板后切回本机再点提交，就把 0 直接送进了 KSampler。 */
   if (r.backend === 'cloud') {
-    const next = { ...s, prompt: s.prompt || '', negative: cur.negative || '', seed: cur.seed || 0, randomSeed: cur.randomSeed !== false };
+    const d = defaultsFromCfg(store.peek('cfg') || {});
+    const legal = (v, lo, hi) => (Number(v) >= lo && Number(v) <= hi ? Number(v) : null);
+    const next = {
+      ...s,
+      prompt: s.prompt || '',
+      negative: cur.negative || d.negative,
+      steps: legal(cur.steps, 4, 60) ?? d.steps,
+      cfg: legal(cur.cfg, 0.5, 14) ?? d.cfg,
+      loras: (cur.loras || []).length ? cur.loras : d.loras,
+      seed: cur.seed || 0,
+      randomSeed: cur.randomSeed !== false,
+    };
     rerunFrom = r.id;
     ctx.params.applySettings(next, [...diffSettings(cur, next), 'prompt']);
-    ctx.params.line(`已回填 #${r.id} 的正向指令（云端把负面并进了正向），改完点提交`);
+    ctx.params.line(`已回填 #${r.id} 的正向指令（云端把负面并进了正向），采样参数按本机这一路重新取值`);
     toastOk('参数已回填', `${resultTag(r)} · 云端结果不保证复现`);
     backToCanvas();
     return;
@@ -483,8 +603,9 @@ async function doSubmitCloud() {
   /* 先 flush 再判有没有遮罩：刚涂完 700ms 内点提交，库里的 has_mask 还是 false，
      按原顺序会被"还没有遮罩"打回一次，用户看到的是按钮失灵 */
   await ctx.painter.flush();
-  if (!store.peek('images').find(i => i.id === imgId)?.has_mask) { toastErr('还没有遮罩', '先用画笔涂出要修的区域'); return; }
   const s = store.peek('settings');
+  // 反向时"一笔没涂"是合法输入（= 整幅重绘），正向才要求先涂出区域
+  if (!s?.invert && !store.peek('images').find(i => i.id === imgId)?.has_mask) { toastErr('还没有遮罩', '先用画笔涂出要修的区域'); return; }
   const st = ctx.params.stages;
   let cur = 'submit';
   /* 等模型的几十秒里可能已经切图：面板/阶段条是别人家的了，别再往上画 */
@@ -520,6 +641,10 @@ async function doSubmitCloud() {
       image_id: imgId, rerun_of: rerunOf,
       settings: {
         prompt: cloudPrompt(s), negative: '', steps: 0, cfg: 0, loras: [],
+        // 尺寸胶囊选出来的长边交给服务端按这一行执行（0/空 = 用设置里填的 stitch_edge）
+        edge: Number(s.edge) || 0,
+        // 反向标志按行存进 results.settings_json：历史列回放才认得出"这张是反向生成的"
+        invert: !!s.invert,
         cloud: { model: c.model, quality: c.quality },
       },
     });

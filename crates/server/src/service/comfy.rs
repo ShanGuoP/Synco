@@ -8,6 +8,22 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::time::Duration;
 
+/// 本机这一路的采样参数：先判再进图。
+///
+/// 要挡的是"云端形状的 0 步 0 CFG"串回本机后被直接送进 KSampler——那不报错，
+/// 只出一张没人看得出问题的图。跳过并给理由，比悄悄跑一张废图诚实。
+pub fn sample_args(settings: &Value) -> std::result::Result<(i64, f64), String> {
+    let steps = crate::util::number_of(settings.get("steps")).ok_or("请求里没带采样步数")?;
+    let cfg = crate::util::number_of(settings.get("cfg")).ok_or("请求里没带 CFG")?;
+    if !steps.is_finite() || !(1.0..=200.0).contains(&steps) {
+        return Err(format!("采样步数不合法（{steps}）：这一路要 1–200 步，云端的结果没有步数，回填后请先补上"));
+    }
+    if !cfg.is_finite() || !(0.0..=30.0).contains(&cfg) {
+        return Err(format!("CFG 不合法（{cfg}）：这一路要 0–30"));
+    }
+    Ok((steps.round() as i64, cfg))
+}
+
 /// 每个接口都可能被 ComfyUI 挂住（模型装载中、显存回收中），没有超时的请求会把这条 HTTP 永久吊着
 pub const T_UPLOAD: u64 = 60_000;
 pub const T_PROMPT: u64 = 20_000;
@@ -233,10 +249,23 @@ pub async fn interrupt(ctx: &Ctx, prompt_id: &str) -> Vec<String> {
 
 /// 高分局部编辑管线（LoRA 链按启用状态动态串接，其余输出节点固定）
 pub fn build_graph(photo: &str, mask: &str, settings: &Value, seed: i64, cfg: &Value) -> Value {
-    let widgets = cfg.get("crop_widgets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let mut ci = Map::new();
-    for (k, v) in CROP_KEYS.iter().zip(widgets.iter()) {
-        ci.insert((*k).to_string(), v.clone());
+    // 裁切参数只收 CROP_KEYS 白名单里的名字：API 导出的工作流按名给值（挪节点、加控件都不会错位），
+    // UI 导出只有位置，仍按 CROP_KEYS 的顺序 zip
+    match cfg.get("crop_inputs").and_then(|v| v.as_object()) {
+        Some(named) => {
+            for k in CROP_KEYS {
+                if let Some(v) = named.get(k) {
+                    ci.insert((*k).to_string(), v.clone());
+                }
+            }
+        }
+        None => {
+            let widgets = cfg.get("crop_widgets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            for (k, v) in CROP_KEYS.iter().zip(widgets.iter()) {
+                ci.insert((*k).to_string(), v.clone());
+            }
+        }
     }
     ci.insert("output_resize_to_target_size".into(), Value::Bool(true));
     ci.insert("output_target_width".into(), Value::from(1024));
@@ -320,4 +349,29 @@ pub fn build_graph(photo: &str, mask: &str, settings: &Value, seed: i64, cfg: &V
     g.insert("19".into(), serde_json::json!({"class_type":"PreviewImage","inputs":{"images":["10",1]}}));
     g.insert("20".into(), serde_json::json!({"class_type":"PreviewImage","inputs":{"images":["18",0]}}));
     Value::Object(g)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sample_args;
+    use serde_json::json;
+
+    #[test]
+    fn 合法采样参数按面板区间放行() {
+        assert_eq!(sample_args(&json!({ "steps": 20, "cfg": 3 })), Ok((20, 3.0)));
+        assert_eq!(sample_args(&json!({ "steps": "4", "cfg": "0.5" })), Ok((4, 0.5)));
+        assert_eq!(sample_args(&json!({ "steps": 20.6, "cfg": 3 })), Ok((21, 3.0)), "步数取整");
+    }
+
+    /// M4 的回归：云端行是 steps=0/cfg=0 的形状，串回本机时不能把 0 送进 KSampler
+    #[test]
+    fn 云端形状的零零参数被挡在提交之外() {
+        for bad in [json!({ "steps": 0, "cfg": 0 }), json!({ "steps": -3, "cfg": 3 }), json!({ "cfg": 3 }), json!({ "steps": 20 })] {
+            assert!(sample_args(&bad).is_err(), "{bad} 不该被接受");
+        }
+        assert!(sample_args(&json!({ "steps": 999, "cfg": 3 })).is_err());
+        assert!(sample_args(&json!({ "steps": 20, "cfg": 99 })).is_err());
+        let e = sample_args(&json!({ "steps": 0, "cfg": 0 })).unwrap_err();
+        assert!(e.contains("步数"), "报错要指名是哪一项：{e}");
+    }
 }

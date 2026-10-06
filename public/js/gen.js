@@ -29,7 +29,14 @@ async function tick() {
     job.onTick?.(r.status, r);
     if (r.status === 'done') {
       setJob(job.imgId, { state: 'done', resultId: rid, error: null });
-      touchImage(job.imgId, { has_result: true, last_result: r });
+      const cur = store.peek('images').find(i => i.id === job.imgId);
+      // 角标读的是 result_count / result_done：本次会话跑完的那张要就地加一，等下次进项目页自然被库里的数覆盖
+      touchImage(job.imgId, {
+        result_count: (cur?.result_count ?? 0) + 1,
+        result_done: (cur?.result_done ?? 0) + 1,
+        latest_result_url: r.thumb_url || r.final_url || cur?.latest_result_url || null,
+        last_result: r,
+      });
       toastOk('生成完成', job.t0 ? `#${rid} · 用时 ${Math.round((Date.now() - job.t0) / 1000)} 秒` : `#${rid}`);
     } else {
       setJob(job.imgId, { state: 'err', resultId: rid, error: r.error || 'ComfyUI 未返回原因' });

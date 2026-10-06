@@ -30,11 +30,17 @@ export const api = {
   projects:    () => request('/api/projects'),
   project:     id => request(`/api/projects/${id}`),
   createProject: (name, files) => request('/api/projects', { method: 'POST', body: { name, files } }),
+  renameProject: (id, name) => request(`/api/projects/${id}/rename`, { method: 'POST', body: { name } }),
   deleteProject: id => request(`/api/projects/${id}`, { method: 'DELETE' }),
   addImages:   (id, files) => request(`/api/projects/${id}/images`, { method: 'POST', body: { files } }),
   saveSettings: (id, settings) => request(`/api/projects/${id}/settings`, { method: 'POST', body: settings }),
 
   image:   id => request(`/api/images/${id}`),
+  /** 画布（图生图）：建空白画布、存画稿、提交生成。画稿不走局部重绘那两条入口 */
+  canvasCreate:   opt => request('/api/canvas/create', { method: 'POST', body: opt }),
+  canvas:         id => request(`/api/canvas/${id}`),
+  saveSketch:     (id, b64) => request(`/api/canvas/${id}/sketch`, { method: 'POST', body: { b64 } }),
+  canvasGenerate: (id, settings, rerunOf) => request(`/api/canvas/${id}/generate`, { method: 'POST', body: { settings, rerun_of: rerunOf || null } }),
   delImage: id => request(`/api/images/${id}`, { method: 'DELETE' }),
   saveMask: (id, b64) => request(`/api/images/${id}/mask`, { method: 'POST', body: { b64 } }),
   /** 派生档是服务端后台切的，没补出来时 thumb_url 为 null，调用方回落到 orig_url */
@@ -44,6 +50,8 @@ export const api = {
 
   run:      (imageIds, settings, rerunOf) => request('/api/run', { method: 'POST', body: { image_ids: imageIds, settings, rerun_of: rerunOf || null } }),
   result:   id => request(`/api/results/${id}`),
+  /** 结果集合：{project_id} 或 {image_id}，项目页的派生查看用（不带判僵尸之类的副作用） */
+  results:  q => request('/api/results?' + new URLSearchParams(q)),
   delResult: id => request(`/api/results/${id}`, { method: 'DELETE' }),
   interruptResult: id => request(`/api/results/${id}/interrupt`, { method: 'POST', body: {} }),
   forkResult: id => request(`/api/results/${id}/fork`, { method: 'POST', body: {} }),
@@ -56,12 +64,15 @@ export const api = {
   removeBackend: url => request('/api/backends/remove', { method: 'POST', body: { url } }),
   selectBackend: url => request('/api/backends/select', { method: 'POST', body: { url } }),
 
-  presets:       projectId => request('/api/presets' + (projectId ? `?project_id=${projectId}` : '')),
+  /** kind='preset' 是参数预设，kind='phrase' 是修图界面那一排提示词短语（共用一套 CRUD） */
+  presets:       (projectId, kind = 'preset') => request(`/api/presets?kind=${kind}` + (projectId ? `&project_id=${projectId}` : '')),
   savePreset:    p => request('/api/presets', { method: 'POST', body: p }),
   updatePreset:  (id, p) => request(`/api/presets/${id}/update`, { method: 'POST', body: p }),
   deletePreset:  id => request(`/api/presets/${id}/delete`, { method: 'POST' }),
 
   setWorkflow:   path => request('/api/settings/workflow', { method: 'POST', body: { path } }),
+  /** 清点当前存着的工作流文件里有哪些节点（只认库里那条路径，不接参数） */
+  workflowInspect: () => request('/api/workflow/inspect'),
 
   exportGet:    () => request('/api/export'),
   exportSetDir: dir => request('/api/export/dir', { method: 'POST', body: { dir } }),

@@ -6,7 +6,7 @@ use crate::repo;
 use crate::state::Ctx;
 
 /// 单图与列表都用这一串列，键集合与 Node 的 SELECT 对齐后再补上 M3 的两个派生档
-const COLS: &str = "id,project_id,name,orig_path,mask_path,w,h,created_at,thumb_path,proxy_path";
+const COLS: &str = "id,project_id,name,orig_path,mask_path,w,h,created_at,thumb_path,proxy_path,kind";
 
 fn rows_to_images(rows: &[serde_json::Value]) -> Vec<Image> {
     rows.iter().map(Image::from_value).collect()
@@ -16,8 +16,29 @@ pub fn by_id(ctx: &Ctx, id: i64) -> Result<Option<Image>> {
     Ok(repo::one(ctx, &format!("SELECT {COLS} FROM images WHERE id=?"), &[repo::i(id)])?.map(|v| Image::from_value(&v)))
 }
 
+/// 项目详情的列表：除图片列外再带四个结果聚合，供卡片角标与「派生查看」用。
+/// 相关子查询走 `idx_results_image`，每张图四次索引查找；比让前端逐张 GET `/api/images/{id}`
+/// 少一整轮请求，也不再靠"本次会话跑过几张"猜状态（刷新后 has_result 会全丢）。
 pub fn list_for_project(ctx: &Ctx, pid: i64) -> Result<Vec<Image>> {
-    Ok(rows_to_images(&repo::all(ctx, &format!("SELECT {COLS} FROM images WHERE project_id=? ORDER BY id"), &[repo::i(pid)])?))
+    Ok(rows_to_images(&repo::all(ctx, &project_list_sql(), &[repo::i(pid)])?))
+}
+
+/// 同上，但把聚合列一起交出来（`Image` 是类型化的，接不住这几列）
+pub fn list_for_project_rows(ctx: &Ctx, pid: i64) -> Result<Vec<serde_json::Value>> {
+    repo::all(ctx, &project_list_sql(), &[repo::i(pid)])
+}
+
+fn project_list_sql() -> String {
+    format!(
+        "SELECT {COLS},
+                (SELECT COUNT(*) FROM results r WHERE r.image_id = images.id) AS result_count,
+                (SELECT COUNT(*) FROM results r WHERE r.image_id = images.id AND r.status='done') AS result_done,
+                (SELECT r.thumb_path FROM results r WHERE r.image_id = images.id AND r.status='done'
+                  ORDER BY r.id DESC LIMIT 1) AS result_thumb,
+                (SELECT r.final_path FROM results r WHERE r.image_id = images.id AND r.status='done'
+                  ORDER BY r.id DESC LIMIT 1) AS result_final
+         FROM images WHERE project_id=? ORDER BY id"
+    )
 }
 
 /// 派生档补空当用的扫描：只挑还没生成过缩略图的行，跑一次就少一批
@@ -32,10 +53,15 @@ pub fn list_missing_thumb(ctx: &Ctx, limit: i64) -> Result<Vec<Image>> {
 }
 
 pub fn insert(ctx: &Ctx, pid: i64, name: &str, orig_path: &str, w: i64, h: i64) -> Result<i64> {
+    insert_kind(ctx, pid, name, orig_path, w, h, "photo")
+}
+
+/// 画布用的建行：kind='sketch' 的行走的是另一条出图链路（`api::canvas`）
+pub fn insert_kind(ctx: &Ctx, pid: i64, name: &str, orig_path: &str, w: i64, h: i64, kind: &str) -> Result<i64> {
     repo::insert_id(
         ctx,
-        "INSERT INTO images(project_id,name,orig_path,w,h) VALUES(?,?,?,?,?)",
-        &[repo::i(pid), repo::s(name), repo::s(orig_path), repo::i(w), repo::i(h)],
+        "INSERT INTO images(project_id,name,orig_path,w,h,kind) VALUES(?,?,?,?,?,?)",
+        &[repo::i(pid), repo::s(name), repo::s(orig_path), repo::i(w), repo::i(h), repo::s(kind)],
     )
 }
 

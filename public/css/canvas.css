@@ -1,0 +1,81 @@
+/* ============================================================
+   画布（图生图）：全屏覆盖层。工具条/视口/胶囊/历史条目都是复用
+   编辑器的类，这里只写画布自己的骨架：顶栏、主区（纸 + 生成栏）。
+   ============================================================ */
+.canvas-view {
+  position: fixed; inset: 0; z-index: 100;
+  background: var(--bg-app);
+}
+.canvas-view[hidden] { display: none; }
+
+/* 编辑器的工具条高度变量挂在 .editor 上，画布不在里面，得自己带一份 */
+.cv {
+  --ed-top-h: 46px;
+  --ed-tools-h: 64px;
+  height: 100%;
+  display: grid;
+  grid-template-rows: var(--ed-top-h) var(--ed-tools-h) minmax(0, 1fr);
+  grid-template-areas: "top" "tools" "main";
+}
+
+/* ---------------- 顶栏 ---------------- */
+.cv-top {
+  grid-area: top; display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-3); padding: 0 var(--s-3) 0 var(--s-4);
+  background: var(--bg-panel); border-bottom: 1px solid var(--line-hi);
+  min-width: 0;
+}
+.cv-top__l { display: flex; align-items: center; gap: var(--s-3); min-width: 0; }
+.cv-top__r { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2); min-width: 0; }
+/* 「画布」小徽：跟在文件名后，标明这不是一张普通照片 */
+.cv-tag {
+  flex: 0 0 auto; align-self: center;
+  padding: 1px 6px; border: 1px solid var(--spot-line); border-radius: var(--r-1);
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .5px; color: var(--spot-txt);
+}
+
+/* ---------------- 主区：左纸右栏 ---------------- */
+.cv-main {
+  grid-area: main; display: grid; grid-template-columns: minmax(0, 1fr) 344px;
+  min-height: 0;
+}
+
+/* 纸：画稿是墨+透明底，屏幕上这层白就是发给云端的白，四周仍留中性深底判色 */
+.cv-stage { position: relative; overflow: hidden; background: var(--bg-canvas); min-width: 0; }
+.cv-stage.is-pan { cursor: grab; }
+.cv-stage.is-pan:active { cursor: grabbing; }
+.cv-stage.is-paint { cursor: none; }
+.cv-paper { background: #fff; touch-action: none; }
+
+/* ---------------- 右侧生成栏 ---------------- */
+.cv-side {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: var(--bg-panel); border-left: 1px solid var(--line-hi);
+}
+.cv-side__bd {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--s-3);
+  padding: var(--s-3);
+}
+.cv-side__bd .textarea { width: 100%; min-height: 120px; }
+/* 编辑器的 .chips 是按属性列的内边距调的，侧栏自己已经带 padding */
+.chips--side { padding: 0; }
+
+/* 成图历史：复用编辑器的 bare 历史，搬进来别再带弹窗时的限高，滚动交给宿主 */
+.cv-side__hist {
+  flex: 0 1 auto; min-height: 132px; max-height: 42%;
+  overflow-y: auto; border-top: 1px solid var(--line-hi);
+}
+.cv-side__hist .ed-pre--bare { max-height: none; }
+
+/* ---------------- 成图弹窗 ---------------- */
+.cv-shot { display: block; width: 100%; height: auto; background: #fff; border: 1px solid var(--line-hi); }
+
+/* ---------------- 窄屏 ---------------- */
+@media (max-width: 1100px) {
+  .cv-main { grid-template-columns: minmax(0, 1fr) 300px; }
+}
+@media (max-width: 860px) {
+  .cv-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .cv-side { border-left: 0; border-top: 1px solid var(--line-hi); max-height: 46%; }
+}

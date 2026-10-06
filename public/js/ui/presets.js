@@ -4,11 +4,50 @@ import { el, fill } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { api } from '../core/api.js';
 import { store } from '../state.js';
-import { modal, confirm } from './modal.js';
+import { modal, confirm, askName } from './modal.js';
 import { toastOk, toastErr } from './toast.js';
 import { fmtNum } from '../core/format.js';
 
 const summary = p => `${p.steps ?? '—'}步 · CFG${fmtNum(p.cfg, 0.5)} · LoRA ${(p.loras || []).filter(l => l.enabled).length}`;
+const NAME_HINT = { placeholder: '如 皮肤精修常用', hint: '只存提示词、负面、步数、CFG 与 LoRA 链；种子不进预设。' };
+
+/**
+ * 自由撰写一份预设。管理面板以前只有"另存为"（快照当前面板），
+ * 没有面板可快照的时候（首页进来、或就是想空白写一条）根本没有入口。
+ */
+function askPreset({ title, name = '', prompt = '', negative = '', steps = 20, cfg = 3 }) {
+  return new Promise(res => {
+    let settled = false;
+    const done = v => { if (!settled) { settled = true; res(v); } };
+    const nm = el('input.input', { type: 'text', maxlength: '40', placeholder: '如 皮肤精修常用', value: name });
+    const pt = el('textarea.textarea', { rows: '5', placeholder: '描述要改成什么样，一段一个主体一个动作', spellcheck: 'false' });
+    pt.value = prompt;
+    const ng = el('textarea.textarea', { rows: '2', placeholder: '多余的手指、塑料感皮肤、噪点…', spellcheck: 'false' });
+    ng.value = negative;
+    const st = el('input.input', { type: 'number', min: '1', max: '100', step: '1', value: String(steps) });
+    const cf = el('input.input', { type: 'number', min: '0', max: '20', step: '0.5', value: String(cfg) });
+    const fld = (label, node) => el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: label }), node);
+    const save = () => {
+      const v = {
+        name: nm.value.trim(), prompt: pt.value, negative: ng.value,
+        steps: Math.min(100, Math.max(1, Number(st.value) || 20)),
+        cfg: Math.min(20, Math.max(0, Number(cf.value) || 3)),
+      };
+      if (!v.name) { toastErr('先起个名字'); nm.focus(); return; }
+      done(v);
+      m.close('save');
+    };
+    const box = el('div', { style: { display: 'grid', gap: '10px' } },
+      fld('名字', nm), fld('正向指令', pt), fld('负面提示词', ng),
+      el('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } }, fld('采样步数', st), fld('CFG 引导', cf)),
+      el('p.muted', { text: 'LoRA 链按本机工作流当前的挂法走；要连 LoRA 一起存，就先在编辑器里调好再「另存为新预设」。种子不进预设。' }),
+      el('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px' } },
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '取消', onclick: () => { done(null); m.close('cancel'); } }),
+        el('button.btn.btn--primary.btn--sm', { type: 'button', text: '保存', onclick: save })));
+    const m = modal({ title, body: box, onClose: () => done(null) });
+    requestAnimationFrame(() => nm.focus());
+  });
+}
 
 /** 预设里可带走的字段：种子与随机开关属于单次运行，不进预设 */
 const payload = name => {
@@ -110,7 +149,7 @@ export function createPresetMenu({ onApply }) {
     /* 撞名会被后端 400 打回来：对话框要带着刚打的那个名字重开，而不是让人重敲一遍 */
     let name = '';
     for (;;) {
-      name = await askName('另存为预设', name);
+      name = await askName('另存为预设', name, NAME_HINT);
       if (!name) return;
       try {
         const p = await api.savePreset({ ...payload(name), project_id: projectId() });
@@ -144,25 +183,7 @@ export function createPresetMenu({ onApply }) {
   return { node: btn, refresh: load, applied: () => appliedId };
 }
 
-/** 收名字：回车要绑在输入框上，因为名字为空时不能关掉弹窗 */
-function askName(title, initial) {
-  return new Promise(res => {
-    let settled = false;
-    const done = v => { if (!settled) { settled = true; res(v); } };
-    const inp = el('input.input', { type: 'text', maxlength: '40', placeholder: '如 皮肤精修常用', value: initial });
-    const save = () => { const v = inp.value.trim(); if (v) { done(v); m.close('save'); } else inp.focus(); };
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
-    const box = el('div', { style: { display: 'grid', gap: '10px' } }, inp,
-      el('p.muted', { text: '只存提示词、负面、步数、CFG 与 LoRA 链；种子不进预设。' }),
-      el('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px' } },
-        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '取消', onclick: () => { done(null); m.close('cancel'); } }),
-        el('button.btn.btn--primary.btn--sm', { type: 'button', text: '保存', onclick: save })));
-    const m = modal({ title, body: box, onClose: () => done(null) });
-    requestAnimationFrame(() => { inp.focus(); inp.select(); });
-  });
-}
-
-/** 预设列表分区：改名 / 删除 / 切作用域。设置弹窗与旧的独立入口共用 */
+/** 预设列表分区：新增 / 改名 / 删除 / 切作用域。设置弹窗与旧的独立入口共用 */
 export function createPresetsPane({ projectId = null, onChanged } = {}) {
   const body = el('div.dlg-flow');
   let list = [];
@@ -172,9 +193,34 @@ export function createPresetsPane({ projectId = null, onChanged } = {}) {
     paint();
   }
 
+  async function add() {
+    let seed = {};
+    for (;;) {
+      const v = await askPreset({ title: '新建预设', ...seed });
+      if (!v) return;
+      seed = v;
+      try {
+        await api.savePreset({ ...v, kind: 'preset', project_id: projectId, loras: [] });
+        await refresh();
+        onChanged?.();
+        toastOk('预设已建好', v.name);
+        return;
+      } catch (e) { toastErr('保存失败，改个名字再来', e.message); }
+    }
+  }
+
+  const head = () => el('div', { style: { display: 'grid', gap: '8px' } },
+    el('p.muted', { text: '预设是一整份参数快照：套下去就把指令框整个替换掉。想叠加着改用的是「提示词短语」。' }),
+    el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+      el('button.btn.btn--primary.btn--sm', { type: 'button', text: '新建预设', onclick: () => add() }),
+      list.length ? el('span.muted', { text: `${list.length} 个` }) : null));
+
   const paint = () => {
-    if (!list.length) { fill(body, el('p.muted', { text: '还没有预设。在编辑器右侧把参数调好后「另存为新预设」。' })); return; }
-    fill(body, ...list.map(p => el('div.be-row', {},
+    if (!list.length) {
+      fill(body, head(), el('p.muted', { text: '还没有预设。可以现在就写一份，也可以在编辑器右侧把参数调好后「另存为新预设」。' }));
+      return;
+    }
+    fill(body, head(), ...list.map(p => el('div.be-row', {},
       el('div.be-row__main', {},
         el('b.be-row__url.nowrap', { text: p.name }),
         el('span.be-row__meta', { text: `${summary(p)} · ${p.project_id ? '本项目' : '全局'}` })),
@@ -187,7 +233,7 @@ export function createPresetsPane({ projectId = null, onChanged } = {}) {
         el('button.btn.btn--sm.btn--ghost', { type: 'button', text: '改名', onclick: async () => {
           let n = p.name;
           for (;;) {
-            n = await askName('重命名预设', n);
+            n = await askName('重命名预设', n, NAME_HINT);
             if (!n) return;
             try { const next = await api.updatePreset(p.id, { ...p, name: n }); Object.assign(p, next); paint(); onChanged?.(); toastOk('已改名', n); break; }
             catch (e) { toastErr('改名失败，改一个再来', e.message); }

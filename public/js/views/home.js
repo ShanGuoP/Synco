@@ -10,6 +10,7 @@ import { confirm } from '../ui/modal.js';
 import { emptyState } from '../ui/empty.js';
 import { helpModal, flowModal, shortcutsModal, workflowModal } from '../ui/dialogs.js';
 import { presetManager } from '../ui/presets.js';
+import { newCanvas } from './canvas/index.js';
 import { fmtStamp } from '../core/format.js';
 
 const detail = new Map();        // projectId -> images[]
@@ -117,6 +118,14 @@ function heroCard() {
     el('div.hero-card__d', { text: '拖动图片到此处，或点击选择（可多选）' }),
     el('div.hero-card__form', {}, name,
       el('button.btn.btn--primary.btn--sm', { type: 'button', html: icon('upload', { cls: 'icon icon--sm' }) + '<span>选择</span>', onclick: () => picker.click() })),
+    el('div.hero-card__alts', {},
+      el('button.btn.btn--ghost.btn--sm', {
+        type: 'button', 'data-tip': '一张照片也没有时先把项目建出来，进去后再导入',
+        html: icon('folder', { cls: 'icon icon--sm' }) + '<span>建空项目</span>', onclick: () => createEmpty(name.value) }),
+      el('button.btn.btn--ghost.btn--sm', {
+        type: 'button', 'data-tip': '空白画面上画几笔，交给云端按提示词生成',
+        html: icon('canvas', { cls: 'icon icon--sm' }) + '<span>新建画布</span>', onclick: () => createCanvas() }),
+    ),
     picker,
   );
   return card;
@@ -200,8 +209,10 @@ function grid() {
     const blank = !store.peek('projects').length;
     return emptyState('photos',
       blank ? '还没有项目' : '没有匹配的项目',
-      blank ? '把照片拖到上方导入卡，建第一个修图项目' : '换个筛选条件或清空搜索词试试',
-      blank ? el('button.btn.btn--primary', { type: 'button', html: icon('upload', { cls: 'icon icon--sm' }) + '<span>导入照片</span>', onclick: () => $('.hero-card')?.click() }) : null);
+      blank ? '把照片拖到上方导入卡，或先建一个空项目' : '换个筛选条件或清空搜索词试试',
+      blank ? el('div.hero-card__form', { style: { width: 'auto', marginTop: '0' } },
+        el('button.btn.btn--primary', { type: 'button', html: icon('upload', { cls: 'icon icon--sm' }) + '<span>导入照片</span>', onclick: () => $('.hero-card')?.click() }),
+        el('button.btn.btn--ghost', { type: 'button', html: icon('folder', { cls: 'icon icon--sm' }) + '<span>建空项目</span>', onclick: () => createEmpty('') })) : null);
   }
   return el('div.pgrid', {}, list.map((p, i) => pcard(p, i)));
 }
@@ -240,6 +251,25 @@ function collage(p, imgs) {
 }
 
 /* ==================== 动作 ==================== */
+/** 画布是图生图那条线：建完直接进画布视图，项目归属由服务端顺手建好 */
+async function createCanvas() {
+  const r = await newCanvas({ projectId: null });
+  if (!r) return;
+  toastOk('画布建好了', '画几笔，写下要生成什么，点生成');
+  go(`/p/${r.project_id}/c/${r.image_id}`);
+}
+
+/** 空项目：一张照片都没有也能先把坑占下，进去后再导入 */
+async function createEmpty(name) {
+  try {
+    const r = await api.createProject((name || '').trim() || defaultName(), []);
+    detail.set(r.id, []);
+    setStat(r.id, { total: 0, masked: 0 });
+    toastOk('空项目建好了', `${r.name} · 点「导入更多」加照片`);
+    go(`/p/${r.id}`);
+  } catch (e) { toastErr('建不起来', e.message); }
+}
+
 async function importFiles(files, name) {
   const busy = toastBusy('准备导入…');
   try {

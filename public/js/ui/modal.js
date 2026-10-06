@@ -82,4 +82,26 @@ export function info(title, bodyHtml, { wide } = {}) {
   return mount({ title, wide, body: el('div', { html: bodyHtml }), actions: [{ label: '知道了', kind: 'primary' }] });
 }
 
+/**
+ * 收一行必填文本：回车绑在输入框上（空值时不能把弹窗关掉）。
+ * 预设 / 短语 / 项目名 / 画布名共用这一个，maxlength 与"空值不给提交"的规矩只此一份。
+ * @returns {Promise<string|null>} 确认返回 trim 后的文本，取消返回 null
+ */
+export function askName(title, initial = '', { maxlength = 40, placeholder = '', hint = '', okLabel = '保存' } = {}) {
+  return new Promise(res => {
+    let settled = false;
+    const done = v => { if (!settled) { settled = true; res(v); } };
+    const inp = el('input.input', { type: 'text', maxlength: String(maxlength), placeholder, value: initial });
+    const save = () => { const v = inp.value.trim(); if (v) { done(v); m.close('save'); } else inp.focus(); };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+    const box = el('div', { style: { display: 'grid', gap: '10px' } }, inp,
+      hint ? el('p.muted', { text: hint }) : null,
+      el('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px' } },
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '取消', onclick: () => { done(null); m.close('cancel'); } }),
+        el('button.btn.btn--primary.btn--sm', { type: 'button', text: okLabel, onclick: save })));
+    const m = mount({ title, body: box, onClose: () => done(null) });
+    requestAnimationFrame(() => { inp.focus(); inp.select(); });
+  });
+}
+
 export const closeAll = () => openStack.slice().forEach(m => m.close('all'));

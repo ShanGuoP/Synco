@@ -106,6 +106,11 @@ fn read_orig(ctx: &Ctx, img: &Image) -> std::result::Result<Rgba, String> {
 /// 生成 thumb（必出）与 proxy（只在原图超出档位时出）。已入库就整体跳过。
 /// 返回 `false` 表示没动（已有或原图读不出来，调用方不用重复报错）。
 pub fn derive(ctx: &Ctx, img: &Image) -> std::result::Result<bool, String> {
+    // 画稿不切派生档：JPEG 没有 alpha，一张空白画布会被拍成一块死黑；
+    // 画布视图按 1:1 自己画那张纸，项目卡片也按 kind 走专门的摆位
+    if img.is_sketch() {
+        return Ok(false);
+    }
     if img.thumb_path.is_some() {
         return Ok(false);
     }

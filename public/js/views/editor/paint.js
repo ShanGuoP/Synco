@@ -6,9 +6,15 @@ import { encodeMask } from '../../core/maskEncode.js';
 
 const UNDO_MAX = 8;
 
-export function createPainter({ mask, cursor, viewport, onSaved, onDirty }) {
+/**
+ * @param {{mask:HTMLCanvasElement, cursor?:HTMLElement, viewport?:object,
+ *   onSaved?:Function, onDirty?:Function, ink?:string}} opt
+ *   ink 是描边色：遮罩用白墨（服务端按 alpha 取反），画布用深色墨（拍到白底上就是线稿）
+ */
+export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = '#fff' }) {
   let tool = 'brush';
   let brush = 70;
+  let strokeColor = ink;
   let painting = false;
   let undoStack = [];
   let saveTimer = 0;
@@ -26,7 +32,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty }) {
   let rafId = 0;
   const undoFree = [];                // 撤销画布回收池：超出深度的快照复用，避免每笔分配
   /* 落过笔的范围（涂抹层像素坐标）；baseline=载入时铺过已有遮罩，覆盖范围未知 */
-  let ink = null;
+  let bbox = null;
   let baseline = false;
 
   /* 不加 willReadFrequently：那个标记会把画布后端从 GPU 拽回 CPU，逐笔填充反而更慢 */
@@ -62,17 +68,17 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty }) {
 
   function strokeTo(pts) {
     ctx.globalCompositeOperation = tool === 'erase' ? 'destination-out' : 'source-over';
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = strokeColor;
     const lw = Math.max(1, brush * k);
     ctx.lineWidth = lw;
     ctx.lineCap = ctx.lineJoin = 'round';
     /* 记下这一笔碰到的范围，判空只读这一块 */
     const r = lw / 2 + 1;
     for (const p of pts) {
-      if (!ink) ink = { x0: p.x - r, y0: p.y - r, x1: p.x + r, y1: p.y + r };
+      if (!bbox) bbox = { x0: p.x - r, y0: p.y - r, x1: p.x + r, y1: p.y + r };
       else {
-        ink.x0 = Math.min(ink.x0, p.x - r); ink.y0 = Math.min(ink.y0, p.y - r);
-        ink.x1 = Math.max(ink.x1, p.x + r); ink.y1 = Math.max(ink.y1, p.y + r);
+        bbox.x0 = Math.min(bbox.x0, p.x - r); bbox.y0 = Math.min(bbox.y0, p.y - r);
+        bbox.x1 = Math.max(bbox.x1, p.x + r); bbox.y1 = Math.max(bbox.y1, p.y + r);
       }
     }
     ctx.beginPath();
@@ -168,11 +174,11 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty }) {
   }
 
   function isEmpty() {
-    if (!ink) return !baseline;
+    if (!bbox) return !baseline;
     if (baseline) return alphaEmpty(0, 0, mask.width, mask.height);
-    const x = Math.max(0, Math.floor(ink.x0));
-    const y = Math.max(0, Math.floor(ink.y0));
-    return alphaEmpty(x, y, Math.min(mask.width, Math.ceil(ink.x1)) - x, Math.min(mask.height, Math.ceil(ink.y1)) - y);
+    const x = Math.max(0, Math.floor(bbox.x0));
+    const y = Math.max(0, Math.floor(bbox.y0));
+    return alphaEmpty(x, y, Math.min(mask.width, Math.ceil(bbox.x1)) - x, Math.min(mask.height, Math.ceil(bbox.y1)) - y);
   }
 
   function markDirty() { if (dirtyAt === savedAt) onDirty?.(true); dirtyAt++; }
@@ -233,7 +239,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty }) {
       queue = [];
       painting = false;
       rect = null;                    // 换图后画布位置变了，旧 rect 不能用
-      ink = null; baseline = false;
+      bbox = null; baseline = false;
       ctx.clearRect(0, 0, mask.width, mask.height);
       if (!maskUrl) return false;
       let drew = false;
@@ -253,7 +259,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty }) {
       if (!prev) return Promise.resolve(false);
       ctx.clearRect(0, 0, mask.width, mask.height);
       ctx.drawImage(prev, 0, 0);
-      ink = null; baseline = true;    // 回滚到快照后覆盖范围同样未知
+      bbox = null; baseline = true;    // 回滚到快照后覆盖范围同样未知
       markDirty();
       queueSave();
       return Promise.resolve(true);
@@ -264,7 +270,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty }) {
       undoStack.push(snapshot());
       if (undoStack.length > UNDO_MAX) undoFree.push(undoStack.shift());
       ctx.clearRect(0, 0, mask.width, mask.height);
-      ink = null; baseline = false;
+      bbox = null; baseline = false;
       markDirty();
       save();
     },

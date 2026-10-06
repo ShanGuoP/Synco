@@ -25,6 +25,18 @@ pub fn list_for_image(ctx: &Ctx, image_id: i64, limit: i64) -> Result<Vec<Value>
     )
 }
 
+/// 「派生查看」用的集合查询：一个项目的全部结果行，一次读完，不带任何副作用。
+/// `/api/images/{id}` 顶不了它——那条只给 8 条，而且每读一张就判一次云端僵尸、补一次派生档。
+pub fn list_for_project(ctx: &Ctx, pid: i64, limit: i64) -> Result<Vec<Value>> {
+    repo::all(
+        ctx,
+        "SELECT id,image_id,project_id,status,error,prompt,steps,cfg,seed,settings_json,rerun_of,backend,model,
+                final_path,crop_path,maskoverlay_path,thumb_path,created_at
+         FROM results WHERE project_id=? ORDER BY id DESC LIMIT ?",
+        &[repo::i(pid), repo::i(limit)],
+    )
+}
+
 pub fn list_running(ctx: &Ctx) -> Result<Vec<(i64, Option<String>)>> {
     Ok(repo::all(ctx, "SELECT id, prompt_id FROM results WHERE status='running'", &[])?
         .iter()

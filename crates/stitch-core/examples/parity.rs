@@ -109,6 +109,7 @@ fn main() -> std::io::Result<()> {
             crop_edge: c.crop_edge,
             feather: c.feather,
             levels: c.levels,
+            invert: false,       // 对拍基准是正向那套 JS，反向没有参照物
         };
         let Build::Payload(pl) = build_crop_payload(&base, &mask, &p) else {
             return Err(std::io::Error::other(format!("{} 载荷构建失败", c.name)));

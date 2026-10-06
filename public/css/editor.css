@@ -152,6 +152,9 @@ body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
   background: var(--bg-panel); border-right: 1px solid var(--line-hi);
   transition: opacity var(--t) var(--ease);
 }
+/* 搬进弹窗时的形态：没有编辑器的三栏骨架，靠自身高度滚动，也别带那条右分隔线 */
+.ed-pre--bare { background: transparent; border-right: 0; max-height: 58vh; }
+.ed-pre--bare .pre-it__acts { background: var(--bg-card); }
 .col-hd { display: flex; align-items: center; gap: var(--s-2); height: 34px; padding: 0 var(--s-3); flex: 0 0 auto; border-bottom: 1px solid var(--line); }
 .col-hd h3 { font-family: var(--f-display); font-size: var(--f-md); font-weight: 700; letter-spacing: .4px; display: flex; align-items: center; gap: 6px; }
 .col-hd h3 svg { color: var(--spot); }
@@ -219,6 +222,21 @@ body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
 }
 .chip-s:hover { color: var(--txt); background: var(--wash); border-color: var(--line-strong); }
 .chip-s.is-on { color: var(--spot-txt); border-color: var(--spot); background: var(--spot-dim); font-weight: 600; }
+/* 管理短语那颗不是短语：虚线框、靠到行尾，和真胶囊一眼分得开 */
+.chip-s--mgr { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; border-style: dashed; color: var(--txt-3); font-size: var(--f-xs); }
+.chip-s--mgr svg { width: 12px; height: 12px; }
+.chip-s--mgr:hover { color: var(--txt-2); }
+
+/* 反向涂抹的预览层：朱红铺满、笔迹处开洞，红的那片就是会被重绘的地方。
+   这时候笔迹层自己不再着色（洞的边界就是笔迹），否则两层同色看不出保住了什么 */
+.ed-invert { pointer-events: none; opacity: .5; }
+.ed-stage.is-invert #edMask { opacity: 0; }
+
+/* 就地切生成方式那一行：开关 + 当前打到哪 + "这两条不等价"的提示 */
+.ed-mode { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); flex: 0 0 auto; border-bottom: 1px solid var(--line-hi); }
+.ed-mode__lab { font-family: var(--f-mono); font-size: 10px; letter-spacing: .5px; color: var(--txt-3); flex: 0 0 auto; }
+.ed-mode .seg { flex: 0 0 auto; }
+.ed-mode .muted { margin-left: auto; min-width: 0; font-size: var(--f-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 子标签：指令 / 采样 / LoRA */
 .prop-tabs { display: flex; align-items: center; gap: var(--s-4); padding: 0 var(--s-3); flex: 0 0 auto; border-bottom: 1px solid var(--line-hi); }

@@ -5,19 +5,9 @@ import { el, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { makeProw } from '../../ui/controls.js';
 import { makeSteps, STAGES } from '../../ui/progress.js';
-import { store, patchSettings, defaultsFromCfg } from '../../state.js';
+import { store, patchSettings, defaultsFromCfg, effMode } from '../../state.js';
+import { phrasesManager } from '../../ui/phrases.js';
 import { baseName, fmtNum } from '../../core/format.js';
-
-/** 点胶囊 = 把这句话并入/移出正向指令 */
-const PHRASES = [
-  ['皮肤精修', '皮肤质感细腻通透，保留毛孔与绒毛细节'],
-  ['去碎发', '去除杂乱碎发，发际线与鬓角干净'],
-  ['服装平整', '服装褶皱自然平整，材质纹理清晰'],
-  ['背景干净', '背景杂物与高光溢出消除，画面干净'],
-  ['光影统一', '光线柔和统一，与周围环境色温一致'],
-  ['手部修正', '手指结构与数量正确，关节自然'],
-  ['只改遮罩区', '只编辑遮罩区域，其余保持原样'],
-];
 
 const TABS = [['prompt', '指令'], ['sample', '采样'], ['lora', 'LoRA']];
 
@@ -39,7 +29,7 @@ function grp(title, { badge, collapsed = false } = {}, ...body) {
   return node;
 }
 
-export function createParams({ onSubmit, onStop }) {
+export function createParams({ onSubmit, onStop, onMode, onInk }) {
   let tab = 'prompt';
   let busy = false;
   let loras = [];
@@ -49,19 +39,39 @@ export function createParams({ onSubmit, onStop }) {
   const neg = el('textarea.textarea', { rows: '3', placeholder: '多余的手指、塑料感皮肤、噪点…', spellcheck: 'false' });
   const count = el('span.badge');
 
-  const chips = el('div.chips', {}, ...PHRASES.map(([label, phrase]) => el('button.chip-s', {
-    type: 'button', text: label, dataset: { phrase },
-    onclick: () => { ta.value = togglePhrase(ta.value, phrase, chips.querySelector(`[data-phrase="${CSS.escape(phrase)}"]`)?.classList.contains('is-on')); syncPrompt(); },
-  })));
+  /* 胶囊行：内容来自库里（设置 → 提示词短语，或就地「管理短语…」），不再是写死的字面量。
+     最后一颗是管理入口，它没有 data-phrase，所以不会参与 is-on 判定。 */
+  const chips = el('div.chips');
+
+  function paintChips() {
+    const list = (store.peek('phrases') || []).filter(p => p.prompt);
+    fill(chips,
+      ...list.map(p => el('button.chip-s', {
+        type: 'button', text: p.name, dataset: { phrase: p.prompt },
+        onclick: () => {
+          ta.value = togglePhrase(ta.value, p.prompt, chips.querySelector(`[data-phrase="${CSS.escape(p.prompt)}"]`)?.classList.contains('is-on'));
+          syncPrompt();
+        },
+      })),
+      el('button.chip-s.chip-s--mgr', {
+        type: 'button', 'data-tip': '增删改这些短语',
+        html: icon('edit', { cls: 'icon icon--sm' }) + '<span>管理短语</span>',
+        onclick: () => phrasesManager(),
+      }));
+    syncPrompt();
+  }
 
   function syncPrompt() {
     const cur = ta.value || '';
-    for (const c of chips.children) c.classList.toggle('is-on', cur.includes(c.dataset.phrase));
+    for (const c of chips.querySelectorAll('.chip-s[data-phrase]')) c.classList.toggle('is-on', cur.includes(c.dataset.phrase));
     count.textContent = `${cur.length} 字`;
     patchSettings({ prompt: cur });
   }
   ta.addEventListener('input', syncPrompt);
   neg.addEventListener('input', () => patchSettings({ negative: neg.value }));
+  paintChips();
+  /* 在设置里改完短语，右栏这一排要当场跟着变（编辑器骨架只建一次） */
+  store.subscribe((s, key) => { if (key === 'phrases') paintChips(); });
 
   const panePrompt = el('div', { style: { display: 'grid', gap: '14px' } },
     grp('正向指令', { badge: '0 字' }, ta),
@@ -127,6 +137,39 @@ export function createParams({ onSubmit, onStop }) {
   }
   const emitLoras = () => patchSettings({ loras: loras.map(l => ({ name: l.name, strength: l.strength, enabled: l.enabled })) });
 
+  /* ---------------- 生成方式：就地切本机 / 云端 ---------------- */
+  const MODES = [['comfyui', '本机'], ['cloud', '云端']];
+  const modeSeg = el('div.seg', {}, ...MODES.map(([k, label]) => el('button.seg__it', {
+    type: 'button', dataset: { m: k }, text: label, 'data-tip': k === 'cloud' ? '云端整幅重绘裁切区' : '交给本机 ComfyUI',
+    onclick: () => onMode?.(k),
+  })));
+  const modeTip = el('span.muted.nowrap');
+  const modeRow = el('div.ed-mode', {}, el('span.ed-mode__lab', { text: '生成方式' }), modeSeg, modeTip);
+
+  function paintMode() {
+    const cur = effMode();
+    for (const b of modeSeg.children) b.classList.toggle('is-on', b.dataset.m === cur);
+    const cloud = store.peek('cloud') || {};
+    // 两条路的出图口径不一样，把"现在打到哪、按什么尺寸出"写在开关旁边，别让人以为切了是等价的
+    modeTip.textContent = cur === 'cloud'
+      ? `云端 ${cloud.model || '未填模型名'}`
+      : String(store.peek('comfy') || '').replace(/^https?:\/\//, '') || '本机 8188';
+  }
+
+  /* 反向涂抹只在这条路上有（本地那条要改的是 ComfyUI 工作流本身，是另一件事），
+     而且必须把"涂的是要保的"这件事说当面——它违反直觉。 */
+  const inkSeg = el('div.seg', {},
+    el('button.seg__it', { type: 'button', dataset: { v: '0' }, text: '涂要改的', 'data-tip': '笔迹内重绘，笔迹外保持原图', onclick: () => onInk?.(false) }),
+    el('button.seg__it', { type: 'button', dataset: { v: '1' }, text: '涂要保留的', 'data-tip': '圈住主体，其余整幅重绘', onclick: () => onInk?.(true) }));
+  const inkRow = el('div.ed-mode.ed-ink', { hidden: true },
+    el('span.ed-mode__lab', { text: '涂抹含义' }), inkSeg,
+    el('span.muted.nowrap', { text: '反向时画面其余部分都交给云端' }));
+
+  function paintInk() {
+    const inv = !!(store.peek('settings') || {}).invert;
+    for (const b of inkSeg.children) b.classList.toggle('is-on', (b.dataset.v === '1') === inv);
+  }
+
   /* ---------------- 子标签 + 主体 ---------------- */
   const body = el('div.prop-body');
   const tabs = el('div.prop-tabs', {}, ...TABS.map(([k, label]) => el('button', {
@@ -170,7 +213,7 @@ export function createParams({ onSubmit, onStop }) {
       el('h3', { html: icon('sliders', { cls: 'icon icon--sm' }) + '<span>修图参数</span>' }),
       el('span.grow'),
       resetBtn),
-    chips, tabs, body, ft,
+    modeRow, inkRow, chips, tabs, body, ft,
   );
 
   function sync(settings) {
@@ -185,6 +228,8 @@ export function createParams({ onSubmit, onStop }) {
     edgePick = Number(s.edge) || 0;
     paintEdge();
     buildLoras(s.loras || []);
+    paintMode();
+    paintInk();
     show();
   }
 
@@ -233,7 +278,10 @@ export function createParams({ onSubmit, onStop }) {
 
   /** 本机 / 云端来回切：云端隐掉采样与 LoRA 页，并换一套阶段名 */
   function setCloud(on) {
+    paintMode();          // 开关上的高亮与"打到哪"的提示，无论模式有没有变都要跟着 store 走
+    paintInk();
     on = !!on;
+    inkRow.hidden = !on;
     if (on === cloudMode) return;
     cloudMode = on;
     if (on && tab !== 'prompt') tab = 'prompt';
@@ -269,9 +317,10 @@ function toggleRow(label, onChange) {
  * 并入 / 移出这句提示词。
  * 短语本身就带中文逗号，所以"移出"必须按整句子串删：原来先按逗号切成列表项再等值比较，
  * 句子被切成两半，一项都匹配不上——点掉之后残段永远留在指令里。
- * 胶囊的 is-on 由 syncPrompt 按文本回灌，这里再以文本为准判一次，重载后也不会重复追加。
+ * 胶囊的 is-on 由文本回灌，这里再以文本为准判一次，重载后也不会重复追加。
+ * 画布视图的同一排胶囊走的也是这一个函数，两处各写一份迟早会漂。
  */
-function togglePhrase(cur, phrase, wasOn) {
+export function togglePhrase(cur, phrase, wasOn) {
   const text = String(cur || '');
   if (wasOn || text.includes(phrase)) {
     return text.replace(phrase, '')

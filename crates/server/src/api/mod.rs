@@ -1,6 +1,7 @@
 //! 路由表：一张表看全 39 条端点，实现在同目录按域分开的文件里。
 
 pub mod backends;
+pub mod canvas;
 pub mod cloud;
 pub mod common;
 pub mod images;
@@ -35,6 +36,7 @@ pub fn router() -> Router<Shared> {
     Router::new()
         .route("/api/projects", get(projects::projects_list).post(projects::projects_create))
         .route("/api/projects/{id}", get(projects::project_get).delete(projects::project_delete))
+        .route("/api/projects/{id}/rename", post(projects::project_rename))
         .route("/api/projects/{id}/images", post(projects::images_add))
         .route("/api/projects/{id}/settings", get(projects::project_settings_get).post(projects::project_settings_set))
         .route("/api/images/{id}", get(images::image_get).delete(images::image_delete))
@@ -42,6 +44,11 @@ pub fn router() -> Router<Shared> {
         .route("/api/images/{id}/thumb", get(images::thumb_get))
         .route("/api/images/{id}/tiles", get(images::tiles_get))
         .route("/api/run", post(results::run_post))
+        .route("/api/canvas/create", post(canvas::canvas_create))
+        .route("/api/canvas/{id}", get(canvas::canvas_get))
+        .route("/api/canvas/{id}/sketch", post(canvas::sketch_post))
+        .route("/api/canvas/{id}/generate", post(canvas::canvas_generate))
+        .route("/api/results", get(results::results_list))
         .route("/api/results/{id}", get(results::result_get).delete(results::result_delete))
         .route("/api/results/{id}/interrupt", post(results::interrupt_post))
         .route("/api/results/{id}/fork", post(results::fork_post))
@@ -63,6 +70,7 @@ pub fn router() -> Router<Shared> {
         .route("/api/presets/{id}/update", post(presets::preset_update))
         .route("/api/settings", get(settings::api_settings))
         .route("/api/settings/workflow", post(settings::workflow_set))
+        .route("/api/workflow/inspect", get(settings::workflow_inspect))
         .route("/api/settings/proxy-edge", post(settings::proxy_edge_set))
         .route("/api/export", get(settings::export_get))
         .route("/api/export/dir", post(settings::export_dir_set))
