@@ -223,7 +223,7 @@ Copyright 2026 ShanGuoP
 ### 第三方资源
 
 界面字体 **思源宋体 / Noto Serif SC**（运行时加载按常用字子集化的 `public/fonts/NotoSerifSC-VF.woff2`，
-完整字源 TTF 已退役出工作区、git 历史留档，重新生成字表的脚本见 `tools/make-font-chars.py` 头部说明）
+完整字源 TTF 已退役出工作区、git 历史留档）
 单独适用 **SIL Open Font License 1.1**，不受上面的 Apache-2.0 覆盖：
 
 ```
