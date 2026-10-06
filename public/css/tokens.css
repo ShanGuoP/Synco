@@ -6,7 +6,7 @@
 /* 本地字体随项目走：换机器也不掉字重 */
 @font-face {
   font-family: 'Noto Serif SC';
-  src: url('/public/fonts/NotoSerifSC-VF.ttf') format('truetype');
+  src: url('/public/fonts/NotoSerifSC-VF.woff2') format('woff2');
   font-weight: 200 900;
   font-display: swap;
 }
