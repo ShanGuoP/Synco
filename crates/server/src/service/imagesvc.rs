@@ -29,10 +29,14 @@ pub fn proxy_edge(ctx: &Ctx) -> usize {
         .unwrap_or(DEFAULT_PROXY_EDGE)
 }
 
-/// 缓存分级只看命名规律，不看扩展名：`_mask.png` 会被原地覆写，其余文件名都带唯一后缀。
+/// 缓存分级只看命名规律，不看扩展名：`_mask.png` 与画稿 `_sketch.png` 都是**被原地覆写**的文件
+/// （存遮罩、自动保存画稿、取回快照都改内容不改名），给它们 immutable 就是让浏览器拿旧内容
+/// 说话——「取回这一版画稿」提示成功、屏幕上一切没变，正是这么坏掉的。
+/// 快照文件名同样落在 `_sketch.png` 上，但它永不覆写：让它一并走 no-cache 只是多一次条件请求，
+/// ETag 命中时连文件内容都不读（files::stat_and_read），比把覆写型文件留在一年缓存里便宜。
 /// 返回 `(Cache-Control, 是否带 ETag)`。
 pub fn cache_policy(name: &str) -> (&'static str, bool) {
-    if name.ends_with("_mask.png") {
+    if name.ends_with("_mask.png") || name.ends_with("_sketch.png") {
         ("no-cache", true)
     } else {
         ("public, max-age=31536000, immutable", false)
@@ -94,11 +98,10 @@ pub(crate) fn write_bytes(p: &Path, buf: &[u8]) -> std::result::Result<(), Strin
 }
 
 /// 读原图并解码。库里有过这行不等于盘上还有这个文件，所以这里统一报可读的错。
+/// 路径走 `util::data_file`：库里躺着的若是绝对路径或 `..`（被人改过的库），不该跟着它读到 data/ 外。
 fn read_orig(ctx: &Ctx, img: &Image) -> std::result::Result<Rgba, String> {
-    let p = ctx.data.join(&img.orig_path);
-    if !p.is_file() {
-        return Err(format!("原图文件已不在磁盘上：{}", img.orig_path));
-    }
+    let p = util::data_file(&ctx.data, &img.orig_path)
+        .ok_or_else(|| format!("原图文件已不在磁盘上：{}", img.orig_path))?;
     let bytes = std::fs::read(&p).map_err(|e| format!("读原图失败：{e}"))?;
     codec::decode(&bytes)
 }
@@ -200,7 +203,7 @@ pub fn backfill(ctx: &std::sync::Arc<Ctx>) {
 
 /// 成图的 320 缩略图：历史列靠它，不再回落到 20–33MB 的成图
 pub fn result_thumb(ctx: &Ctx, rid: i64, pid: i64, final_rel: &str) -> Option<String> {
-    let bytes = std::fs::read(ctx.data.join(final_rel)).ok()?;
+    let bytes = std::fs::read(util::data_file(&ctx.data, final_rel)?).ok()?;
     let decoded = codec::decode(&bytes).ok()?;
     let th = slot(ctx, pid, format!("r{rid}_{}_thumb.jpg", util::now_ms()));
     write_bytes(&th.abs, &codec::encode_jpeg(&codec::scale_to_long_edge(&decoded, THUMB_EDGE), THUMB_Q)).ok()?;
@@ -212,7 +215,8 @@ pub fn result_thumb(ctx: &Ctx, rid: i64, pid: i64, final_rel: &str) -> Option<St
 /// 尺寸必须和原图一致，否则 InpaintCrop 的裁切几何会整体错位。
 /// 已经是原图尺寸（历史蒙版就是满尺寸的）直接原样返回，不重编码。
 pub fn mask_to_orig(ctx: &Ctx, mask_rel: &str, w: usize, h: usize) -> std::result::Result<Vec<u8>, String> {
-    let bytes = std::fs::read(ctx.data.join(mask_rel)).map_err(|e| format!("读遮罩失败：{e}"))?;
+    let bytes = std::fs::read(util::data_file(&ctx.data, mask_rel).ok_or_else(|| "遮罩文件已不在磁盘上".to_string())?)
+        .map_err(|e| format!("读遮罩失败：{e}"))?;
     let m = codec::decode(&bytes)?;
     if m.w == w && m.h == h {
         return Ok(bytes);
@@ -241,6 +245,16 @@ pub fn tiles(ctx: &Ctx, img: &Image) -> std::result::Result<serde_json::Value, S
         std::fs::read(&meta_path).map_err(|e| format!("读瓦片清单失败：{e}"))?
     };
     serde_json::from_slice(&base).map_err(|e| format!("瓦片清单坏了：{e}"))
+}
+
+/// 瓦片清单的 tokio 入口：与派生档共用同一对槽。
+/// 首次访问那张图要切一套（一整幅解码 + 每层重采样），而编辑器进来可能一次打上好几个请求；
+/// 不限流就是 N 份全分辨率解码同时铺开。拿到槽之后 `tiles()` 自己会先看 meta.json，
+/// 已经被别人切完的那次就直接读清单回来。
+pub async fn tiles_async(ctx: &Shared, img: Image) -> std::result::Result<serde_json::Value, String> {
+    let Ok(_slot) = SLOTS.acquire().await else { return Err("瓦片的限流槽已经关了".into()) };
+    let ctx2 = ctx.clone();
+    tokio::task::spawn_blocking(move || tiles(&ctx2, &img)).await.unwrap_or_else(|e| Err(format!("瓦片线程崩了：{e}")))
 }
 
 fn build_tiles(ctx: &Ctx, img: &Image, full: &Rgba) -> std::result::Result<(), String> {
@@ -348,6 +362,9 @@ mod tests {
         assert_eq!(cache_policy("projects/1/1234_ab_photo.jpg").1, false);
         assert!(cache_policy("projects/1/a_mask.png").0.contains("no-cache"));
         assert!(cache_policy("projects/1/tiles/3/4/0_0.jpg").0.contains("immutable"));
+        // 画稿会被原地覆写（自动保存、取回快照），一年期 immutable 会把旧笔迹钉在浏览器里
+        assert!(cache_policy("projects/1/1700_ab_画稿_sketch.png").0.contains("no-cache"));
+        assert_eq!(cache_policy("projects/1/1700_ab_画稿_sketch.png").1, true);
     }
 
     /// 一张 4000×6000（24MP，就是你 data 里那个规格）走完整条派生链：

@@ -6,7 +6,7 @@ use crate::models::dto;
 use crate::repo::{images as rimg, results as rres};
 use crate::service::reclaim;
 use crate::state::Shared;
-use crate::{service::imagesvc, util};
+use crate::{service::imagesvc, service::refs, util};
 use axum::body::Bytes;
 use axum::extract::{Path as APath, State};
 use axum::response::Response;
@@ -53,28 +53,52 @@ pub async fn thumb_get(State(ctx): State<Shared>, APath(id): APath<String>) -> R
 pub async fn tiles_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
     let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "no image")) };
-    let ctx2 = ctx.clone();
-    let out = tokio::task::spawn_blocking(move || imagesvc::tiles(&ctx2, &img))
-        .await
-        .unwrap_or_else(|e| Err(format!("瓦片线程崩了：{e}")));
-    match out {
+    // 限流与"派生档同时在制不超过两份"是同一条纪律，见 imagesvc::tiles_async
+    match imagesvc::tiles_async(&ctx, img).await {
         Ok(v) => Ok(ok(v)),
         Err(e) => Ok(err(500, e.as_str())),
     }
 }
 
+/// 派生查看：这张图「另存为新图」出去的那些子图。
+/// 只认库里存的父子关系（`images.derived_from`），不认文件名——改过名的老行由启动时那次回填补上。
+pub async fn derived_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
+    let iid = path_id(&id)?;
+    let kids = rimg::list_derived(&ctx, iid)?;
+    let out: Vec<Value> = kids.iter().map(|i| dto::image_json(&ctx, i, true)).collect();
+    Ok(ok(serde_json::json!({ "images": out, "parent": iid })))
+}
+
 pub async fn image_delete(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
     if let Some(i) = rimg::by_id(&ctx, iid)? {
-        for rel in [Some(i.orig_path.clone()).filter(|s| !s.is_empty()), i.mask_path.clone()] {
-            if let Some(rel) = rel {
-                let _ = std::fs::remove_file(ctx.data.join(rel));
-            }
+        /* 先把要删的文件名收齐（行一删就没人知道盘上躺着什么了），删完行再动磁盘。
+           顺序反过来一旦断在中途，库里就挂着指向空气的记录：卡片在、点开是空的；
+           而现在这种顺序最多多留几个没人认领的文件，盘上多一张照片不会骗人。 */
+        let mut rels: Vec<String> = Vec::new();
+        if !i.orig_path.is_empty() {
+            rels.push(i.orig_path.clone());
         }
-        imagesvc::purge(&ctx, &i);
-        rres::drop_files(&ctx, "image_id=?", crate::repo::i(iid))?;
+        if let Some(m) = i.mask_path.clone().filter(|s| !s.is_empty()) {
+            rels.push(m);
+        }
+        rels.extend(rres::list_paths(&ctx, "image_id=?", crate::repo::i(iid))?);
         rres::delete_for_image(&ctx, iid)?;
         rimg::delete(&ctx, iid)?;
+        // 子图不跟着删（它们是用户另存出去的独立成品），但来源引用要清掉，
+        // 否则「派生查看」的计数会指向一个已经不存在的 id
+        rimg::clear_derived_refs(&ctx, iid)?;
+        imagesvc::purge(&ctx, &i);
+        // 画布的参考图槽位是存在设置里的一串 rel：行没了要连着清，不然键与文件都留在库里当孤儿
+        if i.is_sketch() {
+            refs::clear(&ctx, i.project_id, iid)?;
+        }
+        // 走 data_file：库里躺着绝对路径或 `..`（改过的库）时不该跟着它删到 data/ 外
+        for rel in &rels {
+            if let Some(p) = util::data_file(&ctx.data, rel) {
+                let _ = std::fs::remove_file(p);
+            }
+        }
     }
     Ok(ok(serde_json::json!({ "ok": true })))
 }
@@ -99,7 +123,9 @@ pub async fn mask_post(State(ctx): State<Shared>, APath(id): APath<String>, raw:
         mask_rel = Some(rel);
     } else if let Some(old) = i.mask_path.filter(|s| !s.is_empty()) {
         // 清空遮罩：文件跟着走，否则换掉笔迹后旧 PNG 一直躺在目录里
-        let _ = std::fs::remove_file(ctx.data.join(old));
+        if let Some(p) = util::data_file(&ctx.data, &old) {
+            let _ = std::fs::remove_file(p);
+        }
     }
     rimg::set_mask(&ctx, iid, mask_rel.as_deref())?;
     Ok(ok(serde_json::json!({ "ok": true })))

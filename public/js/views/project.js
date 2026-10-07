@@ -9,7 +9,6 @@ import { go, back } from '../core/router.js';
 import { setCrumb } from '../shell.js';
 import { toastOk, toastErr, toastBusy } from '../ui/toast.js';
 import { confirm, askName, modal } from '../ui/modal.js';
-import { createHistory } from './editor/history.js';
 import { newCanvas } from './canvas/index.js';
 import { emptyState } from '../ui/empty.js';
 import { submit, adopt } from '../gen.js';
@@ -173,10 +172,14 @@ function icard(img, i) {
         onclick: e => { e.stopPropagation(); toggleSel(img.id); syncSel(); },
       }),
       // 派生查看：常驻角标，不放进 .icard__acts（那块在窄屏整块 display:none，手机上就点不到了）
-      img.result_done > 0 ? el('button.icard__derived', {
-        type: 'button', 'aria-label': `看这 ${img.result_done} 张成图`, 'data-tip': '派生成图',
-        html: icon('layers', { cls: 'icon icon--sm' }) + `<b>${img.result_done}</b>`,
-        onclick: e => { e.stopPropagation(); showResults(img); },
+      // 两个数分别是「出过几张成图」与「另存出去几张子图」——它们是两件事，别混成一个
+      img.result_done > 0 || img.derived_count > 0 ? el('button.icard__derived', {
+        type: 'button',
+        'aria-label': `成图 ${img.result_done || 0} 张、派生 ${img.derived_count || 0} 张`,
+        'data-tip': `成图 ${img.result_done || 0} · 派生的图 ${img.derived_count || 0}`,
+        html: `${icon('layers', { cls: 'icon icon--sm' })}<b>${img.result_done || 0}</b>`
+          + (img.derived_count > 0 ? `${icon('copy', { cls: 'icon icon--sm' })}<b>${img.derived_count}</b>` : ''),
+        onclick: e => { e.stopPropagation(); showDerived(img); },
       }) : null,
       el('div.icard__acts', {},
         el('button.btn.btn--primary.btn--sm', { type: 'button', html: icon(sketch ? 'canvas' : 'brush', { cls: 'icon icon--sm' }) + `<span>${sketch ? '打开画布' : img.has_mask ? '继续涂' : '涂遮罩'}</span>`, onclick: e => { e.stopPropagation(); openCard(img); } }),
@@ -211,58 +214,69 @@ const openCard = img => {
   if (p) go(img.kind === 'sketch' ? `/p/${p.id}/c/${img.id}` : `/p/${p.id}/e/${img.id}`);
 };
 
-/** 从派生弹窗进编辑器，并让编辑器把这条结果摆到对比层上 */
-function focusResult(imgId, rid) {
-  const p = store.peek('project');
-  if (!p) return;
-  store.set({ intent: { focusResult: rid, imgId } }, 'intent');
-  go(`/p/${p.id}/e/${imgId}`);
-}
-
 /**
- * 派生查看弹窗：只做看与删（方案 D12）——提交留在编辑器，免得一个页面两套提交语义。
- * 面板直接复用编辑器的结果历史组件，数据由 /api/results 喂。
+ * 派生查看弹窗：这张图「另存为新图」出去的那些**子图**。
+ * 生成历史不在这里——那是编辑器右侧那一列，两件事别再混成一个入口。
+ * 面板只做看/打开/删（方案 D12），提交留在编辑器里。
  */
-async function showResults(img) {
+async function showDerived(img) {
   const p = store.peek('project');
   if (!p) return;
   const counter = el('span.muted', { text: '读取中…' });
-  let handle = null;
-  const panel = createHistory({
-    bare: true,
-    onPick: r => { handle?.close('pick'); focusResult(img.id, r.id); },
-    onDel: r => delResultFromModal(r, reload),
-  });
+  const listBox = el('div.pre-list', {});
   async function reload() {
+    let d;
     try {
-      const d = await api.results({ project_id: p.id, image_id: img.id });
-      const rows = d.results || [];
-      panel.setResults(rows, null);
-      const done = rows.filter(r => r.status === 'done').length;
-      counter.textContent = rows.length
-        ? `${rows.length} 条记录 · 已成图 ${done}${d.truncated ? '（只列最近这些）' : ''}`
-        : '还没有提交过生成';
-    } catch (e) { toastErr('读不到成图', e.message); counter.textContent = '读不到成图'; }
+      d = await api.imageDerived(img.id);
+    } catch (e) {
+      counter.textContent = '读不到派生的图';
+      fill(listBox, el('p.muted', { style: { padding: '12px 6px' }, text: String(e.message || e) }));
+      return;
+    }
+    const rows = d.images || [];
+    counter.textContent = rows.length
+      ? `${rows.length} 张派生的图 · 这张图自己有 ${img.result_done || 0} 张成图（在编辑器右侧的历史里看）`
+      : '还没有从这张图另存出新图';
+    fill(listBox, rows.length ? rows.map(kid => el('div.pre-it', {
+      role: 'button', tabindex: '0',
+      onclick: () => { handle?.close('open'); openCard(kid); },
+      onkeydown: e => { if (e.key === 'Enter') { handle?.close('open'); openCard(kid); } },
+    },
+      kid.orig_dead ? el('span.pre-it__ph.pre-it__ph--gone')
+                    : el('img.pre-it__th', { src: kid.thumb_url || kid.orig_url, alt: '', loading: 'lazy' }),
+      el('span.pre-it__tx', {},
+        el('b', { text: kid.name }),
+        el('span.pre-it__meta', { text: `${fmtDims(kid.w, kid.h)} · 来自 #${kid.derived_result || '?'}`, title: kid.name })),
+      el('span.pre-it__acts', {},
+        el('span.pre-it__btn', { text: '打开' }),
+        el('button.pre-it__btn', {
+          type: 'button', title: '删除这张派生图（父图与它的成图都不动）',
+          html: icon('trash', { cls: 'icon icon--sm' }),
+          onclick: e => { e.stopPropagation(); delDerived(kid, reload); },
+        })),
+    )) : el('p.muted', { style: { padding: '14px 6px', lineHeight: '1.7' },
+      text: '在修图界面点开某张成图，选「另存为新图」就会得到一张派生图——它是独立的一张图，可以再涂遮罩、再生成，与父图互不影响。' }));
   }
-  handle = modal({
-    title: `${fmtFile(img.name, 26)} 的派生成图`,
+  const handle = modal({
+    title: `${fmtFile(img.name, 26)} 派生的图`,
     wide: true,
-    body: el('div', {}, el('div', { style: { padding: '0 2px 8px' } }, counter), panel.node),
+    body: el('div', {}, el('div', { style: { padding: '0 2px 8px' } }, counter), listBox),
+    onClose: () => { loadProject(p.id).then(paint).catch(() => { /* 角标数字没刷新不算事 */ }); },
     actions: [{ label: '关闭', kind: 'ghost' }],
   });
   reload();
 }
 
-async function delResultFromModal(r, reload) {
+async function delDerived(kid, reload) {
   const ok = await confirm({
-    title: `删除记录 #${r.id}`,
-    text: r.final_url ? '这条记录连同它的成图文件一起删掉。原图和遮罩不动。' : '原图和遮罩不动，只删这条记录。',
-    danger: true, okLabel: '删除记录',
+    title: `删除「${fmtFile(kid.name, 20)}」`,
+    text: '只删这张派生出来的图（它的原图、遮罩与成图）。父图一动不动。',
+    danger: true, okLabel: '删除图片',
   });
   if (!ok) return;
   try {
-    await api.delResult(r.id);
-    toastOk('记录已删除', `#${r.id}`);
+    await api.delImage(kid.id);
+    toastOk('已删除', kid.name);
     await loadProject(store.peek('project').id);   // 角标上的数字要跟着落
     paint();
     await reload();
@@ -349,8 +363,9 @@ async function submitSelected() {
   if (!ids.length) { toastErr('没有可提交的图', '先勾选，或点「全选已涂」'); return; }
   const settings = store.peek('settings');
   const nomask = ids.filter(id => !store.peek('images').find(i => i.id === id)?.has_mask);
-  // 云端 + 反向涂抹时"一笔没涂"是合法状态（= 整幅重绘），正向才要先涂出区域
-  const reverse = isCloud() && !!settings?.invert;
+  // 云端 + 反向涂抹时"一笔没涂"是合法状态（= 整幅重绘），整张重绘更是不看遮罩；正向才要先涂出区域
+  const full = !!settings?.full;
+  const reverse = isCloud() && (full || !!settings?.invert);
   if (!reverse && nomask.length === ids.length) { toastErr('选中的都还没涂遮罩', '打开图片涂出要修的区域'); return; }
   await saveSettings();
   if (isCloud()) return submitSelectedCloud(ids, settings, reverse ? 0 : nomask.length);
@@ -373,6 +388,8 @@ async function submitSelectedCloud(ids, settings, skippedNoMask) {
       prompt, negative: '', steps: 0, cfg: 0, loras: [],
       edge: settings.edge ?? null,
       invert: !!settings.invert,
+      // 整张重绘同样按行存：这一批里每张都不读遮罩、回来也不缝合
+      full: !!settings.full,
     });
   } catch (e) { toastErr('提交失败', e.message || String(e)); return; }
   const rows = r.results || [];

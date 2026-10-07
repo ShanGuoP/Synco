@@ -1,6 +1,8 @@
 //! 蒙版运算：包围盒、外扩、贴回权重。全部只读 alpha。
-//! 外扩在浏览器画布上是 12 向平移盖戳取 max，这里用 imageproc 的形态学膨胀（欧氏距离变换 + 阈值）——
+//! 外扩在浏览器画布上是 12 向平移盖戳取 max，这里用 imageproc 的形态学膨胀（邻域取 max 的灰度膨胀）：
 //! 半径语义一致，边缘不逐像素相同（方案 §5 Phase 1 已认可这一点）。
+//! 关键是"取 max"而不是"二值化后再膨胀"——抗锯齿边和半擦除残留的半透明值要原样往外传播，
+//! 抬成全墨会让外扩比名义半径多吃一圈，贴回权重跟着偏。
 
 use crate::buffer::{Alpha, Box2};
 use crate::par::par_chunks_mut;
@@ -44,7 +46,19 @@ pub fn ink_bbox(a: &Alpha, thr: u8) -> Option<Box2> {
     })
 }
 
-/// 向半径 r 的圆盘膨胀（imageproc 的形态学膨胀，内部就是 FH 距离变换 + 阈值）。
+/// 灰度圆盘膨胀的等级切片。
+///
+/// imageproc 的形态学膨胀把"非零"当前景：半擦除残留和抗锯齿边会被抬成满墨，
+/// 等于外扩在那些地方多吃一整圈半径，贴回权重与发给模型的保留区都跟着偏。
+/// 这里按等级二值化后各膨胀一次，命中的最高一级即结果——相邻两级差 32，
+/// 误差不超过 32，而这一段紧接着还要过羽化模糊与峰值归一，看不见这个台阶。
+///
+/// 8 级的成本实测（release，2048×3072 涂抹层、笔迹占 1/4 画面的病态情形）：
+/// r=38/96/200 分别 161/182/239ms；正常笔迹（画面千分之几）是微秒级。
+/// 云端一条请求本身要十几秒，这个量级不影响提交手感，所以换正确性。
+const DILATE_LEVELS: [u8; 8] = [32, 64, 96, 128, 160, 192, 224, 255];
+
+/// 向半径 r 的圆盘膨胀：半透明的边按原量级往外传，不会被抬成满墨。
 /// `r <= 0.5` 原样返回，与 JS 的 `!(r > 0.5)` 一致；半径向下取整成整数（imageproc 只吃 u8），
 /// 与 JS 的浮半径盖戳最多差 1px，这条由对拍 harness 出数字。
 /// 只在"笔迹包围盒 + r"这块面积上跑：24MP 画布上的涂抹通常只占千分之几。
@@ -72,18 +86,38 @@ pub fn dilate(src: &Alpha, r: f64) -> Alpha {
         return out;
     }
 
-    // imageproc 把"非零"当前景，正好是 alpha>0 的笔迹
-    let mut bytes = Vec::with_capacity(aw * ah);
+    let mut sub = Vec::with_capacity(aw * ah);
     for y in y0..y1 {
         let row = y * w + x0;
-        bytes.extend_from_slice(&src.v[row..row + aw]);
+        sub.extend_from_slice(&src.v[row..row + aw]);
     }
-    let sub = GrayImage::from_vec(aw as u32, ah as u32, bytes).expect("子图缓冲与尺寸不符");
-    // Norm::L2 = 欧氏距离（imageproc 用"上取整的整数距离"表达，阈值判据与精确圆盘一致）
-    let grown = ip_dilate(&sub, Norm::L2, k).into_vec();
-    for (k_row, y) in (y0..y1).enumerate() {
-        let row = y * w + x0;
-        out.v[row..row + aw].copy_from_slice(&grown[k_row * aw..(k_row + 1) * aw]);
+    // 二值化后的那一层缓冲按等级重建：每级一次分配，换掉手搓的缓冲复用可读得多，
+    // 而这块面积本来就是"笔迹包围盒 + r"，不是整幅
+    for &lv in DILATE_LEVELS.iter() {
+        let bits: Vec<u8> = sub.iter().map(|&a| if a >= lv { 255 } else { 0 }).collect();
+        let img = GrayImage::from_vec(aw as u32, ah as u32, bits).expect("子图缓冲与尺寸不符");
+        // Norm::L2 = 欧氏圆盘（imageproc 用"上取整的整数距离"表达，阈值判据与精确圆盘一致）
+        let grown = ip_dilate(&img, Norm::L2, k).into_vec();
+        for (y, row) in (y0..y1).enumerate() {
+            let dst = row * w + x0;
+            let band = &grown[y * aw..y * aw + aw];
+            for (i, &g) in band.iter().enumerate() {
+                // 等级升序遍历，所以"命中即覆盖"取到的就是命中的最高一级
+                if g > 0 {
+                    out.v[dst + i] = lv;
+                }
+            }
+        }
+    }
+    // 原值本来就比切片等级细：满墨那一段仍是 255，其余取"原值"与"膨胀结果"里更大的那个，
+    // 保证膨胀只会把墨往外推，绝不会把已经在笔迹上的值改小
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = y * w + x;
+            if out.v[i] < src.v[i] {
+                out.v[i] = src.v[i];
+            }
+        }
     }
     out
 }
@@ -224,6 +258,58 @@ mod tests {
         assert_eq!(dilate(&a, 0.5), a);
     }
 
+    /// 抗锯齿边与半擦除残留是**半透明**的，膨胀只能把那个量级往外传，不能把它抬成满墨：
+    /// 抬满就等于外扩在那些地方多吃一整圈半径，贴回权重与发给模型的保留区都跟着偏。
+    /// 旧实现（imageproc 直接吃 alpha）在这三个点上给 255/255/0，所以这几条断言就是它的守门人。
+    #[test]
+    fn dilate_软边按量级传播不被抬满() {
+        let (w, h) = (64usize, 16usize);
+        let mut a = Alpha::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = if x < 20 { 255 } else if x == 20 { 90 } else if x == 21 { 40 } else { 0 };
+                a.v[y * w + x] = v;
+            }
+        }
+        let d = dilate(&a, 6.0);
+        let y = 8;
+        assert_eq!(d.get(25, y), 255, "满墨那一段该照常外扩 6px");
+        // 距满墨 6px 处只能拿到 90 那个量级（切片到 64），拿不到 255
+        assert_eq!(d.get(26, y), 64, "半值被抬成满墨了");
+        assert_eq!(d.get(27, y), 32, "更远处该只剩 40 那个量级");
+        assert_eq!(d.get(28, y), 0, "超出半径还留着墨，说明外扩多吃了");
+        // 任何一点都不该变暗
+        for i in 0..w * h {
+            assert!(d.v[i] >= a.v[i], "第 {i} 点从 {} 变成 {}", a.v[i], d.v[i]);
+        }
+    }
+
+    /// 等级切片把膨胀成本放大了 8 倍，这条用来量到底值不值：
+    /// `cargo test --release -p stitch-core -- --ignored --nocapture bench_dilate`
+    #[test]
+    #[ignore]
+    fn bench_dilate_等级切片() {
+        use std::time::Instant;
+        // 涂抹层按 proxy 档：2048×3072，笔迹占画面四分之一（外扩后的子图就是这个量级）
+        let (w, h) = (2048usize, 3072usize);
+        let mut a = Alpha::new(w, h);
+        for y in h / 4..h * 3 / 4 {
+            for x in w / 4..w * 3 / 4 {
+                let v = (((x + y) % 232) + 24) as u8;
+                a.v[y * w + x] = v;
+            }
+        }
+        for r in [38.0f64, 96.0, 200.0] {
+            let t = Instant::now();
+            let d = dilate(&a, r);
+            println!(
+                "dilate r={r:>3} on {w}x{h}  {:.1}ms  峰值 {}",
+                t.elapsed().as_secs_f64() * 1000.0,
+                d.max()
+            );
+        }
+    }
+
     #[test]
     fn blur_峰值单调下降且不产生满值平台() {
         // 6×6 的墨块比模糊窗小，中心不该仍是满值
@@ -257,4 +343,3 @@ mod tests {
         assert_eq!(p.get(0, 0), 0);
     }
 }
-

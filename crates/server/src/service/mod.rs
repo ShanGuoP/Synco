@@ -6,6 +6,7 @@ pub mod cloud;
 pub mod comfy;
 pub mod imagesvc;
 pub mod queue;
+pub mod refs;
 pub mod reclaim;
 pub mod setup;
 pub mod workflow;

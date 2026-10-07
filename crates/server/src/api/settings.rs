@@ -56,8 +56,33 @@ pub async fn workflow_inspect(State(ctx): State<Shared>) -> Result<Response> {
     }
 }
 
-pub async fn cfg_get(State(ctx): State<Shared>) -> Result<Response> {
-    let c = cfg::get_cfg(&ctx);
+/// 角色映射表：这个文件里有哪些节点、自动认出了谁、你手指过谁、还差什么。
+/// 接管提交之前，人得先看得见这张表对不对。
+pub async fn workflow_roles_get(State(ctx): State<Shared>) -> Result<Response> {
+    match cfg::roles_view(&ctx) {
+        Ok(v) => Ok(ok(v)),
+        Err(e) => Ok(bad(e)),
+    }
+}
+
+/// 存手指覆盖。类名对不上的一律不入库并逐条给理由——存进去一个错类名的节点，
+/// 下一次提交就会往不该填的输入里写值。
+pub async fn workflow_roles_post(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
+    let body = body_of(raw).await?;
+    let p = cfg::workflow_path(&ctx);
+    let roles = body.get("roles").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let (kept, rejected) = cfg::set_saved_roles(&ctx, &p, &roles);
+    let view = match cfg::roles_view(&ctx) {
+        Ok(v) => v,
+        Err(e) => return Ok(bad(e)),
+    };
+    let mut out = view.as_object().cloned().unwrap_or_default();
+    out.insert("saved".into(), serde_json::Value::Object(kept));
+    out.insert("rejected".into(), serde_json::json!(rejected));
+    Ok(ok(serde_json::Value::Object(out)))
+}
+
+pub async fn cfg_get(State(ctx): State<Shared>) -> Result<Response> {    let c = cfg::get_cfg(&ctx);
     Ok(ok(serde_json::json!({
         "prompt_default": c["prompt_default"], "negative": c["negative"], "steps": c["steps"], "cfg": c["cfg"],
         "loras": c["loras"], "comfy": backend::active_url(&ctx),
@@ -128,6 +153,11 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
     if ids.is_empty() {
         return Ok(bad("没有要导出的结果"));
     }
+    // 一次导出的张数上限：body 那 80MB 限的是字节不是条数，一万个 id 能把 CPU 与磁盘 IO 排满
+    const EXPORT_MAX: usize = 500;
+    if ids.len() > EXPORT_MAX {
+        return Ok(bad(format!("一次最多导出 {EXPORT_MAX} 张（这次传了 {} 张），分批导", ids.len())));
+    }
     let dir = get_export_dir(&ctx);
     if dir.is_empty() {
         return Ok(bad("还没设置导出目录（设置 → 导出目录）"));
@@ -144,10 +174,13 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
             continue;
         };
         let final_path = r.get("final_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if r.get("status").and_then(|v| v.as_str()) != Some("done") || final_path.is_empty() || !ctx.data.join(&final_path).is_file() {
+        // 库里的 rel 走统一校验再取路径：状态对得上但文件指在 data/ 外（被改过的库、链接）也不导
+        let final_src = util::data_file(&ctx.data, &final_path);
+        if r.get("status").and_then(|v| v.as_str()) != Some("done") || final_src.is_none() {
             out.push(serde_json::json!({ "id": id, "skipped": true, "reason": "这条没有成图" }));
             continue;
         }
+        let final_src = final_src.unwrap();
         let iid = r.get("image_id").and_then(|v| v.as_i64()).unwrap_or(0);
         let src = repo::one(&ctx, "SELECT name FROM images WHERE id=?", &[repo::i(iid)])?;
         let name = src.as_ref().and_then(|s| s.get("name").and_then(|v| v.as_str())).unwrap_or("photo").to_string();
@@ -158,18 +191,29 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
                 .collect();
             util::clip(&if cleaned.is_empty() { "photo".to_string() } else { cleaned }, 60)
         };
-        // 重名自动 (2)(3) 递增
+        /* 名字用 create_new 原子占，不再"先看存在不存在再复制"：两个导出请求同时看到没这个名字，
+           就会都挑第一个，后落的那个把前一个覆盖掉 */
         let mut file = format!("{stem}_#{id}.png");
         let mut n = 2;
-        while p.join(&file).exists() {
-            file = format!("{stem}_#{id}({n}).png");
-            n += 1;
-        }
-        match std::fs::copy(ctx.data.join(&final_path), p.join(&file)) {
+        let dst: std::result::Result<std::path::PathBuf, String> = loop {
+            let cand = p.join(&file);
+            match std::fs::OpenOptions::new().create_new(true).write(true).open(&cand) {
+                Ok(_) => break Ok(cand),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if n >= 1000 {
+                        break Err(format!("{file} 之后连续重名到第 {n} 次，让不开了"));
+                    }
+                    file = format!("{stem}_#{id}({n}).png");
+                    n += 1;
+                }
+                Err(e) => break Err(e.to_string()),
+            }
+        };
+        match dst.and_then(|d| std::fs::copy(final_src, d).map(|_| ()).map_err(|e| e.to_string())) {
             Ok(_) => out.push(serde_json::json!({ "id": id, "file": file })),
             Err(e) => out.push(serde_json::json!({
                 "id": id, "skipped": true,
-                "reason": e.to_string().chars().take(120).collect::<String>()
+                "reason": e.chars().take(120).collect::<String>()
             })),
         }
     }

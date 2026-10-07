@@ -1,11 +1,12 @@
 //! 路由薄层：只做参数解析、状态码与响应形状；业务在 `crate::service`，读写在 `crate::repo`。
 
-use super::common::{bad, body_of, err, ok, path_id, save_image_file};
+use super::common::{bad, batch_limit, body_of, err, ok, path_id, save_batch};
 use crate::error::Result;
 use crate::models::dto;
 use crate::repo;
 use crate::repo::{images as rimg, projects as rproj, results as rres};
 use crate::state::Shared;
+use crate::service::refs;
 use crate::util;
 use axum::body::Bytes;
 use axum::extract::{Path as APath, State};
@@ -43,12 +44,16 @@ fn project_name(body: &Value) -> String {
 pub async fn projects_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
     let name = project_name(&body);
+    // 张数在建项目之前先判：反过来先建后判会留下一个空项目挂在库里
+    if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
+        if let Some(msg) = batch_limit(files) {
+            return Ok(bad(msg));
+        }
+    }
     let pid = rproj::create(&ctx, &name)?;
     let mut ids: Vec<i64> = Vec::new();
     if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
-        for f in files {
-            ids.push(save_image_file(&ctx, pid, f)?);
-        }
+        ids = save_batch(&ctx, pid, files)?;
     }
     rproj::touch(&ctx, pid)?;
     Ok(ok(serde_json::json!({ "id": pid, "name": name, "image_ids": ids })))
@@ -81,17 +86,32 @@ pub async fn project_get(State(ctx): State<Shared>, APath(id): APath<String>) ->
 
 pub async fn project_delete(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let pid = path_id(&id)?;
+    // 先把这一项目名下的文件名收齐（行一删就查不到盘上有谁了），删完行再动磁盘
+    let mut ids: Vec<i64> = Vec::new();
+    let mut rels: Vec<String> = Vec::new();
     for i in rimg::list_for_project(&ctx, pid)? {
-        for rel in [Some(i.orig_path.clone()).filter(|s| !s.is_empty()), i.mask_path.clone()] {
-            if let Some(rel) = rel {
-                let _ = std::fs::remove_file(ctx.data.join(rel));
-            }
+        ids.push(i.id);
+        if !i.orig_path.is_empty() {
+            rels.push(i.orig_path.clone());
+        }
+        if let Some(m) = i.mask_path.clone().filter(|s| !s.is_empty()) {
+            rels.push(m);
         }
     }
-    rres::drop_files(&ctx, "project_id=?", repo::i(pid))?;
+    rels.extend(rres::list_paths(&ctx, "project_id=?", repo::i(pid))?);
     rimg::delete_for_project(&ctx, pid)?;
     rres::delete_for_project(&ctx, pid)?;
     rproj::delete(&ctx, pid)?;
+    // 画布的参考图槽位是存在设置里的：项目没了，那些键与文件也要跟着没，不然只涨不落
+    for iid in ids {
+        refs::clear(&ctx, pid, iid)?;
+    }
+    // 中途断掉留下的是没人认领的文件，而不是指向空气的记录——后者会在界面上长成碎图
+    for rel in &rels {
+        if let Some(p) = util::data_file(&ctx.data, rel) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
     let _ = std::fs::remove_dir_all(ctx.data.join("projects").join(pid.to_string()));
     Ok(ok(serde_json::json!({ "ok": true })))
 }
@@ -99,11 +119,9 @@ pub async fn project_delete(State(ctx): State<Shared>, APath(id): APath<String>)
 pub async fn images_add(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let pid = path_id(&id)?;
     let body = body_of(raw).await?;
-    let mut ids = Vec::new();
+    let mut ids: Vec<Value> = Vec::new();
     if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
-        for f in files {
-            ids.push(Value::from(save_image_file(&ctx, pid, f)?));
-        }
+        ids = save_batch(&ctx, pid, files)?.into_iter().map(Value::from).collect();
     }
     rproj::touch(&ctx, pid)?;
     Ok(ok(serde_json::json!({ "ids": ids })))

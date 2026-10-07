@@ -38,7 +38,11 @@ async function hydrate() {
     try {
       const d = await api.project(p.id);
       detail.set(p.id, d.images);
-      setStat(p.id, { total: d.images.length, masked: d.images.filter(i => i.has_mask).length });
+      setStat(p.id, {
+        total: d.images.length,
+        masked: d.images.filter(i => i.has_mask).length,
+        sketches: d.images.filter(i => i.kind === 'sketch').length,
+      });
     } catch { detail.set(p.id, []); }
   }));
 }
@@ -51,6 +55,7 @@ const visible = () => {
     const s = statOf(p.id);
     if (filter === 'nomask') return !s || s.masked < s.total;
     if (filter === 'masked') return !!s && s.masked > 0;
+    if (filter === 'canvas') return !!s && s.sketches > 0;
     return true;
   });
   const by = {
@@ -186,7 +191,7 @@ function listHd() {
   const { filter } = store.peek('home');
   const all = store.peek('projects').length;
   const shown = visible().length;
-  const tabs = [['all', '全部项目'], ['nomask', '待涂遮罩'], ['masked', '已涂待提交']];
+  const tabs = [['all', '全部项目'], ['nomask', '待涂遮罩'], ['masked', '已涂待提交'], ['canvas', '画布']];
   return el('div.list-hd', {},
     ...tabs.map(([k, label]) => el('button.tab', {
       type: 'button', class: `tab${filter === k ? ' is-on' : ''}`, text: label,
@@ -207,6 +212,10 @@ function grid() {
   const list = visible();
   if (!list.length) {
     const blank = !store.peek('projects').length;
+    if (store.peek('home').filter === 'canvas') {
+      return emptyState('canvas', '还没有画布', '画布＝空白画面上画几笔，整幅交给云端按提示词生成',
+        el('button.btn.btn--primary', { type: 'button', html: icon('canvas', { cls: 'icon icon--sm' }) + '<span>新建画布</span>', onclick: () => createCanvas() }));
+    }
     return emptyState('photos',
       blank ? '还没有项目' : '没有匹配的项目',
       blank ? '把照片拖到上方导入卡，或先建一个空项目' : '换个筛选条件或清空搜索词试试',

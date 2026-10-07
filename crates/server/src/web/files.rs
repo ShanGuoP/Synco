@@ -92,7 +92,10 @@ fn bytes_response(content_type: &str, cache: Option<&str>, etag: Option<&str>, b
 /// 一次阻塞线程里把"在不在、多大、要不要读"判完：304 命中时连文件内容都不碰。
 /// 返回 None = 读不到（目录、不存在、权限），由调用方出 404。
 fn stat_and_read(data: &std::path::Path, rel: &str, inm: Option<&str>) -> Option<(String, Option<Vec<u8>>)> {
-    let joined = data.join(rel);
+    // 词法判过还得再看一次真实路径：`fs::read` 跟随符号链接与 junction，只判字面 `..` 挡不住
+    // 有人在 data/ 或 public/ 里放一个指向外面的链接。这里顺手拿到 canonical 路径，
+    // 之后读的就是被判过的那一个，不存在"判 A 开 B"的中间窗口。
+    let joined = crate::util::data_file(data, rel)?;
     let md = std::fs::metadata(&joined).ok()?;
     if !md.is_file() {
         return None;

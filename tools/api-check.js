@@ -73,10 +73,13 @@ const SWEEP = [
   ['单图', 'GET', '/api/images/1'],
   ['单图 404', 'GET', '/api/images/999'],
   ['清遮罩', 'POST', '/api/images/1/mask', {}],
+  ['派生列表（没有子图也回 200）', 'GET', '/api/images/1/derived'],
+  ['取回画稿缺 result_id 被拒', 'POST', '/api/canvas/1/use-sketch', {}],
   ['项目设置读写', 'POST', '/api/projects/1/settings', { loras: [{ name: 'x', strength: 1, enabled: true }] }],
   ['参数 cfg', 'GET', '/api/cfg'],
   ['工坊设置', 'GET', '/api/settings'],
   ['工作流路径写入', 'POST', '/api/settings/workflow', { path: 'D:/不存在的目录/wf.json' }],
+  ['角色表读得到', 'GET', '/api/workflow/roles'],
   ['云端保存', 'POST', '/api/cloud', { kind: 'cloud', base: 'http://127.0.0.1:1/v1', model: 'm-check', key: 'sk-local-check', timeout: '5000', concurrency: 9, stitch_expand: 64, stitch_feather: 200, stitch_edge: 1024 }],
   ['云端读回', 'GET', '/api/cloud'],
   ['云端 edit 缺图', 'POST', '/api/cloud/edit', { image_id: 999, mask_b64: PNG, settings: {} }],
@@ -325,6 +328,14 @@ async function workflowSelfCheck(base, dataDir) {
   const insp = await req(base, 'GET', '/api/workflow/inspect');
   ok('清点认出 API 格式与节点数', insp.status === 200 && insp.body.format === 'api' && insp.body.total === 6, JSON.stringify(insp.body).slice(0, 140));
   ok('清点报得出缺缝合那一对', insp.body.stitch_pair_ok === false && (insp.body.known_missing || []).includes('InpaintStitchImproved'), JSON.stringify(insp.body.known_missing));
+
+  // 参数读得到 ≠ 这张图能用来提交：缺必需角色时必须拒绝，而不是悄悄改用内置图
+  const roles = await req(base, 'GET', '/api/workflow/roles');
+  ok('图不完整时拒绝接管而不是回退', roles.status === 200 && roles.body.is_api === true && roles.body.can_takeover === false
+    && String(roles.body.errors.join('')).includes('找不到节点'), JSON.stringify(roles.body.errors).slice(0, 220));
+  ok('角色表回得来这个文件的节点清单', (roles.body.nodes || []).length === 6, JSON.stringify((roles.body.nodes || []).map(x => x.id)));
+  const badRole = await req(base, 'POST', '/api/workflow/roles', { roles: { unet: '14' } });
+  ok('指错类名的角色被拒并给理由', (badRole.body.rejected || []).length === 1 && /UNETLoader/.test(String(badRole.body.rejected[0])), JSON.stringify(badRole.body.rejected));
   const junk = path.join(dataDir, 'wf-junk.json');
   fs.writeFileSync(junk, JSON.stringify({ hello: { world: 1 } }));
   // 这个接口不接路径参数：带了也只会按库里存的那条走（免得变成任意本地文件的读取口）
@@ -338,6 +349,42 @@ async function workflowSelfCheck(base, dataDir) {
   ok('读不到已知节点时不谎称读自工作流', set2.body.cfg_source === 'builtin' && /没有本管线认识的节点/.test(String(set2.body.cfg_error)), JSON.stringify(set2.body).slice(0, 220));
   const set3 = await req(base, 'POST', '/api/settings/workflow', { path: path.join(dataDir, 'nope.json').replace(/\\/g, '/') });
   ok('文件不存在说得不含糊', set3.body.cfg_source === 'builtin' && String(set3.body.cfg_error).includes('不存在'), JSON.stringify(set3.body).slice(0, 160));
+  return fails;
+}
+
+async function refsSelfCheck(base, dataDir) {
+  const fails = [];
+  const ok = (name, cond, detail) => {
+    console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond ? '' : '：' + detail}`);
+    if (!cond) fails.push(name);
+  };
+  const ca = await req(base, 'POST', '/api/canvas/create', { name: '参考图自检', w: 1024, h: 1024 });
+  const cb = await req(base, 'POST', '/api/canvas/create', { name: '参考图另一张画布', w: 1024, h: 1024 });
+  const a = ca.body.image_id, b = cb.body.image_id;
+  ok('两张画布建起来了', !!a && !!b, JSON.stringify({ a, b }));
+
+  const empty = await req(base, 'POST', `/api/canvas/${a}/refs`, {});
+  ok('没说要加哪几张就明确拒', empty.status === 400, `${empty.status} ${JSON.stringify(empty.body)}`);
+  const junk = await req(base, 'POST', `/api/canvas/${a}/refs`, { files: [{ b64: 'data:image/png;base64,AAAA' }] });
+  ok('解不开的参考图被拒而不是落盘', junk.status === 400, `${junk.status} ${JSON.stringify(junk.body)}`);
+
+  // 曾经能读到 app.db 的那族路径形态：槽位集合里出现它们必须被丢掉，且**不动盘上的文件**
+  const dbFile = path.join(dataDir, 'app.db');
+  const inj = await req(base, 'PUT', `/api/canvas/${a}/refs`, { paths: ['../../app.db', 'app.db', '/etc/passwd', 'projects/999/x.png'] });
+  ok('注入型 rel 进不了集合', inj.status === 200 && (inj.body.refs || []).length === 0, `${inj.status} ${JSON.stringify(inj.body)}`);
+  ok('跟着坏集合删文件这条路被挡住（库还在盘上）', fs.existsSync(dbFile), 'app.db 被删了');
+
+  const tooMany = await req(base, 'PUT', `/api/canvas/${a}/refs`, { paths: Array.from({ length: 9 }, (_, i) => `projects/1/x${i}.png`) });
+  ok('整组替换超上限被拒', tooMany.status === 400, `${tooMany.status} ${JSON.stringify(tooMany.body)}`);
+
+  const gc = await req(base, 'POST', `/api/canvas/${b}/generate`, { settings: { prompt: '另一张画布的那一版' } });
+  const ridB = gc.body.result_id;
+  const cross = await req(base, 'POST', `/api/canvas/${a}/refs`, { from_result: ridB });
+  ok('别的画布的记录不能往这张上搬参考图', cross.status === 400 && /不是这张画布/.test(String(cross.body?.error || '')),
+    `${cross.status} ${JSON.stringify(cross.body)}`);
+
+  const one = await req(base, 'GET', `/api/canvas/${a}`);
+  ok('画布详情带得上槽位集合与上限', Array.isArray(one.body.refs) && one.body.refs_max >= 1, JSON.stringify(one.body).slice(0, 160));
   return fails;
 }
 
@@ -370,15 +417,18 @@ async function main() {
 
   console.log('\n工作流两种格式 / 节点清点自检');
   const wf = await workflowSelfCheck(base, dataDir);
+
+  console.log('\n画布参考图槽位自检');
+  const rf = await refsSelfCheck(base, dataDir);
   proc.kill();
-  if (bad || m1.length || m3.length || ph.length || wf.length || tv.length) console.log('\n—— 服务输出 ——\n' + log.join('').split('\n').slice(-40).join('\n'));
+  if (bad || m1.length || m3.length || ph.length || wf.length || rf.length || tv.length) console.log('\n—— 服务输出 ——\n' + log.join('').split('\n').slice(-40).join('\n'));
   if (!process.argv.includes('--keep')) {
     // 进程还在退的时候 Windows 会锁着目录，等一会儿再删，删不掉也不算失败
     await new Promise(r => setTimeout(r, 600));
     try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { console.log(`（临时目录留着了：${dataDir}）`); }
   }
-  console.log(`\n失败计数 → 端点扫查 ${bad} · 穿越 ${tv.length} · M1 ${m1.length} · M3 ${m3.length} · 短语 ${ph.length} · 工作流 ${wf.length}`);
-  process.exit(bad || tv.length || m1.length || m3.length || ph.length || wf.length ? 1 : 0);
+  console.log(`\n失败计数 → 端点扫查 ${bad} · 穿越 ${tv.length} · M1 ${m1.length} · M3 ${m3.length} · 短语 ${ph.length} · 工作流 ${wf.length} · 参考图 ${rf.length}`);
+  process.exit(bad || tv.length || m1.length || m3.length || ph.length || wf.length || rf.length ? 1 : 0);
 }
 
 main().catch(e => { console.error(e); process.exit(2); });

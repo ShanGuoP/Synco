@@ -87,24 +87,38 @@ function startMock() {
       const text = body.toString('latin1');
       const size = /name="size"\r\n\r\n([^\r\n]+)/.exec(text);
       const prompt = /name="prompt"\r\n\r\n([^\r\n]*)/.exec(text);
-      hits.push({
+      const hit = {
         url: req.url, bytes: body.length,
         size: size ? size[1] : null,
         hasMask: /name="mask"/.test(text),
         prompt: prompt ? prompt[1] : '',
-      });
-      const start = body.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-      if (start < 0) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end('{"error":"mock 没收到 PNG"}'); }
-      const end = body.indexOf('\r\n--', start);
-      const pngBytes = body.subarray(start, end < 0 ? body.length : end);
+      };
+      hits.push(hit);
+      // 每个 image part 都是一个 PNG 段：多参考图之后要把**每一份**都记下来，
+      // 不然"发出去的是不是这一行的快照"只看得到第一份，剩下几张悄悄漏了也不知道
+      const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const images = [];
+      for (let at = body.indexOf(sig); at >= 0; at = body.indexOf(sig, at + 1)) {
+        const end = body.indexOf('\r\n--', at);
+        images.push(body.subarray(at, end < 0 ? body.length : end));
+        if (end < 0) break;
+      }
+      if (!images.length) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end('{"error":"mock 没收到 PNG"}'); }
+      const pngBytes = images[0];
+      hit.image = pngBytes;
+      hit.images = images;
       // 反向那一次要回一张"完全不一样"的图，才验得出保住的主体确实没被动过
       let reply = pngBytes;
       if (/INVERT/.test(prompt ? prompt[1] : '')) {
         const iw = pngBytes.readUInt32BE(16), ih = pngBytes.readUInt32BE(20);
         reply = png(iw, ih, () => [0, 255, 0, 255]);
       }
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ data: [{ b64_json: reply.toString('base64') }] }));
+      const send = () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ b64_json: reply.toString('base64') }] }));
+      };
+      // HOLD：把唯一那个坑占住，好让下一行确实排在队列里（排队期间改画稿才测得出读的是哪份）
+      if (/HOLD/.test(prompt ? prompt[1] : '')) setTimeout(send, 2000); else send();
     });
   });
   return new Promise(res => srv.listen(0, '127.0.0.1', () => res({ srv, port: srv.address().port, hits })));
@@ -314,6 +328,137 @@ async function main() {
     await req(srv.base, 'POST', `/api/images/${iid}/mask`, { b64 });  // 后面的用例还要这张遮罩
   }
 
+  // ---- 整图重绘（原图直发）：不看遮罩、不发 mask、回来不缝合 ----
+  const qFull = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid], settings: { prompt: 'FULL 整张重绘', full: true, edge: 1024 } });
+  const ridFull = (qFull.body.results || [])[0]?.result_id;
+  const stFull = await waitRows(srv.base, [ridFull], ['done', 'error']);
+  const fullHit = mock.hits[mock.hits.length - 1];
+  check('整张重绘跑到 done', stFull[0] === 'done', JSON.stringify(stFull) + ' ' + JSON.stringify(qFull.body).slice(0, 140));
+  check('整张重绘连遮罩都不发（这张明明涂着）', !!fullHit && fullHit.hasMask === false, JSON.stringify(fullHit && { size: fullHit.size, hasMask: fullHit.hasMask }));
+  check('整张重绘发的是整图折到 1024 档', Math.max(...String(fullHit && fullHit.size).split('x').map(Number)) === 1024, JSON.stringify(fullHit && fullHit.size));
+  const fullRow = (await req(srv.base, 'GET', `/api/results/${ridFull}`)).body;
+  check('整图成图没有裁切/遮罩那两张诊断图', fullRow.crop_url === null && fullRow.maskoverlay_url === null, JSON.stringify({ c: fullRow.crop_url, m: fullRow.maskoverlay_url }));
+  const fullBuf = (await req(srv.base, 'GET', fullRow.final_url)).body;
+  check('成图按折后的尺寸存，不放大回原图', pngSize(fullBuf).w < W && pngSize(fullBuf).h < H, JSON.stringify(pngSize(fullBuf)));
+  check('这一行的参数快照标了 full', JSON.parse(fullRow.settings_json || '{}').full === true, fullRow.settings_json);
+  const localFull = await req(srv.base, 'POST', '/api/run', { image_ids: [iid], settings: { prompt: 'x', steps: 20, cfg: 3, full: true } });
+  const lf = (localFull.body.results || [])[0] || {};
+  check('本机那条遇到 full 明确拒绝而不是偷跑局部重绘', lf.skipped === true && /只走云端/.test(String(lf.reason)), JSON.stringify(lf));
+
+  // ---- 画布笔迹快照：每一步各存一份，取回要逐字节回到当时 ----
+  const cv = await req(srv.base, 'POST', '/api/canvas/create', { name: '快照自检', w: 1024, h: 1024 });
+  const cid = cv.body.image_id;
+  const ink = (px) => png(1024, 1024, (x, y) => px(x, y) ? [31, 30, 28, 255] : [0, 0, 0, 0]);
+  const ink1 = ink((x, y) => x > 100 && x < 160 && y > 200 && y < 800);
+  const ink2 = ink((x, y) => y > 500 && y < 560 && x > 100 && x < 900);
+  const put = async b => req(srv.base, 'POST', `/api/canvas/${cid}/sketch`, { b64: 'data:image/png;base64,' + b.toString('base64') });
+  await put(ink1);
+  const g1 = await req(srv.base, 'POST', `/api/canvas/${cid}/generate`, { settings: { prompt: '第一版的提示词' } });
+  const rid1 = g1.body.result_id;
+  await waitRows(srv.base, [rid1], ['done', 'error']);
+  const row1 = (await req(srv.base, 'GET', `/api/results/${rid1}`)).body;
+  check('画布这一版留下了线稿快照', /_sketch\.png$/.test(String(row1.sketch_url || '')), JSON.stringify(row1.sketch_url));
+  const snap1 = (await req(srv.base, 'GET', row1.sketch_url)).body;
+  check('快照是当时那份画稿的原件（逐字节，不重编码）', Buffer.compare(snap1, ink1) === 0, `${snap1.length} vs ${ink1.length}`);
+  await put(ink2);
+  const g2 = await req(srv.base, 'POST', `/api/canvas/${cid}/generate`, { settings: { prompt: '第二版的提示词' }, rerun_of: rid1 });
+  const rid2 = g2.body.result_id;
+  await waitRows(srv.base, [rid2], ['done', 'error']);
+  const row2 = (await req(srv.base, 'GET', `/api/results/${rid2}`)).body;
+  const snap2 = (await req(srv.base, 'GET', row2.sketch_url)).body;
+  const sent2 = mock.hits[mock.hits.length - 1];
+  check('每一步各存一份，两版互不覆盖', Buffer.compare(snap1, snap2) !== 0 && Buffer.compare(snap2, ink2) === 0,
+    JSON.stringify({ s1: snap1.length, s2: snap2.length }));
+
+  /* 排在队列里的时候接着画两笔：发出去的必须还是**这一行提交那一刻**那份快照，而不是此刻的画稿。
+     并发收到 1、用一个慢回的任务占住唯一的坑，g3 才会真的停在 queued——
+     不然 generate 一返回它就被叫走，改了画稿也测不到这一条。
+     比的是"发出去的字节"而不是"存下来的字节"：后者以前就断言过，正是这条漏掉了才让 t0/t1 错位溜过去。 */
+  await req(srv.base, 'POST', '/api/cloud', { concurrency: '1' });
+  const qHold = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid], settings: { prompt: 'HOLD 占位' } });
+  const ridHold = (qHold.body.results || [])[0]?.result_id;
+  const g3 = await req(srv.base, 'POST', `/api/canvas/${cid}/generate`, { settings: { prompt: '排队中改了画稿' } });
+  const rid3 = g3.body.result_id;
+  const ink3 = ink((x, y) => x > 700 && x < 760 && y > 100 && y < 900);
+  await put(ink3);
+  const stQ = await waitRows(srv.base, [ridHold, rid3], ['done', 'error']);
+  const sent3 = mock.hits[mock.hits.length - 1];
+  check('排队期间改的画稿不会倒灌进这一枪', stQ.every(s => s === 'done') && !!sent2 && !!sent3
+    && Buffer.compare(sent2.image, sent3.image) === 0,
+    JSON.stringify({ st: stQ, s2: sent2 && sent2.image.length, s3: sent3 && sent3.image.length }));
+  // 对照：笔迹真换了，发出去的就得跟着变——不然上面那条"相等"可能只是因为两次都没送出东西
+  const g4 = await req(srv.base, 'POST', `/api/canvas/${cid}/generate`, { settings: { prompt: '画稿已经是第三版了' } });
+  const rid4 = g4.body.result_id;
+  await waitRows(srv.base, [rid4], ['done', 'error']);
+  const sent4 = mock.hits[mock.hits.length - 1];
+  check('换了笔迹之后发出去的确实跟着变', !!sent4 && Buffer.compare(sent3.image, sent4.image) !== 0,
+    JSON.stringify({ s3: sent3 && sent3.image.length, s4: sent4 && sent4.image.length }));
+  await req(srv.base, 'POST', '/api/cloud', { concurrency: '2' });
+
+  /* ---- 参考图：槽位 → 这一行自己的快照 → 发出去的每一个 part ----
+     提交后立刻把槽位清空：这一版发出去的还是当次那两张，才说明"参考了哪几张"是行上的事实而不是槽位的事实 */
+  const b64of = buf => 'data:image/png;base64,' + buf.toString('base64');
+  const refA = png(1024, 1024, (x) => (x > 512 ? [200, 30, 26, 255] : [0, 0, 0, 0]));     // 半张透明：该被拍到白底上
+  const refB = png(1024, 1024, () => [24, 56, 168, 255]);
+  const addR = await req(srv.base, 'POST', `/api/canvas/${cid}/refs`, { files: [{ b64: b64of(refA) }, { b64: b64of(refB) }] });
+  check('两张参考图挂进槽位', addR.status === 200 && (addR.body.refs || []).length === 2, JSON.stringify(addR.body).slice(0, 200));
+  const g5 = await req(srv.base, 'POST', `/api/canvas/${cid}/generate`, { settings: { prompt: '带两张参考图这一版' } });
+  const rid5 = g5.body.result_id;
+  const cleared = await req(srv.base, 'PUT', `/api/canvas/${cid}/refs`, { paths: [] });
+  await waitRows(srv.base, [rid5], ['done', 'error']);
+  const row5 = (await req(srv.base, 'GET', `/api/results/${rid5}`)).body;
+  const snap5 = await Promise.all((row5.refs || []).map(async r => (await req(srv.base, 'GET', r.url)).body));
+  const hit5 = mock.hits[mock.hits.length - 1];
+  check('清空槽位不影响这一版的参考图', cleared.status === 200 && (cleared.body.refs || []).length === 0, JSON.stringify(cleared.body).slice(0, 120));
+  check('这一版行上记着两张自己的参考快照', (row5.refs || []).length === 2
+    && row5.refs.every(r => /_ref\d\.png$/.test(String(r.url)) && r.dead === false), JSON.stringify(row5.refs).slice(0, 220));
+  check('发出去的 part = 画稿 + 这两张快照（逐字节）', !!hit5 && hit5.images.length === 3
+    && Buffer.compare(hit5.images[1], snap5[0]) === 0 && Buffer.compare(hit5.images[2], snap5[1]) === 0,
+    JSON.stringify({ parts: hit5 && hit5.images.length, refs: snap5.map(b => b.length) }));
+
+  /* 画稿一笔没涂 + 挂了参考图：不发那张全白的纸，这一枪就是"按参考图与提示词生成" */
+  await put(ink(() => false));
+  await req(srv.base, 'POST', `/api/canvas/${cid}/refs`, { files: [{ b64: b64of(refB) }] });
+  const g6 = await req(srv.base, 'POST', `/api/canvas/${cid}/generate`, { settings: { prompt: '只有参考图这一版' } });
+  const rid6 = g6.body.result_id;
+  await waitRows(srv.base, [rid6], ['done', 'error']);
+  const row6 = (await req(srv.base, 'GET', `/api/results/${rid6}`)).body;
+  const snap6 = (await req(srv.base, 'GET', row6.refs[0].url)).body;
+  const hit6 = mock.hits[mock.hits.length - 1];
+  check('空白画稿 + 参考图：只发参考图，不发那张全白的纸', (row6.refs || []).length === 1
+    && !!hit6 && hit6.images.length === 1 && Buffer.compare(hit6.images[0], snap6) === 0,
+    JSON.stringify({ parts: hit6 && hit6.images.length, refs: (row6.refs || []).length }));
+
+  await put(ink(() => false));                     // 再画"干净"，屏幕上已经不是第一版
+  const took = await req(srv.base, 'POST', `/api/canvas/${cid}/use-sketch`, { result_id: rid1 });
+  const cur0 = (await req(srv.base, 'GET', `/api/canvas/${cid}`)).body;
+  const back1 = (await req(srv.base, 'GET', cur0.sketch_url)).body;
+  check('取回第一版画稿成功', took.status === 200 && took.body.ok === true, JSON.stringify(took.body));
+  check('取回后画稿逐字节回到第一版', Buffer.compare(back1, ink1) === 0, `${back1.length} vs ${ink1.length}`);
+  const wrong = await req(srv.base, 'POST', `/api/canvas/${cid}/use-sketch`, { result_id: rid1 - 1000 });
+  check('取回不认的记录不会覆盖画稿', wrong.status >= 400 || (wrong.body && wrong.body.error), JSON.stringify(wrong.body).slice(0, 120));
+  const snapRel = String(row2.sketch_url).replace(/^\/file\//, '');
+  check('快照文件确实在盘上', fs.existsSync(path.join(data, snapRel)), snapRel);
+  await req(srv.base, 'DELETE', `/api/results/${rid2}`);
+  check('删这条记录连带删掉它的快照', !fs.existsSync(path.join(data, snapRel)), '快照还留在盘上');
+  check('删一行不影响另一行的快照', fs.existsSync(path.join(data, String(row1.sketch_url).replace(/^\/file\//, ''))), row1.sketch_url);
+
+  // ---- 派生谱系：fork 写父子；老库那种"只有名字里有派生号"的行靠重启回填 ----
+  const fork = await req(srv.base, 'POST', `/api/results/${rows[0]}/fork`, {});
+  const kidId = fork.body.image_id;
+  check('另存为新图建出了子图', !!kidId && fork.body.derived_from === iid, JSON.stringify(fork.body).slice(0, 160));
+  const kids = (await req(srv.base, 'GET', `/api/images/${iid}/derived`)).body;
+  check('派生列表按父子关系查得到', (kids.images || []).some(k => k.id === kidId), JSON.stringify(kids).slice(0, 160));
+  const legacyName = `老图 派生${rows[0]}.png`;
+  await req(srv.base, 'POST', `/api/projects/${proj.body.id}/images`, { files: [{ name: legacyName, b64: 'data:image/png;base64,' + png(2, 2, () => [9, 9, 9, 255]).toString('base64'), w: 2, h: 2 }] });
+  const pj2 = (await req(srv.base, 'GET', `/api/projects/${proj.body.id}`)).body;
+  const prow = (pj2.images || []).find(x => x.id === iid) || {};
+  const krow = (pj2.images || []).find(x => x.id === kidId) || {};
+  const lrow = (pj2.images || []).find(x => x.name === legacyName) || {};
+  check('父图角标带得出派生计数', prow.derived_count === 1, JSON.stringify(prow.derived_count));
+  check('子图行认得自己的父图与来源结果', krow.derived_from === iid && krow.derived_result === rows[0], JSON.stringify({ d: krow.derived_from, r: krow.derived_result }));
+  check('刚导入的行没有父子（只有 fork 与老名字才有）', lrow.derived_from == null, JSON.stringify(lrow.derived_from));
+
   // 重启续跑：排两行下去，中途杀进程，再起——queued 该接着跑，在飞的那次判掉
   const q2 = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid, iid, iid], settings: { prompt: '重启后还要跑完' } });
   const rows2 = (q2.body.results || []).map(r => r.result_id);
@@ -324,6 +469,20 @@ async function main() {
   const st2 = await waitRows(srv.base, rows2, ['done', 'error'], 90000);
   check('重启后 queued 行被接回去跑到终态', st2.length === 3 && st2.every(s => s === 'done' || s === 'error'), st2.join(','));
   check('续跑确实又调了云端', mock.hits.length > 2, `hits=${mock.hits.length}`);
+  // 老库的派生行是启动时按文件名回填的：名字里那个号必须能反查回来源结果的图
+  const pj3 = (await req(srv.base, 'GET', `/api/projects/${proj.body.id}`)).body;
+  const lrow2 = (pj3.images || []).find(x => x.name === legacyName) || {};
+  check('重启后老派生行按文件名回填上了父图', lrow2.derived_from === iid, JSON.stringify({ n: lrow2.name, d: lrow2.derived_from }));
+  const kids2 = (await req(srv.base, 'GET', `/api/images/${iid}/derived`)).body;
+  check('回填的子图也进得了派生列表', (kids2.images || []).length === 2, JSON.stringify((kids2.images || []).map(k => k.id)));
+  // 删父图：子图作为独立成品要留着，但来源引用得清掉（否则计数指向空 id）
+  const del = await req(srv.base, 'DELETE', `/api/images/${iid}`);
+  const kd3 = await req(srv.base, 'GET', `/api/images/${iid}/derived`);
+  const pj4 = (await req(srv.base, 'GET', `/api/projects/${proj.body.id}`)).body;
+  const still = (pj4.images || []).find(x => x.id === kidId);
+  check('删父图不连带删掉用户另存出去的子图', del.status === 200 && !!still, JSON.stringify({ s: del.status, still: !!still }));
+  check('父图没了，子图的来源引用被清掉', kd3.status === 200 && (kd3.body.images || []).length === 0 && still.derived_from == null,
+    JSON.stringify({ ks: kd3.status, n: (kd3.body.images || []).length, d: still.derived_from }));
 
   srv.proc.kill();
   if (!process.argv.includes('--keep')) {

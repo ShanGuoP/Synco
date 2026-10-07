@@ -84,6 +84,21 @@ pub fn file_alive(data: &Path, rel: &Value) -> bool {
     }
 }
 
+/// 库里的相对路径 → data/ 内一个**真实存在**的文件路径。
+///
+/// 词法判（[`rel_ok`]）之后还要看一次真实路径：`fs::read`/`remove_file` 都跟随符号链接与
+/// junction，只判字面 `..` 挡不住重解析点。返回的是 `canonicalize` 之后的路径，调用方拿它
+/// 去读/删/复制，就不会出现"判的是 A、开的是 B"那种中间被人换掉的窗口。
+/// 解不开（不存在、被删、指到根外）一律 `None`，语义等同"盘上没这个文件"。
+pub fn data_file(data: &Path, rel: &str) -> Option<PathBuf> {
+    if rel.is_empty() || !rel_ok(rel) {
+        return None;
+    }
+    let root = data.canonicalize().ok()?;
+    let real = data.join(rel).canonicalize().ok()?;
+    inside(&root, &real).then_some(real)
+}
+
 /// 与 Buffer.from(x,'base64') 一样宽容：丢掉字母表以外的字符再解，不要求规范填充
 pub fn decode_b64(s: &str) -> Vec<u8> {
     let body = match s.find(";base64,") {

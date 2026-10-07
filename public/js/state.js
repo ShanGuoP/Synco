@@ -69,7 +69,7 @@ const pick = (src, keys, fb) => {
   for (const k of keys) if (src && src[k] !== undefined && src[k] !== null) out[k] = src[k];
   return out;
 };
-const KEYS = ['prompt', 'negative', 'steps', 'cfg', 'seed', 'randomSeed', 'loras', 'edge', 'mode'];
+const KEYS = ['prompt', 'negative', 'steps', 'cfg', 'seed', 'randomSeed', 'loras', 'edge', 'mode', 'invert', 'full'];
 
 /** 项目记忆的参数 > 工作流默认；LoRA 以工作流为骨架、按名字合并强度/开关 */
 export function resolveSettings(saved, cfg) {

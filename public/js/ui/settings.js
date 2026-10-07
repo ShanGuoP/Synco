@@ -35,10 +35,14 @@ function createWorkflowPane() {
 
   async function load() {
     try {
-      const [cfg, s] = await Promise.all([api.cfg(), api.backends()]);
+      const [cfg, s, r] = await Promise.all([api.cfg(), api.backends(), api.workflowRoles().catch(() => null)]);
       inp.value = cfg.workflow_path || '';
-      fill(state, okRow(cfg.cfg_source === 'workflow', cfg.cfg_source === 'workflow' ? '参数读自本机工作流' : '工作流读不到，正用内置默认参数', cfg.workflow_error || ''),
-        okRow(!!s.active, '当前后端 ' + String(s.active).replace(/^https?:\/\//, '')));
+      const rows = [
+        okRow(cfg.cfg_source === 'workflow', cfg.cfg_source === 'workflow' ? '参数读自本机工作流' : '工作流读不到，正用内置默认参数', cfg.workflow_error || ''),
+      ];
+      if (r) rows.push(graphRow(r));
+      rows.push(okRow(!!s.active, '当前后端 ' + String(s.active).replace(/^https?:\/\//, '')));
+      fill(state, ...rows);
     } catch (e) { fill(state, okRow(false, '读不到设置', e.message)); }
   }
 
@@ -53,9 +57,10 @@ function createWorkflowPane() {
 
   const node = el('div.dlg-flow', {},
     el('div', {}, el('h4.dlg-h4', { text: '工作流文件路径' }), inp,
-      el('p.muted', { text: '用来读默认步数 / CFG / LoRA 链与裁切参数。UI 导出（save）与 API 导出（Save (API Format)）都认；API 导出按输入名取值，你在文件里挪动节点不会让参数错位。提交用的计算图仍由程序自己拼。' }),
+      el('p.muted', { text: '填 ComfyUI 的 API 导出（Save (API Format) / Export (API)）：那份 JSON 就是提交用的计算图，Synco 只往里面填照片、遮罩、提示词、种子/步数/CFG 和 LoRA 开关，其余按你文件里那样跑。UI 导出（save）只读参数，当不了计算图。' }),
       el('div', { style: { display: 'flex', gap: '8px', marginTop: '10px' } },
         el('button.btn.btn--primary.btn--sm', { type: 'button', text: '保存并校验', onclick: save }),
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', 'data-tip': '认出哪些节点负责装图 / 采样 / 出图，对不上就自己指', text: '角色映射', onclick: () => editRoles(load) }),
         el('button.btn.btn--ghost.btn--sm', { type: 'button', 'data-tip': '列出这个文件里有哪些节点、缺哪些', text: '清点节点', onclick: () => inspectWorkflow() }),
         el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '重新读取', onclick: load }))),
     state);
@@ -63,9 +68,84 @@ function createWorkflowPane() {
   return { node };
 }
 
+/** 计算图来源那一行：接管成功是绿点，认不出角色是红点（提交会被明确拒掉），非 API 导出是灰点 */
+function graphRow(r) {
+  if (r.can_takeover) return okRow(true, '提交用的计算图：你的工作流', `${Object.keys(r.effective || {}).length} 个角色已就位`);
+  if (!r.is_api) return okRow(null, '提交用的计算图：程序内置', r.reason || '');
+  return okRow(false, '你的工作流还不能接管提交（提交会被拒）', (r.errors || []).join('；'));
+}
+
 /**
- * 把工作流文件里的节点摊开给人看。角色映射要接管提交（下一步），
- * 而那张角色表得由人先看清自己文件里有什么才好定。
+ * 角色映射编辑器：每一行是一个"Synco 要往哪儿填东西"，下拉里只有同一种类的节点。
+ * 默认值取自动认出的那个——只有你改过的才会存进库，节点号被 ComfyUI 重排时还能重新认。
+ */
+async function editRoles(reload) {
+  let d;
+  try { d = await api.workflowRoles(); } catch (e) { toastErr('读不到角色表', e.message); return; }
+  if (!d.is_api) {
+    modal({
+      title: '这个文件当不了计算图',
+      body: el('p.muted', { text: `${d.reason || '读不到节点表'}。角色映射要的是 API 导出：在 ComfyUI 菜单里点 Save (API Format) 或 Export (API)，再把那个文件指过来。` }),
+      actions: [{ label: '知道了', kind: 'ghost' }],
+    });
+    return;
+  }
+  const auto = d.auto || {}, eff = d.effective || {};
+  const selects = [];
+  const byClass = cls => (d.nodes || []).filter(n => n.class_type === cls);
+  const rows = (d.roles || []).map(r => {
+    const list = byClass(r.class);
+    const cur = eff[r.key] || '';
+    const sel = el('select.select', { style: { flex: '0 0 auto', minWidth: '112px', maxWidth: '48%' } },
+      el('option', { value: '', text: r.required ? '（没认出，必须指一个）' : '不用这一路输出' }),
+      ...list.map(n => el('option', {
+        value: n.id,
+        text: `节点 ${n.id}${n.title ? ` · ${n.title}` : ''}${auto[r.key] === n.id ? '（自动认出）' : ''}`,
+      })));
+    sel.value = cur;
+    if (!list.length) sel.disabled = true;
+    selects.push({ key: r.key, node: sel, auto: auto[r.key] });
+    return el('div.set__row', {},
+      el('b', { text: r.label }),
+      el('span.set__extra', { text: `${r.class} · 图里 ${list.length} 个${r.required ? ' · 必需' : ''}` }),
+      sel);
+  });
+  const verdict = el('div', {});
+  const paintVerdict = (v) => fill(verdict,
+    el('h4.dlg-h4', { text: '校验' }),
+    ...(v.can_takeover ? [okRow(true, '角色齐、连线也对，提交走你这张图')]
+      : [okRow(false, '还不行（提交会被拒）', (v.errors || []).join('；'))]));
+  paintVerdict(d);
+  /* 只交与自动认出不同的那些：全量存进库等于把节点号钉死，
+     而节点号是 ComfyUI 按画布顺序给的，挪一下就会变 */
+  const grab = () => {
+    const out = {};
+    for (const s of selects) if (s.node.value && s.node.value !== s.auto) out[s.key] = s.node.value;
+    return out;
+  };
+  async function saveRoles(handle, close) {
+    try {
+      const r = await api.setWorkflowRoles(grab());
+      paintVerdict(r);
+      if ((r.rejected || []).length) toastErr('有几项没存进去', r.rejected.join('；'));
+      else toastOk('角色映射已保存');
+      if (close) { reload?.(); handle?.close(); }
+    } catch (e) { toastErr('保存失败', e.message); }
+  }
+  return modal({
+    title: '角色映射', wide: true,
+    body: el('div.dlg-flow', {},
+      el('p.muted', { text: 'Synco 按角色往你的图里填东西，不认节点号：挪位置、改编号都不影响。认不出来的在这里指一次，按文件各存一份。' }),
+      ...rows, verdict),
+    actions: [
+      { label: '存一下看校验', kind: 'ghost', run: (h) => { saveRoles(h, false); return false; } },
+      { label: '保存并关闭', kind: 'primary', run: (h) => { saveRoles(h, true); return false; } },
+    ],
+  });
+}
+
+/**
+ * 把工作流文件里的节点摊开给人看（类名与个数），缺哪个认识的角色一并列出。
  */
 async function inspectWorkflow() {
   const busy = toastBusy('清点节点…');
@@ -76,10 +156,10 @@ async function inspectWorkflow() {
   for (const n of d.nodes || []) counts.set(n.class_type, (counts.get(n.class_type) || 0) + 1);
   const row = (k, v) => el('div.set__row', {}, el('b', { text: k }), el('span.set__extra', { text: v }));
   const body = el('div.dlg-flow', {},
-    el('p.muted', { text: d.format === 'api' ? 'API 导出（按输入名取参数）' : 'UI/litegraph 导出（按控件位置取参数）' } + ` · 共 ${d.total} 个节点`),
+    el('p.muted', { text: d.format === 'api' ? 'API 导出（按输入名取参数，也能当计算图提交）' : 'UI/litegraph 导出（按控件位置取参数，只读参数）' } + ` · 共 ${d.total} 个节点`),
     d.stitch_pair_ok ? null : el('div.set__row.is-bad', {}, el('span.dot', { class: 'dot dot--err' }),
       el('b', { text: '没看到裁切与缝合那一对节点' }),
-      el('span.set__extra', { text: '「蒙版外逐像素不动」靠 InpaintCropImproved + InpaintStitchImproved 在工作流里完成。现在这一版提交用的是程序自己拼的图，所以这里只是提示。' })),
+      el('span.set__extra', { text: '「蒙版外逐像素不动」靠 InpaintCropImproved + InpaintStitchImproved 在工作流里完成。缺了它们这张图不能接管提交。' })),
     el('h4.dlg-h4', { text: '节点清单' }),
     ...[...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, n]) => row(k, `${n} 个`)),
     (d.known_missing || []).length

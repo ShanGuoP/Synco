@@ -156,18 +156,28 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
       : String(store.peek('comfy') || '').replace(/^https?:\/\//, '') || '本机 8188';
   }
 
-  /* 反向涂抹只在这条路上有（本地那条要改的是 ComfyUI 工作流本身，是另一件事），
-     而且必须把"涂的是要保的"这件事说当面——它违反直觉。 */
+  /* 反向涂抹与整图重绘都只在这条路上有（本地那条要改的是 ComfyUI 工作流本身，是另一件事），
+     而且必须把"到底把什么发出去"说当面——三种含义里有一种违反直觉，另一种干脆不看遮罩。 */
   const inkSeg = el('div.seg', {},
-    el('button.seg__it', { type: 'button', dataset: { v: '0' }, text: '涂要改的', 'data-tip': '笔迹内重绘，笔迹外保持原图', onclick: () => onInk?.(false) }),
-    el('button.seg__it', { type: 'button', dataset: { v: '1' }, text: '涂要保留的', 'data-tip': '圈住主体，其余整幅重绘', onclick: () => onInk?.(true) }));
+    el('button.seg__it', { type: 'button', dataset: { v: 'part' }, text: '涂要改的', 'data-tip': '笔迹内重绘，笔迹外保持原图', onclick: () => onInk?.('part') }),
+    el('button.seg__it', { type: 'button', dataset: { v: 'keep' }, text: '涂要保留的', 'data-tip': '圈住主体，其余整幅重绘', onclick: () => onInk?.('keep') }),
+    el('button.seg__it', { type: 'button', dataset: { v: 'full' }, text: '整张重绘', 'data-tip': '不看遮罩：原图整张发过去按提示词生成，蒙版外不再逐像素保持', onclick: () => onInk?.('full') }));
   const inkRow = el('div.ed-mode.ed-ink', { hidden: true },
-    el('span.ed-mode__lab', { text: '涂抹含义' }), inkSeg,
+    el('span.ed-mode__lab', { text: '发什么出去' }), inkSeg,
     el('span.muted.nowrap', { text: '反向时画面其余部分都交给云端' }));
 
   function paintInk() {
-    const inv = !!(store.peek('settings') || {}).invert;
-    for (const b of inkSeg.children) b.classList.toggle('is-on', (b.dataset.v === '1') === inv);
+    const s = store.peek('settings') || {};
+    const v = s.full ? 'full' : s.invert ? 'keep' : 'part';
+    for (const b of inkSeg.children) b.classList.toggle('is-on', b.dataset.v === v);
+    inkRow.querySelector('.muted').textContent = v === 'full'
+      ? '整张发过去，不保留任何原图像素'
+      : v === 'keep' ? '反向时画面其余部分都交给云端' : '只有涂到的地方会被改';
+  }
+
+  function setScope() {
+    paintInk();
+    rebuildStages();
   }
 
   /* ---------------- 子标签 + 主体 ---------------- */
@@ -186,6 +196,11 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
     { key: 'submit', label: '提交' },
     { key: 'sample', label: '云端重绘' },
     { key: 'stitch', label: '缝合' },
+  ];
+  /* 整张重绘没有缝合这一步——阶段条上挂着"缝合"就是在说一件不会发生的事 */
+  const FULL_STAGES = [
+    { key: 'submit', label: '提交' },
+    { key: 'sample', label: '云端重绘' },
   ];
   let cloudMode = false;
   let stages = makeSteps(STAGES);
@@ -276,6 +291,17 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
     fill(runLine, txt ? el('span', { class: /失败|错误|拒收/.test(txt) ? 'err' : '', text: txt }) : null);
   }
 
+  /** 阶段条跟着"哪条路 + 发什么出去"走：整张重绘少一格缝合 */
+  function stagesFor() {
+    if (!cloudMode) return STAGES;
+    return (store.peek('settings') || {}).full ? FULL_STAGES : CLOUD_STAGES;
+  }
+  function rebuildStages() {
+    if (busy) return;      // 正在跑的那一张不动阶段条：它的范围在提交那一刻就定死了
+    stages = makeSteps(stagesFor());
+    fill(stagesBox, stages.node);
+  }
+
   /** 本机 / 云端来回切：云端隐掉采样与 LoRA 页，并换一套阶段名 */
   function setCloud(on) {
     paintMode();          // 开关上的高亮与"打到哪"的提示，无论模式有没有变都要跟着 store 走
@@ -291,13 +317,12 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
     const tip = on ? '重置为默认指令' : '重置为工作流默认';
     resetBtn.setAttribute('aria-label', tip);
     resetBtn.setAttribute('data-tip', tip);
-    stages = makeSteps(on ? CLOUD_STAGES : STAGES);
-    fill(stagesBox, stages.node);
+    rebuildStages();
     show();
   }
 
   return {
-    node, sync, setBusy, line, applySettings, clearMarks, setCloud,
+    node, sync, setBusy, line, applySettings, clearMarks, setCloud, setScope,
     get stages() { return stages; },
     get cloud() { return cloudMode; },
     get busy() { return busy; },      // .is-busy 只挡鼠标，键盘路径要自己看一眼

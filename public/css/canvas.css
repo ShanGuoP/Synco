@@ -12,6 +12,9 @@
 .cv {
   --ed-top-h: 46px;
   --ed-tools-h: 64px;
+  /* 栏宽与编辑器同一对数：历史列 176、参数列 344（编辑器那两个定义在 .editor 上，这里够不着） */
+  --col-pre: 176px;
+  --col-prop: 344px;
   height: 100%;
   display: grid;
   grid-template-rows: var(--ed-top-h) var(--ed-tools-h) minmax(0, 1fr);
@@ -34,21 +37,25 @@
   font-family: var(--f-mono); font-size: 10px; letter-spacing: .5px; color: var(--spot-txt);
 }
 
-/* ---------------- 主区：左纸右栏 ---------------- */
+/* ---------------- 主区：纸 · 生成列 · 结果历史列 ----------------
+   两列栏宽照编辑器那一套（--col-prop / --col-pre），历史列不再叠在生成面板下面 */
 .cv-main {
-  grid-area: main; display: grid; grid-template-columns: minmax(0, 1fr) 344px;
+  grid-area: main; display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--col-prop) var(--col-pre);
+  grid-template-areas: "stage gen hist";
   min-height: 0;
 }
 
 /* 纸：画稿是墨+透明底，屏幕上这层白就是发给云端的白，四周仍留中性深底判色 */
-.cv-stage { position: relative; overflow: hidden; background: var(--bg-canvas); min-width: 0; }
+.cv-stage { grid-area: stage; position: relative; overflow: hidden; background: var(--bg-canvas); min-width: 0; }
 .cv-stage.is-pan { cursor: grab; }
 .cv-stage.is-pan:active { cursor: grabbing; }
 .cv-stage.is-paint { cursor: none; }
 .cv-paper { background: #fff; touch-action: none; }
 
-/* ---------------- 右侧生成栏 ---------------- */
+/* ---------------- 生成列 ---------------- */
 .cv-side {
+  grid-area: gen;
   display: flex; flex-direction: column; min-height: 0; min-width: 0;
   background: var(--bg-panel); border-left: 1px solid var(--line-hi);
 }
@@ -61,21 +68,74 @@
 /* 编辑器的 .chips 是按属性列的内边距调的，侧栏自己已经带 padding */
 .chips--side { padding: 0; }
 
-/* 成图历史：复用编辑器的 bare 历史，搬进来别再带弹窗时的限高，滚动交给宿主 */
-.cv-side__hist {
-  flex: 0 1 auto; min-height: 132px; max-height: 42%;
-  overflow-y: auto; border-top: 1px solid var(--line-hi);
-}
-.cv-side__hist .ed-pre--bare { max-height: none; }
+/* ---------------- 结果历史列 ----------------
+   里面就是编辑器那个 .ed-pre 组件本体（同一个标题 + 全部/已出图筛选 + 卡片摆位），
+   只是它在编辑器里靠左、在这里靠右，所以分隔线翻一边 */
+.cv-hist { grid-area: hist; display: flex; min-height: 0; min-width: 0; }
+.cv-hist .ed-pre { flex: 1 1 auto; border-right: 0; border-left: 1px solid var(--line-hi); }
 
-/* ---------------- 成图弹窗 ---------------- */
-.cv-shot { display: block; width: 100%; height: auto; background: #fff; border: 1px solid var(--line-hi); }
+/* ---------------- 参考图槽位 ---------------- */
+.cv-refhd { display: flex; align-items: center; gap: var(--s-2); }
+.cv-refhd__t { font-family: var(--f-display); font-size: var(--f-sm); font-weight: 700; letter-spacing: .4px; }
+.cv-refhd .btn { padding: 2px 7px; }
+.refslots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-2); }
+.refslot {
+  position: relative; aspect-ratio: 1; overflow: hidden;
+  border: 1px solid var(--line-hi); border-radius: var(--r-2); background: var(--bg-field);
+}
+.refslot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.refslot__x {
+  position: absolute; right: 2px; top: 2px; display: grid; place-items: center;
+  width: 18px; height: 18px; padding: 0; cursor: pointer;
+  border: 0; border-radius: var(--r-1); background: rgba(8, 8, 10, .72); color: var(--txt);
+}
+.refslot__x:hover { background: var(--spot); color: var(--on-spot); }
+.refslot__gone {
+  display: grid; place-items: center; width: 100%; height: 100%;
+  font-size: var(--f-xs); color: var(--danger); text-align: center; padding: 2px;
+}
+.refslot--add {
+  display: grid; place-items: center; cursor: pointer;
+  border: 1px dashed var(--line-strong); border-radius: var(--r-2); background: transparent; color: var(--txt-3);
+}
+.refslot--add:hover { border-color: var(--spot); color: var(--spot); }
+/* 挑图弹窗：一行小卡，点一张就收下并关掉（槽位上限小，不做多选） */
+.refpick {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--s-2);
+  max-height: 52vh; overflow-y: auto;
+}
+.refpick__it {
+  display: flex; flex-direction: column; gap: 4px; padding: 0; cursor: pointer;
+  border: 1px solid var(--line-hi); border-radius: var(--r-2); background: var(--bg-field); color: var(--txt-2);
+}
+.refpick__it:hover { border-color: var(--spot); }
+.refpick__it img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; border-radius: var(--r-1) var(--r-1) 0 0; }
+.refpick__it span { font-size: var(--f-xs); padding: 0 4px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refpick__ph { display: block; width: 100%; aspect-ratio: 1; background: var(--bg-card); }
 
 /* ---------------- 窄屏 ---------------- */
+@media (max-width: 1360px) {
+  .cv-main { grid-template-columns: minmax(0, 1fr) 320px var(--col-pre); }
+}
 @media (max-width: 1100px) {
-  .cv-main { grid-template-columns: minmax(0, 1fr) 300px; }
+  /* 再窄就把历史列落到生成列下面，纸还是主角 */
+  .cv-main {
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 40%);
+    grid-template-areas: "stage gen" "stage hist";
+  }
+  .cv-hist { min-height: 132px; }
+  .cv-hist .ed-pre { border-left: 0; border-top: 1px solid var(--line-hi); }
 }
 @media (max-width: 860px) {
-  .cv-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .cv-main {
+    grid-template-columns: minmax(0, 1fr);
+    /* 三段都得给最小高度：以前只有 max-height，纸一撑就把历史列压成 0 高（实测浏览器面板那个窄口就是这样）。
+       但纸是主角，所以它给下限与 1fr，历史列封顶三成，别让叠起来的侧栏把画布挤没 */
+    grid-template-rows: minmax(240px, 1fr) auto minmax(132px, 30%);
+    grid-template-areas: "stage" "gen" "hist";
+  }
   .cv-side { border-left: 0; border-top: 1px solid var(--line-hi); max-height: 46%; }
+  .cv-hist { min-height: 132px; max-height: 40%; }
+  .cv-hist .ed-pre { border-left: 0; }
 }

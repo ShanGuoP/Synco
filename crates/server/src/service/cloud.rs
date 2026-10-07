@@ -218,10 +218,32 @@ pub async fn probe(ctx: &Ctx) -> Value {
     Value::Object(out)
 }
 
+/// 一次出站图像的**单文件**上限。中转那头的口径各家不一样（20MB / 50MB），取最紧的那个：
+/// 超了不是"慢一点"，而是对面直接拒收，用户只看到提交失败、不知所以。
+pub const SEND_MAX_BYTES: usize = 20 * 1024 * 1024;
+/// 一次请求里所有图像 part 的**合计**上限。这个数不是接口契约——多参考图之后单文件判据不够用了
+/// （四张各 19MB 单看都合规，合起来 76MB），先按自家口径收在"三张单文件上限"，撞到货柜再改。
+pub const SEND_MAX_TOTAL: usize = 60 * 1024 * 1024;
+/// 参考图的字段名。`edits` 实测过的形状只有单 `image` + 可选 `mask`；
+/// 多图那一族（`image[]` / 同名重复 `image` / `image_1`…）还没验过，由 `tools/sketch-probe.js --refs` 去撞。
+/// 换形状只改这一行，队列那边不用动。
+pub const REF_FIELD: &str = "image[]";
+
+/// 一次 `images/edits` 的载荷：主输入（画稿折白底 / 裁切区 / 整张原图）+ 可选遮罩 + 任意张参考图。
+/// 三个字节都由调用方保证是 PNG——声明与实际编码不符会被对面整批拒收。
+/// 画稿一笔没涂且挂了参考图时 `image` 传 `None`，这一枪就是"只按参考图与提示词生成"。
+pub struct Edit<'a> {
+    pub image: Option<Vec<u8>>,
+    pub mask: Option<Vec<u8>>,
+    pub refs: Vec<Vec<u8>>,
+    pub prompt: &'a str,
+    pub size: Option<&'a str>,
+}
+
 /// 一次裁切区重绘：图 + 同尺寸「透明=重绘」遮罩，回一张 PNG 字节。
 /// `mask` 传 `None` 时**不带这个 part**——反向涂抹一笔没涂就是"整幅重绘"，
 /// 与其造一张全透明的巨图（各家的遮罩体积上限还不一样），不如按接口本来的样子省略。
-pub async fn edit(ctx: &Ctx, image_buf: Vec<u8>, mask_buf: Option<Vec<u8>>, prompt: &str, size: Option<&str>) -> Result<Vec<u8>, String> {
+pub async fn edit(ctx: &Ctx, e: Edit<'_>) -> Result<Vec<u8>, String> {
     let s = settings(ctx);
     if s.base.is_empty() {
         return Err("云端还没配置 base_url（设置 → 云端）".into());
@@ -232,20 +254,47 @@ pub async fn edit(ctx: &Ctx, image_buf: Vec<u8>, mask_buf: Option<Vec<u8>>, prom
     if s.key.is_empty() {
         return Err("云端还没填 API key".into());
     }
+    // 先按长度判两道（单文件 / 合计），再拼装 multipart：判体积不该把几十 MB 复制一遍
+    let mut sizes: Vec<usize> = Vec::new();
+    for buf in e.image.iter().chain(e.refs.iter()).chain(e.mask.iter()) {
+        sizes.push(buf.len());
+    }
+    if let Some(big) = sizes.iter().max() {
+        if *big > SEND_MAX_BYTES {
+            return Err(format!(
+                "要发出去的图里有 {} MB 的一份，超过单文件上限 {} MB：换小一点的图，或把尺寸胶囊调小一档",
+                big / 1048576,
+                SEND_MAX_BYTES / 1048576
+            ));
+        }
+    }
+    let total: usize = sizes.iter().sum();
+    if total > SEND_MAX_TOTAL {
+        return Err(format!(
+            "这一次要发 {} MB 图像，超过合计上限 {} MB：少带几张参考图",
+            total / 1048576,
+            SEND_MAX_TOTAL / 1048576
+        ));
+    }
     let png = |name: &str, b: Vec<u8>| {
         reqwest::multipart::Part::bytes(b).file_name(name.to_string()).mime_str("image/png").expect("mime 常量")
     };
     let mut form = reqwest::multipart::Form::new()
-        .part("image", png("image.png", image_buf))
-        .text("prompt", prompt.to_string())
+        .text("prompt", e.prompt.to_string())
         .text("model", s.model.clone())
         // 显式要 b64：回 URL 的话地址可能带有效期，还得多一跳去下载
         .text("response_format", "b64_json");
-    if let Some(m) = mask_buf {
+    if let Some(buf) = e.image {
+        form = form.part("image", png("image.png", buf));
+    }
+    for (i, buf) in e.refs.into_iter().enumerate() {
+        form = form.part(REF_FIELD, png(&format!("ref{}.png", i + 1), buf));
+    }
+    if let Some(m) = e.mask {
         form = form.part("mask", png("mask.png", m));
     }
     // 尺寸由调用方按原图比例算好后带过来（发出去的就是这个尺寸，不会拉伸）；没带才用设置里填的
-    let sz = size.unwrap_or(&s.size).trim().to_string();
+    let sz = e.size.unwrap_or(&s.size).trim().to_string();
     if !sz.is_empty() {
         form = form.text("size", sz);
     }

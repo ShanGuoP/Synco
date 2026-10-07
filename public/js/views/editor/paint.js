@@ -21,6 +21,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
   let inflight = null;                // 正在飞的保存（含排队的那个），换图前必须等它落定
   let dirtyAt = 0, savedAt = 0;       // 落笔序号 / 已落盘序号：两者不等就有笔迹还没进磁盘
   let owner = 0;                      // 这批笔迹属于哪张图：落笔时定，异步段不再读外部上下文
+  let loadSeq = 0;                    // 装载世代：连点两张图时迟到的 onload 要能认出自己过期
   let iw = 0, ih = 0, k = 1;          // 原图尺寸 / 涂抹层缩放系数
   let rect = null;                    // 落笔时取一次，整笔复用，省掉每次事件的强制布局
   let hostRect = null;                // 光标定位宿主 rect，与 rect 同批缓存
@@ -51,18 +52,23 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
     }
   };
 
+  /* 光标直径：单独抽出来，因为调笔刷要**立刻**改，不能等下一次 rAF 定位时顺手改
+     （隐藏面板里 rAF 不跑是一回事，更主要的是拖动滑块时指针根本不在画布上） */
+  function applyCursorSize() {
+    if (!cursor || !(cursorSize > 0) || cursorSize === appliedCursorSize) return;
+    appliedCursorSize = cursorSize;
+    cursor.style.width = cursor.style.height = `${cursorSize}px`;
+  }
+
   /* 光标只改 transform（合成器直接位移，不触发重排），写入合帧到 rAF */
   function flushCursor() {
     cursorRaf = 0;
+    applyCursorSize();
     if (!cursor || !pendingCursor || !hostRect) return;
     cursor.style.transform =
       `translate(${pendingCursor.x - hostRect.left}px, ${pendingCursor.y - hostRect.top}px) translate(-50%, -50%)`;
     pendingCursor = null;
     if (cursor.style.display !== 'block') cursor.style.display = 'block';
-    if (cursorSize !== appliedCursorSize) {
-      appliedCursorSize = cursorSize;
-      cursor.style.width = cursor.style.height = `${cursorSize}px`;
-    }
   }
   const scheduleCursor = () => { if (!cursorRaf) cursorRaf = requestAnimationFrame(flushCursor); };
 
@@ -219,14 +225,22 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
     get tool() { return tool; },
     get brush() { return brush; },
     setTool(t) { tool = t; if (cursor) cursor.classList.toggle('is-erase', t === 'erase'); },
-    setBrush(n) { brush = Math.max(2, n); },
+    /** 调笔刷要当场改光标直径：rect 是缓存的，move 里那句 measure() 只在落笔或换图后才跑，
+        不然"把笔刷拖大"屏幕上那个圈纹丝不动，要等下一次落笔才对得上 */
+    setBrush(n) {
+      brush = Math.max(2, n);
+      if (cursor && rect && iw) cursorSize = Math.max(4, brush * (rect.width / Math.max(1, iw)));
+      applyCursorSize();
+    },
 
     /** 载入图片：按给定的涂抹层分辨率重设画布，清撤销栈，可选铺上已有遮罩。id 是这批笔迹的归属 */
     async load(w, h, maskUrl, id, paint) {
+      const seq = ++loadSeq;
       /* 先把上一张还没存出去的笔迹落盘再动这块画布：直接 resize 会把没保存的墨抹掉，
          而防抖到点那次 save 见没有新笔迹直接 return，用户视角就是"涂完切图，回来遮罩空了" */
       clearTimeout(saveTimer);
       if (dirtyAt !== savedAt || inflight) { try { await save(); } catch { /* 存不上也别挡住换图，钩子里已经报过 */ } }
+      if (seq !== loadSeq) return false;   //等的这段时间里已经有人换过图了，这一批参数不属于这里
       iw = w; ih = h;
       owner = id || 0;
       // 涂抹层与底图同分辨率（proxy 档），保存时原样落盘，上采样交服务端
@@ -245,11 +259,17 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
       let drew = false;
       await new Promise(res => {
         const im = new Image();
-        im.onload = () => { ctx.drawImage(im, 0, 0, mask.width, mask.height); drew = true; res(true); };
+        im.onload = () => {
+          /* 迟到的 onload 不能往已经换掉的画布上画：那会把上一张的遮罩铺进当前这张，
+             接着任意一笔落盘就是"B 图上带着 A 图的笔迹"——外层 showSeq 判在 load 返回之后，撤不回这一步 */
+          if (seq === loadSeq) { ctx.drawImage(im, 0, 0, mask.width, mask.height); drew = true; }
+          res(true);
+        };
         im.onerror = () => res(false);
         // 遮罩是原地覆写的文件，服务端对它发 ETag + no-cache：判新交给条件请求，不再自己拼 ?t=
         im.src = maskUrl;
       });
+      if (seq !== loadSeq) return false;
       baseline = drew;                // 已有遮罩的覆盖范围未知，之后判空读整幅
       return drew;                    // 落盘的遮罩一定是非空的，不必为此整幅回读
     },

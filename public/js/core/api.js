@@ -41,7 +41,14 @@ export const api = {
   canvas:         id => request(`/api/canvas/${id}`),
   saveSketch:     (id, b64) => request(`/api/canvas/${id}/sketch`, { method: 'POST', body: { b64 } }),
   canvasGenerate: (id, settings, rerunOf) => request(`/api/canvas/${id}/generate`, { method: 'POST', body: { settings, rerun_of: rerunOf || null } }),
+  /** 把某一版当时的线稿快照写回画稿本体（"这条不满意 → 回到当时那版笔迹接着改"） */
+  useSketch: (id, resultId) => request(`/api/canvas/${id}/use-sketch`, { method: 'POST', body: { result_id: resultId } }),
+  /** 参考图槽位：加（files[].b64 / image_ids[] / from_result）与整组替换。集合存服务端，刷新还在 */
+  canvasAddRefs: (id, opt) => request(`/api/canvas/${id}/refs`, { method: 'POST', body: opt }),
+  canvasSetRefs: (id, paths) => request(`/api/canvas/${id}/refs`, { method: 'PUT', body: { paths } }),
   delImage: id => request(`/api/images/${id}`, { method: 'DELETE' }),
+  /** 这张图「另存为新图」出去的那些子图（库里按 derived_from 查，不靠文件名猜） */
+  imageDerived: id => request(`/api/images/${id}/derived`),
   saveMask: (id, b64) => request(`/api/images/${id}/mask`, { method: 'POST', body: { b64 } }),
   /** 派生档是服务端后台切的，没补出来时 thumb_url 为 null，调用方回落到 orig_url */
   thumb:   id => request(`/api/images/${id}/thumb`),
@@ -73,6 +80,9 @@ export const api = {
   setWorkflow:   path => request('/api/settings/workflow', { method: 'POST', body: { path } }),
   /** 清点当前存着的工作流文件里有哪些节点（只认库里那条路径，不接参数） */
   workflowInspect: () => request('/api/workflow/inspect'),
+  /** 角色映射：这个文件里谁负责装图、谁负责采样、成图从哪个节点读回来 */
+  workflowRoles: () => request('/api/workflow/roles'),
+  setWorkflowRoles: roles => request('/api/workflow/roles', { method: 'POST', body: { roles } }),
 
   exportGet:    () => request('/api/export'),
   exportSetDir: dir => request('/api/export/dir', { method: 'POST', body: { dir } }),

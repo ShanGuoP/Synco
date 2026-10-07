@@ -8,6 +8,14 @@ use image::{DynamicImage, ExtendedColorType as ColorType, ImageDecoder, ImageEnc
 use stitch_core::Rgba;
 use std::io::Cursor;
 
+/// 解码前先按**头部声明的**尺寸判一次：`DynamicImage::from_decoder` 按那个尺寸一次性分配 RGBA，
+/// 一张几十 KB 的 PNG 声明 30000×30000 就能要 3.6GB——高压缩比炸弹用字节数挡不住（80MB 的
+/// 请求体上限只管得到传输，管不到解码），只能在分配之前挡。
+/// 口径：60MP 的单张缓冲 60e6×4 = 240MB，派生档同一时刻最多两份在加工 = 峰值 480MB；
+/// 你 data 里那张 24MP（4000×6000）离上限还有 2.5 倍。
+const MAX_DECODE_EDGE: u32 = 30000;
+const MAX_DECODE_PX: u64 = 60_000_000;
+
 /// 解码成 RGBA，并把 EXIF 方向烘焙进像素。
 /// 浏览器渲染 `<img>` 时自己按 EXIF 转，我们的缩略图不转就会出现"原图正着看、缩略图横着躺"，
 /// 所以这一步必须在服务端做，而不是指望前端。
@@ -16,6 +24,10 @@ pub fn decode(bytes: &[u8]) -> Result<Rgba, String> {
         .with_guessed_format()
         .map_err(|e| format!("认不出图片格式：{e}"))?;
     let mut decoder = reader.into_decoder().map_err(|e| format!("建解码器失败：{e}"))?;
+    let (dw, dh) = decoder.dimensions();
+    if dw == 0 || dh == 0 || dw.max(dh) > MAX_DECODE_EDGE || dw as u64 * dh as u64 > MAX_DECODE_PX {
+        return Err(format!("图片尺寸超出能处理的范围（{dw}×{dh}；上限长边 {MAX_DECODE_EDGE}、总像素 {MAX_DECODE_PX}）"));
+    }
     // PNG/WEBP 的解码器没有 orientation()，默认就是 Unspecified；JPEG/TIFF 会真读
     let orient = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| format!("解码失败：{e}"))?;

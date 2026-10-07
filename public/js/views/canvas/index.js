@@ -4,7 +4,7 @@
 'use strict';
 import { el, $, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
-import { api } from '../../core/api.js';
+import { api, fileToPayload } from '../../core/api.js';
 import { encodeMask } from '../../core/maskEncode.js';
 import { store, loadProject, loadPhrases } from '../../state.js';
 import { go } from '../../core/router.js';
@@ -14,6 +14,7 @@ import { makeSlider } from '../../ui/controls.js';
 import { createViewport } from '../editor/viewport.js';
 import { createPainter } from '../editor/paint.js';
 import { createHistory } from '../editor/history.js';
+import { createCompare } from '../editor/compare.js';
 import { togglePhrase } from '../editor/params.js';
 import { adopt } from '../../gen.js';
 
@@ -34,6 +35,7 @@ const ZOOMS = [
 
 let c = null;                      // 上下文：只建一次，换画布复用
 let seq = 0;                       // 装载序号，晚到的旧响应要能认出自己过期
+let rerunFrom = null;              // 下一次生成是"哪条成图的再来一版"
 
 export const isCanvasOpen = () => !!c && !$('#canvasView').hidden;
 
@@ -85,8 +87,8 @@ function build() {
   const zoomPct = el('span.tool__val', { text: '100%' });
   const hud = el('span.pill', { text: '—' });
   const saveFlag = el('span.saveflag');
-  const stage = el('div.cv-stage', {}, el('div.vp', {}, layer),
-    el('div.ed-hud.ed-hud--bl', {}, hud));
+  const vpBox = el('div.vp', {}, layer);
+  const stage = el('div.cv-stage', {}, vpBox, el('div.ed-hud.ed-hud--bl', {}, hud));
   // 光标定位要 offsetParent，所以它得在 stage 里面（编辑器那张也是这么挂的）
   const cursor = el('div.brush-cur');
   stage.append(cursor);
@@ -95,6 +97,18 @@ function build() {
     stage, layer,
     onScale: s => { zoomPct.textContent = `${Math.round(s * 100)}%`; c?.painter?.invalidate?.(); },
   });
+  /* 对比层与修图页共用同一个组件：措辞换过来，中缝拖拽那套数学不抄第二份 */
+  const compare = createCompare({
+    onClose: () => { c.cmpId = null; syncResults(c.rows || [], null); },
+    onRestore: r => usePrompt(r),
+    onUseSketch: r => takeSketch(r),
+    copy: {
+      left: '当时画稿', right: '成图', overOnWhite: true,
+      restore: '用这条提示词再改一版',
+      restoreTip: '把这一版的提示词搬回输入框，并记下谱系：下一版会标「改自 #id」',
+    },
+  });
+  vpBox.append(compare.node);
 
   const brushVal = el('span.tool-slider__val', { text: '42' });
   const brushSlider = makeSlider({
@@ -122,7 +136,7 @@ function build() {
     el('div.cv-top__r', {}, saveFlag,
       el('button.btn.btn--ghost.btn--sm', { type: 'button', html: icon('refresh', { cls: 'icon icon--sm' }) + '<span>刷新成图</span>', onclick: () => load(c.imgId) })));
 
-  /* 右侧：提示词 + 短语胶囊 + 提交 + 成图历史 */
+  /* 右侧：提示词 + 短语胶囊 + 参考图槽 + 提交 */
   const ta = el('textarea.textarea', { rows: '6', placeholder: '描述你要生成什么：一段一个主体一个动作', spellcheck: 'false' });
   const chips = el('div.chips.chips--side');
   const count = el('span.badge', { text: '0 字' });
@@ -135,15 +149,38 @@ function build() {
     go2.classList.toggle('is-busy', busy);
     go2.disabled = !!busy;
   };
-  const history = createHistory({ bare: true, emptyHint: '这张画布还没生成过。写好提示词，点右侧「生成」。', onPick: showResult, onDel: delResult });
+
+  /* 参考图槽带：两条来源各一个按钮，不做弹出菜单——槽位状态要一眼看得见 */
+  const refGrid = el('div.refslots');
+  const refCount = el('span.muted', { text: '' });
+  const refFile = el('input', { type: 'file', accept: 'image/*', multiple: 'multiple', hidden: 'hidden', style: { display: 'none' } });
+  refFile.onchange = () => { const fs = [...refFile.files]; refFile.value = ''; addRefFiles(fs); };
+  const refUp = el('button.btn.btn--ghost.btn--sm', {
+    type: 'button', 'data-tip': '相机直出的图、截图都行；会被折进云端合法的尺寸档',
+    html: icon('upload', { cls: 'icon icon--sm' }) + '<span>本地上传</span>', onclick: () => refFile.click(),
+  });
+  const refPick = el('button.btn.btn--ghost.btn--sm', {
+    type: 'button', 'data-tip': '从这个项目里已有的图挑', html: icon('image', { cls: 'icon icon--sm' }) + '<span>从项目挑</span>',
+    onclick: addRefFromProject,
+  });
+  const refBox = el('div.grp', {},
+    el('div.cv-refhd', {}, el('span.cv-refhd__t', { text: '参考图' }), refCount, el('span.grow'), refUp, refPick),
+    el('div.grp__bd', {}, refGrid, refFile));
+
+  /* 右侧两列：生成列 + 结果历史列（与修图页同一套栏宽与卡片摆位，历史不再叠在生成面板下面） */
+  const history = createHistory({
+    onPick: showResult, onDel: delResult, onRestore: restoreRow, onFork: forkResult,
+    emptyHint: '这张画布还没生成过。写好提示词，点右侧「生成」。',
+  });
   const side = el('aside.cv-side', {},
     el('div.col-hd', {}, el('h3', { html: icon('wand', { cls: 'icon icon--sm' }) + '<span>生成</span>' })),
     el('div.cv-side__bd', {},
       el('div.grp', {}, el('div.grp__bd', {}, ta)),
       chips,
       el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, count, el('span.grow'), el('span.muted', { text: '整幅生成 · 不保留画稿像素' })),
-      line, go2),
-    el('div.cv-side__hist', {}, history.node));
+      refBox,
+      line, go2));
+  const histCol = el('div.cv-hist', {}, history.node);
 
   const painter = createPainter({
     mask: paper, cursor, viewport, ink: INK,
@@ -151,8 +188,11 @@ function build() {
     onSaved: onSketchSaved,
   });
 
-  const node = el('div.cv', {}, top, tools, el('div.cv-main', {}, stage, side));
-  const cur = { node, stage, layer, paper, viewport, painter, tools, ta, chips, count, line, hud, name, saveFlag, setFlag, history, go2, paintGo, side };
+  const node = el('div.cv', {}, top, tools, el('div.cv-main', {}, stage, side, histCol));
+  const cur = {
+    node, stage, vpBox, layer, paper, viewport, painter, tools, ta, chips, count, line, hud, name, saveFlag, setFlag,
+    history, compare, go2, paintGo, side, refGrid, refCount, rows: [], refList: [], refMax: 4,
+  };
   paintGo(false);
   return cur;
 }
@@ -188,6 +228,7 @@ export function closeCanvas() {
   if (host) host.hidden = true;
   const shell = $('#shell');
   if (shell) shell.style.visibility = '';
+  c?.compare?.hide();
   Promise.resolve(c?.painter.flush()).catch(() => { /* 关页前冲一次，落不住也有队列里的那行兜着 */ });
 }
 
@@ -204,6 +245,9 @@ async function load(imgId) {
   if (stale()) return;
   c.imgId = imgId;
   c.info = d;
+  c.cmpId = null;
+  c.compare.hide();       // 换画布不能把上一张的对比层留着：那是别人家的成图
+  rerunFrom = null;      // 换画布不清掉谱系，下一版就会挂在上一张画布的成图上
   const im = d.image;
   c.name.textContent = im.name;
   c.hud.textContent = `${im.w}×${im.h} · 云端整幅生成`;
@@ -216,10 +260,119 @@ async function load(imgId) {
   setFlag('已载入');
   paintChips();
   syncResults(d.results || []);
+  c.refMax = d.refs_max || c.refMax || 4;
+  paintRefs(d.refs || []);
 }
 
-function syncResults(rows) {
-  c.history.setResults(rows, null);
+function syncResults(rows, activeId) {
+  c.rows = rows || [];
+  c.history.setResults(c.rows, activeId ?? c.cmpId ?? null);
+}
+
+/* ==================== 参考图槽位 ==================== */
+/* 槽位集合存在服务端（不是浏览器内存）：刷新页面、切走再回来都还要看得见"我挂了哪几张" */
+function paintRefs(list) {
+  c.refList = list || [];
+  fill(c.refGrid,
+    ...c.refList.map(ref => el('div.refslot', { title: ref.name || '' },
+      ref.dead ? el('span.refslot__gone', { text: '文件已丢失' }) : el('img', { src: ref.url, alt: '', loading: 'lazy' }),
+      el('button.refslot__x', {
+        type: 'button', 'aria-label': '撤下这张参考图', 'data-tip': '撤下（不动盘上原来那张）',
+        html: icon('close', { cls: 'icon icon--sm' }),
+        onclick: () => setRefs(c.refList.filter(x => x.path !== ref.path).map(x => x.path)),
+      }))),
+    c.refList.length < c.refMax ? el('button.refslot.refslot--add', {
+      type: 'button', 'aria-label': '从项目里挑一张参考图', 'data-tip': '从项目里挑',
+      html: icon('plus', { cls: 'icon icon--sm' }), onclick: addRefFromProject,
+    }) : null);
+  c.refCount.textContent = `${c.refList.length}/${c.refMax}`;
+}
+
+/** 整组替换：撤一张、清空都走这条。服务端只删"这次不再认"的那些文件 */
+async function setRefs(paths) {
+  try {
+    const d = await api.canvasSetRefs(c.imgId, paths);
+    paintRefs(d.refs || []);
+  } catch (e) { toastErr('槽位没改成', e.message); refreshRefs(); }
+}
+
+async function refreshRefs() {
+  try { const d = await api.canvas(c.imgId); paintRefs(d.refs || []); } catch { /* 集合读不到就维持屏幕上那一版 */ }
+}
+
+const isImgFile = f => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|bmp|avif)$/i.test(f.name || '');
+
+async function addRefFiles(files) {
+  const list = files.filter(isImgFile);
+  if (!list.length) { toastErr('不是图片文件', '支持 png / jpg / webp / bmp / avif'); return; }
+  const room = c.refMax - c.refList.length;
+  if (room <= 0) { toastErr(`参考图最多 ${c.refMax} 张`, '先撤下一张再传'); return; }
+  if (list.length > room) toastErr(`只收前 ${room} 张`, `参考图一次最多 ${c.refMax} 张`);
+  const payloads = [];
+  for (const f of list.slice(0, room)) {
+    try { payloads.push(await fileToPayload(f)); } catch (e) { toastErr('这张读不出来', `${f.name}：${e.message}`); }
+  }
+  if (!payloads.length) return;
+  const busy = toastBusy('正在收下参考图…');
+  try {
+    const d = await api.canvasAddRefs(c.imgId, { files: payloads.map(p => ({ b64: p.b64 })) });
+    busy.close();
+    paintRefs(d.refs || []);
+  } catch (e) { busy.close(); toastErr('参考图没加上', e.message); refreshRefs(); }
+}
+
+async function addRefIds(ids) {
+  if (!ids.length) return;
+  if (c.refMax - c.refList.length <= 0) { toastErr(`参考图最多 ${c.refMax} 张`, '先撤下一张再挑'); return; }
+  try {
+    const d = await api.canvasAddRefs(c.imgId, { image_ids: ids.slice(0, c.refMax - c.refList.length) });
+    paintRefs(d.refs || []);
+  } catch (e) { toastErr('参考图没加上', e.message); refreshRefs(); }
+}
+
+/** 从本项目已有的图里挑：加进来的是**复制的一份**，原图后来被删也不影响"这一版参考了哪张" */
+function addRefFromProject() {
+  const imgs = (store.peek('images') || []).filter(i => i.id !== c.imgId);
+  if (!imgs.length) { toastErr('这个项目里还没有别的图', '先导入几张，或用「本地上传」'); return; }
+  const m = modal({
+    title: '从项目里挑参考图',
+    body: el('div.refpick', {}, ...imgs.map(i => el('button.refpick__it', {
+      type: 'button', onclick: () => { addRefIds([i.id]); m.close('ok'); },
+    }, i.thumb_url ? el('img', { src: i.thumb_url, alt: '', loading: 'lazy' }) : el('span.refpick__ph'),
+      el('span', { text: i.name, title: i.name })))),
+  });
+}
+
+/** 历史条目的「回填」：提示词 + 那一版**实际带走**的参考图整套搬回待提交状态 */
+async function restoreRow(r) {
+  if (!r.prompt) { toastErr('这一版没留提示词'); return; }
+  c.ta.value = r.prompt;
+  syncPrompt();
+  rerunFrom = r.id;
+  c.compare.hide();
+  if (!r.refs?.length) { line(`准备好用 #${r.id} 的提示词再改一版了`); return; }
+  try {
+    const d = await api.canvasAddRefs(c.imgId, { from_result: r.id });
+    paintRefs(d.refs || []);
+    line(`已把 #${r.id} 那版的 ${d.refs.length} 张参考图搬进槽位`);
+  } catch (e) {
+    toastErr('这一版的参考图搬不过来', e.message);
+    line(`提示词已回填，参考图没搬过来：${String(e.message || '').slice(0, 60)}`);
+  }
+}
+
+/** 成图另存为项目里的新图：要接着涂遮罩就走修图页那一条，画布这张不动 */
+async function forkResult(r) {
+  if (!r?.final_url) { toastErr('这条记录还没有成图'); return; }
+  if (r.final_dead) { toastErr('这条成图的文件已经不在了', '记录还留着，PNG 不在盘上了。删掉这条记录即可'); return; }
+  const busy = toastBusy('正在复制成图…');
+  try {
+    const f = await api.forkResult(r.id);
+    await loadProject(c.projectId);
+    busy.close();
+    go(`/p/${c.projectId}/e/${f.image_id}`);
+    toastOk('已另存为新图', `${f.name} · 画布和这张成图各自独立`);
+  } catch (e) { busy.close(); toastErr('另存失败', e.message); }
 }
 
 /* ==================== 胶囊与提示词 ==================== */
@@ -268,13 +421,17 @@ async function submit() {
   if (!prompt) { toastErr('提示词是空的', '画布只看这句话生成'); return; }
   await c.painter.flush();
   const imgId = c.imgId;
+  const rerunOf = rerunFrom; rerunFrom = null;
   let r;
-  try { r = await api.canvasGenerate(imgId, { prompt }); }
+  try { r = await api.canvasGenerate(imgId, { prompt }, rerunOf); }
   catch (e) { toastErr('提交失败', e.message); return; }
   if (!r?.result_id) { toastErr('没有排上', r?.error || '云端没接这次提交'); return; }
   c.busy = true;
   c.paintGo(true);
-  line(`已排进云端队列 #${r.result_id}…`);
+  const withRefs = c.refList.length ? ` · 带 ${c.refList.length} 张参考图` : '';
+  line(rerunOf
+    ? `已排进云端队列 #${r.result_id}（改自 #${rerunOf}${withRefs}）…`
+    : `已排进云端队列 #${r.result_id}${withRefs}…`);
   adopt(r.result_id, imgId, {
     onTick: s => { if (c.imgId === imgId) line(s === 'queued' ? '排队中…' : '云端生成中…'); },
     onDone: async done => {
@@ -294,25 +451,60 @@ function line(txt) {
 }
 
 /* ==================== 成图查看 / 删除 ==================== */
+/**
+ * 点开一条历史：把成图叠在画布上，与**这一版当时的线稿**分栏拉动对比。
+ * 快照功能上线之前的那些版本没有左半边，这时只铺成图并写明原因——
+ * 拿"现在的画稿"冒充"当时的画稿"比不展示更坏。
+ */
 function showResult(r) {
   if (r.status !== 'done' || r.final_dead) {
     toastErr(r.final_dead ? '成图文件已丢失' : '这条还没出图', r.error || '还排在队列里或已经失败');
     return;
   }
-  modal({
-    title: `#${r.id} · 画布成图`,
-    wide: true,
-    body: el('div', { style: { display: 'grid', gap: '10px' } },
-      el('img.cv-shot', { src: r.final_url, alt: `#${r.id}` }),
-      el('p.muted', { text: r.prompt || '（这条没留提示词）' })),
-    actions: [
-      {
-        label: '用这条的提示词', kind: 'primary',
-        run: () => { if (r.prompt) { c.ta.value = r.prompt; syncPrompt(); } },
-      },
-      { label: '关闭', kind: 'ghost' },
-    ],
+  c.cmpId = r.id;
+  syncResults(c.rows, r.id);
+  c.compare.show({
+    origUrl: r.sketch_url || null,
+    resultUrl: r.final_url,
+    title: `#${r.id} · ${(r.prompt || '').slice(0, 46)}${r.prompt && r.prompt.length > 46 ? '…' : ''}`,
+    result: r,
+    leftLabel: r.sketch_url ? '当时画稿' : '这一版没留画稿',
   });
+}
+
+/** 用这一版的提示词再改一版：谱系记在下一行上，历史列才看得出这张是从哪一版迭代来的 */
+function usePrompt(r) {
+  if (!r.prompt) { toastErr('这一版没留提示词'); return; }
+  c.ta.value = r.prompt;
+  syncPrompt();
+  rerunFrom = r.id;
+  c.compare.hide();
+  line(`准备好用 #${r.id} 的提示词再改一版了`);
+}
+
+/** 取回这一版当时的线稿：写回画稿本体，屏幕上回到"提交那一刻我画的东西" */
+async function takeSketch(r) {
+  const ok = await confirm({
+    title: `取回 #${r.id} 那版的画稿`,
+    text: '画布会换成这一版提交时的线稿快照。你现在屏幕上的笔迹会被覆盖（快照本身不动，切回那一版还能再取一次）。',
+    okLabel: '取回画稿',
+  });
+  if (!ok) return;
+  const busy = toastBusy('取回画稿…');
+  try {
+    /* 先把屏幕上的笔迹冲出去再让服务端写回快照：不冲的话随后那次 load() 会带着"取回前那版"
+       的 pending 笔迹 POST 回 /sketch，把刚写回的快照当场盖掉，而提示仍然说"已取回" */
+    await c.painter.flush();
+    await api.useSketch(c.imgId, r.id);
+    busy.close();
+    c.compare.hide();
+    await load(c.imgId);
+    setFlag('已取回这一版的画稿', 'ok');
+    toastOk('画稿已取回', `#${r.id} 那版`);
+  } catch (e) {
+    busy.close();
+    toastErr('取回失败', e.message);
+  }
 }
 
 async function delResult(r) {
@@ -362,18 +554,23 @@ function wireKeys() {
       if (e.key === 'Escape') document.activeElement.blur();
       return;
     }
-    if (e.code === 'Space') { e.preventDefault(); c.viewport.setSpace(true); return; }
+    if (e.code === 'Space') { e.preventDefault(); (c.compare.isOn ? c.compare : c.viewport).setSpace(true); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); onUndo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); return; }
     const k = e.key.toLowerCase();
     if (k === 'b') setTool('brush');
     else if (k === 'e') setTool('erase');
     else if (k === 'h') setTool('pan');
-    else if (k === '0') c.viewport.fit();
-    else if (k === '1') c.viewport.one2one();
-    else if (k === '+' || k === '=') c.viewport.zoomBy(1.3);
-    else if (k === '-') c.viewport.zoomBy(1 / 1.3);
-    else if (e.key === 'Escape') goBack();
+    else if (k === '0') (c.compare.isOn ? c.compare : c.viewport).fit();
+    else if (k === '1') (c.compare.isOn ? c.compare : c.viewport).one2one();
+    else if (k === '+' || k === '=') (c.compare.isOn ? c.compare : c.viewport).zoomBy(1.3);
+    else if (k === '-') (c.compare.isOn ? c.compare : c.viewport).zoomBy(1 / 1.3);
+    // 对比层开着时 Esc 先关对比，不该一步退出画布
+    else if (e.key === 'Escape') { if (c.compare.isOn) c.compare.hide(); else goBack(); }
   });
-  window.addEventListener('keyup', e => { if (e.code === 'Space') c?.viewport.setSpace(false); });
+  window.addEventListener('keyup', e => {
+    if (e.code !== 'Space') return;
+    // 按下时给了谁就还给谁：对比层与画布各有自己的 viewport
+    (c?.compare.isOn ? c.compare : c?.viewport)?.setSpace(false);
+  });
 }

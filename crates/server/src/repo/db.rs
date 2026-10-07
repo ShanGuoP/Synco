@@ -36,9 +36,9 @@ CREATE INDEX IF NOT EXISTS idx_results_project ON results(project_id);
 "#;
 
 /// 旧库补列：前五条是历史库里已有的列，中间三条是 M3 图像服务化要读的派生档，
-/// 后两条分别是提示词短语分桶（presets.kind）与画稿/照片分桶（images.kind）。
+/// 再后面分别是提示词短语分桶、画稿/照片分桶，和这一批的**派生谱系 + 画稿快照**。
 /// 逐条按"列在不在"判重，所以老库直接升上来就行，不需要重建。
-const MIGRATIONS: [(&str, &str, &str); 10] = [
+const MIGRATIONS: [(&str, &str, &str); 13] = [
     ("results", "prompt_id", "ALTER TABLE results ADD COLUMN prompt_id TEXT"),
     ("results", "settings_json", "ALTER TABLE results ADD COLUMN settings_json TEXT"),
     ("results", "rerun_of", "ALTER TABLE results ADD COLUMN rerun_of INTEGER"),
@@ -49,6 +49,12 @@ const MIGRATIONS: [(&str, &str, &str); 10] = [
     ("results", "thumb_path", "ALTER TABLE results ADD COLUMN thumb_path TEXT"),
     ("presets", "kind", "ALTER TABLE presets ADD COLUMN kind TEXT DEFAULT 'preset'"),
     ("images", "kind", "ALTER TABLE images ADD COLUMN kind TEXT DEFAULT 'photo'"),
+    // 「另存为新图」造的子图：父图与来源结果行。以前只把 `派生{rid}` 写进**文件名**，
+    // 于是"这张图派生出了哪几张"只能靠改名字猜，改名就断（项目页那个派生入口要靠它）
+    ("images", "derived_from", "ALTER TABLE images ADD COLUMN derived_from INTEGER"),
+    ("images", "derived_result", "ALTER TABLE images ADD COLUMN derived_result INTEGER"),
+    // 画布每一版生成时的线稿快照：不然用户接着画两笔，就再也回不到"出这张图时我画的是什么"
+    ("results", "sketch_path", "ALTER TABLE results ADD COLUMN sketch_path TEXT"),
 ];
 
 fn has_column(db: &Connection, table: &str, col: &str) -> rusqlite::Result<bool> {
@@ -83,6 +89,52 @@ fn heal_blank_names(db: &Connection) -> rusqlite::Result<()> {
     )?;
     if n > 0 {
         println!("  已给 projects 里 {n} 行空名字补上兜底显示名（早期版本没 trim 就落库）");
+    }
+    Ok(())
+}
+
+/// 从文件名尾部取出来源结果号：`a 派生123.png` → 123。认不出就 None，不猜。
+/// 「派生2版.png」这种手工改过的名字必须返回 None——把 2 当成结果号就会挂到一张无关的图上。
+fn derived_rid(name: &str) -> Option<i64> {
+    let tail = name.rsplit_once("派生")?.1;
+    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() || digits.len() > 18 {
+        return None;
+    }
+    let rest = &tail[digits.len()..];
+    if rest.is_empty() || rest.starts_with('.') {
+        digits.parse::<i64>().ok()
+    } else {
+        None
+    }
+}
+
+/// 历史脏值修复：早期「另存为新图」只把来源写进**文件名**（`… 派生{结果号}.png`），
+/// 库里没有父子关系，于是"这张图派生出了哪几张"只能靠改名字猜、改个名就断。
+/// 这一条把名字里那个结果号反查回 `results.image_id` 落成两列真值。判据幂等：
+/// 只动 `derived_from IS NULL`、名字解析得出、且那条结果行确实存在、父图不是自己的行。
+fn heal_derived_from_names(db: &Connection) -> rusqlite::Result<()> {
+    let mut rows: Vec<(i64, String)> = Vec::new();
+    {
+        let mut st = db.prepare("SELECT id, name FROM images WHERE derived_from IS NULL AND name LIKE '%派生%'")?;
+        let mut it = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        while let Some(v) = it.next() {
+            rows.push(v?);
+        }
+    }
+    let mut n = 0;
+    for (id, name) in rows {
+        let Some(rid) = derived_rid(&name) else { continue };
+        let parent = db
+            .query_row("SELECT image_id FROM results WHERE id=?", [rid], |r| r.get::<_, Option<i64>>(0))
+            .unwrap_or(None);
+        let Some(pid) = parent.filter(|p| *p != id) else { continue };
+        if db.execute("UPDATE images SET derived_from=?, derived_result=? WHERE id=?", (pid, rid, id))? > 0 {
+            n += 1;
+        }
+    }
+    if n > 0 {
+        println!("  已按文件名回填 {n} 张派生图的父子关系（早期版本只把来源写进名字里）");
     }
     Ok(())
 }
@@ -135,8 +187,12 @@ pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
             db.execute(ddl, [])?;
         }
     }
+    // 派生谱系的索引建在补列**之后**：新库的 CREATE TABLE 里没有 derived_from，
+    // 放在 SCHEMA 里会在 open() 第一步就 "no such column" 把整个库卡住
+    db.execute_batch("CREATE INDEX IF NOT EXISTS idx_images_derived ON images(derived_from);")?;
     heal_stale_timestamps(&db)?;
     heal_blank_names(&db)?;
+    heal_derived_from_names(&db)?;
     seed_phrases(&db)?;
     Ok(db)
 }
@@ -198,8 +254,51 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    fn phrase_count(db: &Connection) -> i64 {
-        db.query_row("SELECT COUNT(*) FROM presets WHERE kind='phrase'", [], |r| r.get(0)).unwrap()
+    /// 派生谱系：早期只把来源写进文件名，回填要能挂上父子，且**认不出的一律不猜**
+    #[test]
+    fn 派生名字回填父子_认不出的不动() {
+        let dir = std::env::temp_dir().join(format!("synco-dbderive-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = open(&dir).unwrap();
+        db.execute("INSERT INTO projects(id,name) VALUES (1,'p')", []).unwrap();
+        db.execute(
+            "INSERT INTO images(id,project_id,name,orig_path,w,h) VALUES
+              (3,1,'PLQ.jpg','a',1,1), (4,1,'PLQ 派生7.png','b',1,1), (5,1,'手改 派生2版.png','c',1,1),
+              (6,1,'没 派生 数字.png','d',1,1), (7,1,'孤儿 派生88.png','e',1,1), (8,1,'自派生 派生9.png','f',1,1)",
+            [],
+        )
+        .unwrap();
+        // 7 号结果行属于图 3；9 号结果行属于图 8（自己派生自己，不该挂）
+        db.execute("INSERT INTO results(id,image_id,project_id,status) VALUES (7,3,1,'done'), (9,8,1,'done')", [])
+            .unwrap();
+        heal_derived_from_names(&db).unwrap();
+        let got = |id: i64| -> (Option<i64>, Option<i64>) {
+            db.query_row("SELECT derived_from, derived_result FROM images WHERE id=?", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+        };
+        assert_eq!(got(4), (Some(3), Some(7)), "名字里那个结果号该挂到结果行的图上");
+        assert_eq!(got(5), (None, None), "「派生2版」不是结果号，挂上就错了");
+        assert_eq!(got(6), (None, None), "没有数字的不该动");
+        assert_eq!(got(7), (None, None), "结果行不存在就不猜来源");
+        assert_eq!(got(8), (None, None), "父图算成自己的不算派生");
+        // 幂等：第二次一条都不该再改
+        heal_derived_from_names(&db).unwrap();
+        assert_eq!(got(4), (Some(3), Some(7)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn 派生号解析只认尾部纯数字() {
+        assert_eq!(derived_rid("a 派生7.png"), Some(7));
+        assert_eq!(derived_rid("a 派生7"), Some(7));
+        assert_eq!(derived_rid("a 派生12 派生34.png"), Some(34), "名字里出现两次时取最后一段");
+        assert_eq!(derived_rid("a 派生.png"), None);
+        assert_eq!(derived_rid("a 派生2版.png"), None);
+        assert_eq!(derived_rid("a 派生-3.png"), None);
+        assert_eq!(derived_rid("普通照片.png"), None);
+    }
+
+    fn phrase_count(db: &Connection) -> i64 {        db.query_row("SELECT COUNT(*) FROM presets WHERE kind='phrase'", [], |r| r.get(0)).unwrap()
     }
 
     #[test]

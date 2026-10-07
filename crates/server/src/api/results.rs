@@ -64,6 +64,11 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     if i.is_sketch() {
         return Ok(skipped("这是画稿，请在画布里点「生成」"));
     }
+    // 整图重绘只走云端：本机那条要整图重绘得旁路掉裁切缝合，那是另一张图、另一套校验，
+    // 悄悄改用内置图去跑就等于换了一条语义还不说
+    if settings.get("full").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(skipped("整图重绘只走云端。本机 ComfyUI 那条要整图，请把没有裁切/缝合节点的工作流导成 API 再指过来"));
+    }
     let Some(mask_path) = i.mask_path.clone() else { return Ok(skipped("未涂遮罩")) };
     // 库里有过这行不等于盘上还有这个文件：先读会在 readFileSync 抛 ENOENT，报错只对开发者可读
     if !util::file_alive(&ctx.data, &Value::String(i.orig_path.clone())) {
@@ -76,7 +81,15 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     if let Err(e) = comfy::sample_args(&settings) {
         return Ok(skipped(&e));
     }
-    let photo_bytes = std::fs::read(ctx.data.join(&i.orig_path)).map_err(|e| format!("读原图失败：{e}"))?;
+    // 提交用哪张计算图：你的工作流（角色校验过了）或程序内置图。
+    // 是你的图却认不出角色时**明确拒绝**，不回退内置图（D14）：回退就是"静默谎报"搬到了结构层。
+    // 判在上传之前，免得为一张注定不提交的图先传两张 24MP 的 PNG。
+    let plan = cfg::plan(ctx);
+    if let cfg::Plan::Refused { errors } = &plan {
+        return Ok(skipped(&format!("你的工作流不能接管提交：{}", errors.join("；"))));
+    }
+    let photo_bytes = std::fs::read(util::data_file(&ctx.data, &i.orig_path).ok_or_else(|| AppError::bad("原图文件已不在磁盘上"))?)
+        .map_err(|e| format!("读原图失败：{e}"))?;
     // 涂抹层现在存的是 proxy 分辨率，而工作流里 DrawMaskOnImage 要和原图同尺寸，先上采样
     let mask_bytes = imagesvc::mask_to_orig(ctx, &mask_path, i.w as usize, i.h as usize).map_err(|e| AppError::bad(e))?;
     let stamp = util::now_ms();
@@ -89,7 +102,17 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
         util::num_or(settings.get("seed"), 0.0) as i64
     };
     let seed = (base + i.id).rem_euclid(SEED_MAX);
-    let graph = comfy::build_graph(&photo, &mask, settings, seed, &cfg::get_cfg(ctx));
+    let takeover = matches!(plan, cfg::Plan::Workflow { .. });
+    let (graph, outs) = match plan {
+        cfg::Plan::Workflow { graph: g, roles } => {
+            let built = comfy::inject_workflow(&g, &roles, &photo, &mask, &settings, seed).map_err(|e| AppError::bad(e))?;
+            (built, comfy::Outputs::from_roles(&roles))
+        }
+        _ => (
+            comfy::build_graph(&photo, &mask, settings, seed, &cfg::get_cfg(ctx)),
+            comfy::Outputs::builtin(),
+        ),
+    };
     let r = comfy::post_json(ctx, "/prompt", serde_json::json!({ "prompt": graph, "client_id": "synco" }))
         .await
         .map_err(msg)?;
@@ -97,6 +120,11 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
         let txt: String = r.to_string().chars().take(300).collect();
         return Ok(skipped(&format!("ComfyUI 拒收：{txt}")));
     };
+    // 输出节点号跟着这一行走：接管提交时它和内置图的 17/19/20 可以完全不同，
+    // 轮询侧要按这一行记的那三个号去 history 里取图
+    let mut snap = settings.as_object().cloned().unwrap_or_default();
+    snap.insert("workflow_out".into(), outs.to_json());
+    snap.insert("graph_source".into(), Value::String(if takeover { "workflow".into() } else { "builtin".into() }));
     let id = rres::insert_local(
         ctx,
         i.id,
@@ -107,7 +135,7 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
         util::num_or(settings.get("cfg"), 0.0),
         seed,
         &i.orig_path,
-        &settings.to_string(),
+        &Value::Object(snap).to_string(),
         rerun_of,
     )?;
     rproj::touch(ctx, i.project_id)?;
@@ -153,19 +181,25 @@ pub async fn result_delete(State(ctx): State<Shared>, APath(id): APath<String>) 
     if r.running() && !reclaim::judge_cloud(&ctx, rid) {
         return Ok(bad("这条还在生成中，等它落定再删"));
     }
-    for rel in [&r.final_path, &r.crop_path, &r.maskoverlay_path, &r.thumb_path] {
-        if let Some(rel) = rel {
-            let _ = std::fs::remove_file(ctx.data.join(rel));
+    // 先删行、后删文件：反过来一旦中间失败，库里就挂着指向空气的记录（卡片在、点开是空的）
+    let rels: Vec<&String> = [&r.final_path, &r.crop_path, &r.maskoverlay_path, &r.thumb_path, &r.sketch_path]
+        .into_iter()
+        .flatten()
+        .filter(|rel| !rel.is_empty())
+        .collect();
+    rres::delete(&ctx, rid)?;
+    for rel in rels {
+        if let Some(p) = util::data_file(&ctx.data, rel) {
+            let _ = std::fs::remove_file(p);
         }
     }
-    rres::delete(&ctx, rid)?;
     Ok(ok(serde_json::json!({ "ok": true })))
 }
 
 pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let rid = path_id(&id)?;
     let Some(r) = rres::by_id(&ctx, rid)? else { return Ok(err(404, "没有这条结果")) };
-    let Some(final_path) = r.final_path.filter(|p| ctx.data.join(p).is_file()) else {
+    let Some(src) = r.final_path.as_deref().and_then(|p| util::data_file(&ctx.data, p)) else {
         return Ok(bad("这条记录还没有成图可复制"));
     };
     let (name, w, h) = rimg::name_and_size(&ctx, r.image_id)?.unwrap_or(("photo".into(), 0, 0));
@@ -173,10 +207,11 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
     // 文件名里不能出现 # —— 它会直接把 /file/ 的 URL 截断
     let label = format!("{stem} 派生{rid}.png");
     let rel = util::rel_path(&["projects".into(), r.project_id.to_string(), format!("{}_{r4}_{label}", util::now_ms(), r4 = util::r4())]);
-    std::fs::copy(ctx.data.join(&final_path), ctx.data.join(&rel)).map_err(|e| format!("复制失败：{e}"))?;
-    let new_id = rimg::insert(&ctx, r.project_id, &label, &rel, w, h)?;
+    std::fs::copy(&src, ctx.data.join(&rel)).map_err(|e| format!("复制失败：{e}"))?;
+    // 谱系落库：名字里那个 `派生{rid}` 是给人看的，父子关系靠这两列（改名也不断）
+    let new_id = rimg::insert_derived(&ctx, r.project_id, &label, &rel, w, h, r.image_id, rid)?;
     rproj::touch(&ctx, r.project_id)?;
-    Ok(ok(serde_json::json!({ "image_id": new_id, "name": label })))
+    Ok(ok(serde_json::json!({ "image_id": new_id, "name": label, "derived_from": r.image_id })))
 }
 
 pub(crate) fn msg(e: String) -> AppError {

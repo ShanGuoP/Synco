@@ -52,6 +52,25 @@ pub(crate) fn path_id(s: &str) -> Result<i64> {
     s.parse::<i64>().map_err(|_| AppError::bad("id 不是数字"))
 }
 
+/// 一批导入的张数上限。80MB 的 body 限的是**字节**不是张数：几千张 1×1 的小图照样塞得下，
+/// 而每一张都是"落盘 + 建行 + 排一次派生"，一个请求就能把队列和磁盘 IO 排满。
+/// 前端按 8 张一批发，正常永远碰不到。
+pub const BATCH_MAX: usize = 200;
+
+/// 张数超限的可读理由；没超限返 None。单独抽出来是因为建项目那条要**在建项目之前**判一次，
+/// 否则会留下一个空项目挂在库里
+pub(crate) fn batch_limit(files: &[Value]) -> Option<String> {
+    (files.len() > BATCH_MAX).then(|| format!("一次最多导 {BATCH_MAX} 张（这次 {} 张），分几批导进来", files.len()))
+}
+
+/// 一批文件逐个落盘建行
+pub(crate) fn save_batch(ctx: &Shared, pid: i64, files: &[Value]) -> Result<Vec<i64>> {
+    if let Some(msg) = batch_limit(files) {
+        return Err(AppError::bad(msg));
+    }
+    files.iter().map(|f| save_image_file(ctx, pid, f)).collect()
+}
+
 /// 导入一张图：落盘 + 建行，返回新 id
 pub(crate) fn save_image_file(ctx: &Shared, pid: i64, f: &Value) -> Result<i64> {
     let dir = ctx.data.join("projects").join(pid.to_string());

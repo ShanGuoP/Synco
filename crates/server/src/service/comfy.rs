@@ -143,7 +143,74 @@ pub struct Tagged {
     pub url: String,
 }
 
-pub async fn check_comfy(ctx: &Ctx, pid: &str) -> Check {
+/// 读回侧要问哪几个节点拿图。内置图那三个是写死的 17/19/20；
+/// 接管提交时它们来自角色映射，所以**必须逐行记**——两张图用的节点号可以完全不同。
+#[derive(Clone, Debug, Default)]
+pub struct Outputs {
+    pub final_id: Option<String>,
+    pub crop_id: Option<String>,
+    pub overlay_id: Option<String>,
+}
+
+const TAG_FINAL: &str = "final";
+const TAG_CROP: &str = "crop";
+const TAG_OVERLAY: &str = "maskoverlay";
+
+impl Outputs {
+    pub fn builtin() -> Outputs {
+        Outputs { final_id: Some("17".into()), crop_id: Some("19".into()), overlay_id: Some("20".into()) }
+    }
+
+    pub fn from_roles(roles: &Map<String, Value>) -> Outputs {
+        let get = |k: &str| roles.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        Outputs { final_id: get("out_final"), crop_id: get("out_crop"), overlay_id: get("out_overlay") }
+    }
+
+    /// `(节点号, tag)`：没映射的输出不参与读回
+    pub fn pairs(&self) -> Vec<(String, &'static str)> {
+        let mut v = Vec::new();
+        for (id, tag) in [(&self.final_id, TAG_FINAL), (&self.crop_id, TAG_CROP), (&self.overlay_id, TAG_OVERLAY)] {
+            if let Some(id) = id {
+                v.push((id.clone(), tag));
+            }
+        }
+        v
+    }
+
+    /// 要求成套回来的那几个 tag：只包括这一行映射了的。
+    /// 用户图里没有遮罩预览节点时，不能因为读不到 maskoverlay 就把一张成功成图判死。
+    pub fn required_tags(&self) -> Vec<&'static str> {
+        let mut v = vec![TAG_FINAL];
+        if self.crop_id.is_some() {
+            v.push(TAG_CROP);
+        }
+        if self.overlay_id.is_some() {
+            v.push(TAG_OVERLAY);
+        }
+        v
+    }
+
+    /// 随这一行的参数快照落库（老行没这一项，读出来时按内置图解释）
+    pub fn to_json(&self) -> Value {
+        let mut o = Map::new();
+        for (k, v) in [("final", &self.final_id), ("crop", &self.crop_id), ("maskoverlay", &self.overlay_id)] {
+            if let Some(v) = v {
+                o.insert(k.into(), Value::String(v.clone()));
+            }
+        }
+        Value::Object(o)
+    }
+
+    pub fn from_settings(settings: &Value) -> Outputs {
+        let Some(o) = settings.get("workflow_out").filter(|v| v.is_object()) else {
+            return Outputs::builtin();
+        };
+        let get = |k: &str| o.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        Outputs { final_id: get("final"), crop_id: get("crop"), overlay_id: get("maskoverlay") }
+    }
+}
+
+pub async fn check_comfy(ctx: &Ctx, pid: &str, outs: &Outputs) -> Check {
     let base = active_url(ctx);
     let hist_url = join(&base, &format!("/history/{pid}"));
     let h = match fetch_json(ctx.http.get(&hist_url), &hist_url, T_POLL).await {
@@ -177,12 +244,12 @@ pub async fn check_comfy(ctx: &Ctx, pid: &str) -> Check {
     if st.get("completed").and_then(Value::as_bool) != Some(true) {
         return Check::Running;
     }
-    // 输出节点号固定 17/19/20，对应 final / crop / maskoverlay
+    // 输出节点号随这一行的记录走（内置图是 17/19/20，接管提交时是角色映射那三个）
     let mut images = Vec::new();
-    let outs = entry.get("outputs").cloned().unwrap_or(Value::Null);
-    for (nid, tag) in [("17", "final"), ("19", "crop"), ("20", "maskoverlay")] {
-        let list = outs
-            .get(nid)
+    let outs_map = entry.get("outputs").cloned().unwrap_or(Value::Null);
+    for (nid, tag) in outs.pairs() {
+        let list = outs_map
+            .get(&nid)
             .and_then(|o| o.get("images"))
             .and_then(|v| v.as_array())
             .cloned()
@@ -351,10 +418,257 @@ pub fn build_graph(photo: &str, mask: &str, settings: &Value, seed: i64, cfg: &V
     Value::Object(g)
 }
 
+/// 往**你那张图**里填本次提交的变量。动到的只有这几处：照片、遮罩、提示词、
+/// 种子/步数/CFG、LoRA 开关。裁切参数、模型名、连线关系一概按文件里那样跑——
+/// 这正是接管的意义：你在 ComfyUI 里看到什么，提交出去就是什么。
+pub fn inject_workflow(graph: &Map<String, Value>, roles: &Map<String, Value>, photo: &str, mask: &str, settings: &Value, seed: i64) -> Result<Value, String> {
+    let mut g = graph.clone();
+    let mut set = |role: &str, key: &str, val: Value| -> Result<(), String> {
+        let id = roles.get(role).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).ok_or_else(|| format!("角色「{role}」没配上节点"))?;
+        let node = g.get_mut(id).ok_or_else(|| format!("角色「{role}」指的节点 {id} 不在这张图里"))?;
+        let inputs = node.as_object_mut().and_then(|n| n.get_mut("inputs")).and_then(|i| i.as_object_mut()).ok_or_else(|| format!("节点 {id} 没有 inputs"))?;
+        if !inputs.contains_key(key) {
+            return Err(format!("节点 {id} 没有 {key} 这个输入"));
+        }
+        inputs.insert(key.to_string(), val);
+        Ok(())
+    };
+    set("load_image", "image", Value::String(photo.to_string()))?;
+    set("load_mask", "image", Value::String(mask.to_string()))?;
+    set("text_encode", "prompt", settings.get("prompt").cloned().unwrap_or(Value::String(String::new())))?;
+    // 负面词只在面板给了内容时才覆盖：文件里自己写好的那句不该被空串抹掉
+    if settings.get("negative").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+        let _ = set("text_encode", "negative_prompt", settings["negative"].clone());
+    }
+    set("ksampler", "seed", Value::from(seed))?;
+    set("ksampler", "steps", Value::from(crate::util::num_or(settings.get("steps"), 0.0).round() as i64))?;
+    set("ksampler", "cfg", Value::from(crate::util::num_or(settings.get("cfg"), 0.0)))?;
+    apply_loras(&mut g, settings);
+    Ok(Value::Object(g))
+}
+
+/// 面板上的 LoRA 勾选要真的生效。做法是把关掉的节点**摘掉、把下游接回它的上游**，
+/// 而不是给它加一个 `enabled` 字段——那个键只有较新的 ComfyUI 认，老版本会照跑。
+fn apply_loras(g: &mut Map<String, Value>, settings: &Value) {
+    let want: Vec<(String, Value, bool)> = settings
+        .get("loras")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|l| {
+            let name = l.get("name").and_then(|v| v.as_str())?;
+            Some((name.to_string(), l.get("strength").cloned().unwrap_or(Value::from(1.0)), l.get("enabled").and_then(Value::as_bool).unwrap_or(true)))
+        })
+        .collect();
+    if want.is_empty() {
+        return;
+    }
+    let mut off: HashSet<String> = HashSet::new();
+    let mut on: Vec<(String, Value)> = Vec::new();
+    for (id, n) in g.iter() {
+        if n["class_type"].as_str() != Some("LoraLoaderModelOnly") {
+            continue;
+        }
+        let name = n["inputs"]["lora_name"].as_str().unwrap_or("");
+        // 面板里没有这条 LoRA（挂在 CLIP 上、或不在这条模型链上）就完全不碰它
+        match want.iter().find(|(w, _, _)| w == name) {
+            Some((_, _, false)) => {
+                off.insert(id.clone());
+            }
+            Some((_, strength, true)) => on.push((id.clone(), strength.clone())),
+            None => {}
+        }
+    }
+    for (id, strength) in on {
+        if let Some(inputs) = g.get_mut(&id).and_then(|n| n.as_object_mut()).and_then(|n| n.get_mut("inputs")).and_then(|i| i.as_object_mut()) {
+            inputs.insert("strength_model".into(), strength);
+        }
+    }
+    if off.is_empty() {
+        return;
+    }
+    // 指向被摘节点的输入改指它的上游；上游也被摘就继续往上（次数上限挡住畸形文件里的环）
+    let mut patches: Vec<(String, String, String, usize)> = Vec::new();
+    for (id, n) in g.iter() {
+        if off.contains(id) {
+            continue;
+        }
+        if let Some(o) = n.get("inputs").and_then(|v| v.as_object()) {
+            for (k, v) in o {
+                let Some(t) = v.as_array().and_then(|a| a.first()).and_then(|x| x.as_str()) else { continue };
+                if !off.contains(t) {
+                    continue;
+                }
+                if let Some((repl, slot)) = survive_upstream(g, &off, t) {
+                    patches.push((id.clone(), k.clone(), repl, slot));
+                }
+            }
+        }
+    }
+    for (id, key, repl, slot) in patches {
+        if let Some(o) = g.get_mut(&id).and_then(|n| n.as_object_mut()).and_then(|n| n.get_mut("inputs")).and_then(|i| i.as_object_mut()) {
+            o.insert(key, Value::Array(vec![Value::String(repl), Value::from(slot as i64)]));
+        }
+    }
+    for id in &off {
+        g.remove(id);
+    }
+}
+
+/// 被摘掉的 LoRA 实际在替谁供货：沿它自己的 `model` 输入往上，找到第一个还留在图里的节点
+fn survive_upstream(g: &Map<String, Value>, off: &HashSet<String>, from: &str) -> Option<(String, usize)> {
+    let mut cur = from.to_string();
+    for _ in 0..=g.len() {
+        let up = g.get(&cur).and_then(|n| n["inputs"]["model"].as_array().cloned())?;
+        let id = up.first()?.as_str()?.to_string();
+        let slot = up.get(1).and_then(|x| x.as_u64()).map(|v| v as usize).unwrap_or(0);
+        if !off.contains(&id) {
+            return Some((id, slot));
+        }
+        cur = id;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sample_args;
-    use serde_json::json;
+    use super::{inject_workflow, sample_args, Outputs};
+    use serde_json::{json, Map, Value};
+
+    fn table(s: &str) -> Map<String, Value> {
+        serde_json::from_str::<Value>(s).unwrap().as_object().cloned().unwrap()
+    }
+
+    /// 用户导出的图：节点号与内置图那套完全不同，两条 LoRA 串在 unet 之后
+    const USER: &str = r#"{
+      "21":{"class_type":"LoadImage","inputs":{"image":"占位.png"}},
+      "22":{"class_type":"LoadImageMask","inputs":{"image":"占位m.png","channel":"red"}},
+      "30":{"class_type":"UNETLoader","inputs":{"unet_name":"u.safetensors"}},
+      "31":{"class_type":"LoraLoaderModelOnly","inputs":{"model":["30",0],"lora_name":"A.safetensors","strength_model":0.9}},
+      "32":{"class_type":"LoraLoaderModelOnly","inputs":{"model":["31",0],"lora_name":"B.safetensors","strength_model":0.5}},
+      "40":{"class_type":"InpaintCropImproved","inputs":{"image":["21",0],"mask":["22",0],"mask_expand_pixels":64,"device_mode":"cpu (compatible)"}},
+      "41":{"class_type":"TextEncodeQwenImage21","inputs":{"clip":["42",0],"prompt":"文件里的正向","negative_prompt":"文件里的负面"}},
+      "43":{"class_type":"KSampler","inputs":{"model":["32",0],"positive":["41",0],"seed":7,"steps":18,"cfg":2.5,"sampler_name":"euler","scheduler":"simple"}},
+      "50":{"class_type":"InpaintStitchImproved","inputs":{"stitcher":["40",0],"inpainted_image":["43",0]}},
+      "51":{"class_type":"SaveImage","inputs":{"images":["50",0],"filename_prefix":"Mine"}}
+    }"#;
+
+    const ROLES: &str = r#"{
+      "load_image":"21","load_mask":"22","text_encode":"41","ksampler":"43",
+      "crop":"40","stitch":"50","out_final":"51","out_crop":"52","out_overlay":"53"
+    }"#;
+
+    fn settings() -> Value {
+        json!({
+            "prompt": "把妆容修干净", "negative": "不要的东西", "steps": 26, "cfg": 3.5, "seed": 4242,
+            "loras": [
+                { "name": "A.safetensors", "strength": 0.7, "enabled": false },
+                { "name": "B.safetensors", "strength": 1.0, "enabled": true }
+            ]
+        })
+    }
+
+    /// 接管提交只填这几处：其余（裁切参数、模型名、采样器选型）一概按用户文件里那样跑
+    #[test]
+    fn 注入只动该动的输入() {
+        let g = table(USER);
+        let roles = table(ROLES);
+        let out = inject_workflow(&g, &roles, "myphoto.png", "mymask.png", &settings(), 991).unwrap();
+        assert_eq!(out["21"]["inputs"]["image"], json!("myphoto.png"));
+        assert_eq!(out["22"]["inputs"]["image"], json!("mymask.png"));
+        assert_eq!(out["41"]["inputs"]["prompt"], json!("把妆容修干净"));
+        assert_eq!(out["41"]["inputs"]["negative_prompt"], json!("不要的东西"));
+        assert_eq!(out["43"]["inputs"]["seed"], json!(991), "种子由调用方算好（带图片偏移）");
+        assert_eq!(out["43"]["inputs"]["steps"], json!(26));
+        assert_eq!(out["43"]["inputs"]["cfg"], json!(3.5));
+        // 没让改的东西原样留着
+        assert_eq!(out["43"]["inputs"]["sampler_name"], json!("euler"));
+        assert_eq!(out["40"]["inputs"]["mask_expand_pixels"], json!(64));
+        assert_eq!(out["30"]["inputs"]["unet_name"], json!("u.safetensors"));
+        // 传进去的表不能被改坏（下一次提交还要用同一份）
+        assert_eq!(g["21"]["inputs"]["image"], json!("占位.png"));
+    }
+
+    /// 面板上关了 A：A 节点从图里摘掉，B 接到 unet 上。
+    /// 只加 `enabled:false` 是不够的——老版本 ComfyUI 不认那个键，会照跑。
+    #[test]
+    fn 关掉的_lora_被摘掉且下游接回上游() {
+        let g = table(USER);
+        let roles = table(ROLES);
+        let out = inject_workflow(&g, &roles, "p", "m", &settings(), 1).unwrap();
+        assert!(out.get("31").is_none(), "关掉的 LoRA 节点不该留在图里");
+        assert_eq!(out["32"]["inputs"]["model"], json!(["30", 0]), "B 要接回 unet");
+        assert_eq!(out["32"]["inputs"]["strength_model"], json!(1.0));
+        assert_eq!(out["43"]["inputs"]["model"], json!(["32", 0]));
+    }
+
+    #[test]
+    fn 两条都关时采样器直接接_unet() {
+        let mut s = settings();
+        s["loras"][0]["enabled"] = json!(true);
+        s["loras"][1]["enabled"] = json!(false);
+        let out = inject_workflow(&table(USER), &table(ROLES), "p", "m", &s, 1).unwrap();
+        assert_eq!(out["31"]["inputs"]["strength_model"], json!(0.7), "开着的按面板强度写");
+        assert!(out.get("32").is_none());
+        assert_eq!(out["43"]["inputs"]["model"], json!(["31", 0]));
+
+        let mut s2 = settings();
+        s2["loras"][0]["enabled"] = json!(false);
+        s2["loras"][1]["enabled"] = json!(false);
+        let out2 = inject_workflow(&table(USER), &table(ROLES), "p", "m", &s2, 1).unwrap();
+        assert!(out2.get("31").is_none() && out2.get("32").is_none(), "两条都关就都不在图里");
+        assert_eq!(out2["43"]["inputs"]["model"], json!(["30", 0]));
+    }
+
+    /// 面板里的 LoRA 清单与工作流对不上时（挂在 CLIP 上、或换了文件）：不碰它，
+    /// 免得把一条 Synco 不认识的链给摘断
+    #[test]
+    fn 面板没有的_lora_不动() {
+        let mut s = settings();
+        s["loras"] = json!([{ "name": "根本不存在的.safetensors", "strength": 1, "enabled": false }]);
+        let out = inject_workflow(&table(USER), &table(ROLES), "p", "m", &s, 1).unwrap();
+        assert!(out.get("31").is_some() && out.get("32").is_some());
+    }
+
+    #[test]
+    fn 角色指的节点不在图里就报错而不是硬填() {
+        let g = table(USER);
+        let mut roles = table(ROLES);
+        roles.remove("load_mask");
+        let e = inject_workflow(&g, &roles, "p", "m", &settings(), 1).unwrap_err();
+        assert!(e.contains("load_mask"), "{e}");
+        let roles2 = table(r#"{"load_image":"999","load_mask":"22","text_encode":"41","ksampler":"43"}"#);
+        let e2 = inject_workflow(&g, &roles2, "p", "m", &settings(), 1).unwrap_err();
+        assert!(e2.contains("999"), "{e2}");
+    }
+
+    /// 负面词为空时不清空文件里那句：用户在工作流里写好的负面提示词不该被界面抹掉
+    #[test]
+    fn 空负面词不覆盖文件里的那句() {
+        let mut s = settings();
+        s["negative"] = json!("");
+        let out = inject_workflow(&table(USER), &table(ROLES), "p", "m", &s, 1).unwrap();
+        assert_eq!(out["41"]["inputs"]["negative_prompt"], json!("文件里的负面"));
+    }
+
+    #[test]
+    fn 输出节点号按行取_老行按内置解释() {
+        assert_eq!(Outputs::builtin().pairs(), vec![("17".into(), "final"), ("19".into(), "crop"), ("20".into(), "maskoverlay")]);
+        // 改造前写的行没有 workflow_out：还按 17/19/20 读
+        let old = Outputs::from_settings(&json!({ "steps": 20 }));
+        assert_eq!(old.final_id.as_deref(), Some("17"));
+        assert_eq!(old.required_tags(), vec!["final", "crop", "maskoverlay"]);
+
+        let row = Outputs::from_settings(&json!({ "workflow_out": { "final": "51", "crop": "52" } }));
+        assert_eq!(row.final_id.as_deref(), Some("51"));
+        assert_eq!(row.overlay_id, None, "这一行没有遮罩预览那一路");
+        assert_eq!(row.required_tags(), vec!["final", "crop"], "没映射的输出不能拿来判失败");
+        // 落盘 → 读回要对得上
+        let back = Outputs::from_settings(&json!({ "workflow_out": row.to_json() }));
+        assert_eq!(back.final_id, row.final_id);
+        assert_eq!(back.crop_id, row.crop_id);
+    }
 
     #[test]
     fn 合法采样参数按面板区间放行() {

@@ -6,7 +6,8 @@ use crate::repo;
 use crate::state::Ctx;
 
 /// 单图与列表都用这一串列，键集合与 Node 的 SELECT 对齐后再补上 M3 的两个派生档
-const COLS: &str = "id,project_id,name,orig_path,mask_path,w,h,created_at,thumb_path,proxy_path,kind";
+const COLS: &str =
+    "id,project_id,name,orig_path,mask_path,w,h,created_at,thumb_path,proxy_path,kind,derived_from,derived_result";
 
 fn rows_to_images(rows: &[serde_json::Value]) -> Vec<Image> {
     rows.iter().map(Image::from_value).collect()
@@ -36,9 +37,16 @@ fn project_list_sql() -> String {
                 (SELECT r.thumb_path FROM results r WHERE r.image_id = images.id AND r.status='done'
                   ORDER BY r.id DESC LIMIT 1) AS result_thumb,
                 (SELECT r.final_path FROM results r WHERE r.image_id = images.id AND r.status='done'
-                  ORDER BY r.id DESC LIMIT 1) AS result_final
+                  ORDER BY r.id DESC LIMIT 1) AS result_final,
+                /* 卡片角标的第二个数：这张图「另存为新图」出去了几张子图 */
+                (SELECT COUNT(*) FROM images d WHERE d.derived_from = images.id) AS derived_count
          FROM images WHERE project_id=? ORDER BY id"
     )
+}
+
+/// 派生弹窗的数据源：这张图直接派生出来的子图（不递归，孙图挂在子图名下）
+pub fn list_derived(ctx: &Ctx, id: i64) -> Result<Vec<Image>> {
+    Ok(rows_to_images(&repo::all(ctx, &format!("SELECT {COLS} FROM images WHERE derived_from=? ORDER BY id"), &[repo::i(id)])?))
 }
 
 /// 派生档补空当用的扫描：只挑还没生成过缩略图的行，跑一次就少一批
@@ -65,8 +73,34 @@ pub fn insert_kind(ctx: &Ctx, pid: i64, name: &str, orig_path: &str, w: i64, h: 
     )
 }
 
-pub fn set_mask(ctx: &Ctx, id: i64, mask_rel: Option<&str>) -> Result<()> {
-    repo::run(ctx, "UPDATE images SET mask_path=? WHERE id=?", &[repo::si(mask_rel), repo::i(id)])?;
+/// 「另存为新图」造的子图：把父图与来源结果行一起落库。
+/// 名字里那个 `派生{结果号}` 只是给人看的，谱系全靠这两列。
+#[allow(clippy::too_many_arguments)]
+pub fn insert_derived(ctx: &Ctx, pid: i64, name: &str, orig_path: &str, w: i64, h: i64, from_image: i64, from_result: i64) -> Result<i64> {
+    repo::insert_id(
+        ctx,
+        "INSERT INTO images(project_id,name,orig_path,w,h,kind,derived_from,derived_result) VALUES(?,?,?,?,?,?,?,?)",
+        &[
+            repo::i(pid),
+            repo::s(name),
+            repo::s(orig_path),
+            repo::i(w),
+            repo::i(h),
+            repo::s("photo"),
+            repo::i(from_image),
+            repo::i(from_result),
+        ],
+    )
+}
+
+/// 删父图时把子图的来源引用清掉：子图本身要留着（它是独立的一张图，
+/// 删父图不该连带删掉用户另存出去的成品），但 `derived_from` 留着就是指向空 id 的悬值
+pub fn clear_derived_refs(ctx: &Ctx, id: i64) -> Result<()> {
+    repo::run(ctx, "UPDATE images SET derived_from=NULL WHERE derived_from=?", &[repo::i(id)])?;
+    Ok(())
+}
+
+pub fn set_mask(ctx: &Ctx, id: i64, mask_rel: Option<&str>) -> Result<()> {    repo::run(ctx, "UPDATE images SET mask_path=? WHERE id=?", &[repo::si(mask_rel), repo::i(id)])?;
     Ok(())
 }
 

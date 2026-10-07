@@ -185,10 +185,9 @@ fn read_litegraph(d: &Value, m: &mut Map<String, Value>) {
 
 /// API 导出：`{"<节点号>":{"class_type":"…","inputs":{名字: 值 或 [来源节点, 引脚]}}}`。
 /// 按**名字**取参数，工作流里挪动节点顺序、加控件都不会让参数错位。
-fn read_api(d: &Value, m: &mut Map<String, Value>) {
-    let nodes = d.as_object();
+fn read_api(nodes: &Map<String, Value>, m: &mut Map<String, Value>) {
     let class_of = |want: &str| -> Option<&Value> {
-        nodes?.values().filter(|n| n["class_type"].as_str() == Some(want)).next()
+        nodes.values().filter(|n| n["class_type"].as_str() == Some(want)).next()
     };
     // 输入项是 ["10", 0] 这种连接引用时它不是参数值
     let input = |n: Option<&Value>, key: &str| -> Value {
@@ -232,7 +231,7 @@ fn read_api(d: &Value, m: &mut Map<String, Value>) {
     }
     // LoRA 链：API 里 `inputs.model: ["<上游节点号>", 0]` 就是上游。
     // 建一张"上游节点号 → 挂在其后的 LoRA"的反向索引，顺链走，带 visited 与深度上限。
-    let by_id: Map<String, Value> = nodes.map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+    let by_id = nodes;
     let upstream_model = |n: &Value| -> Option<String> {
         n["inputs"]["model"].as_array().and_then(|a| a.first()).and_then(|x| x.as_str()).map(str::to_string)
     };
@@ -282,12 +281,22 @@ fn read_api(d: &Value, m: &mut Map<String, Value>) {
     );
 }
 
+/// API 导出的节点表。既认 ComfyUI「Save (API Format)」写出的裸 `{节点号:{class_type,inputs}}`，
+/// 也认有人直接把 `/prompt` 请求体存下来的 `{"prompt":{…}}` 形态。
+pub fn api_nodes(d: &Value) -> Option<&Map<String, Value>> {
+    fn table(o: &Map<String, Value>) -> Option<&Map<String, Value>> {
+        (!o.is_empty() && o.values().any(|v| v.get("class_type").is_some())).then_some(o)
+    }
+    let o = d.as_object()?;
+    table(o).or_else(|| o.get("prompt").and_then(|p| p.as_object()).and_then(table))
+}
+
 /// 认格式：UI/litegraph 导出有 `nodes` 数组；API 导出是一张 `{节点号: {class_type, inputs}}` 的表
 fn detect(d: &Value) -> Option<&'static str> {
     if d.get("nodes").and_then(|v| v.as_array()).is_some() {
         return Some("litegraph");
     }
-    if d.as_object().map(|o| !o.is_empty() && o.values().any(|v| v.get("class_type").is_some())).unwrap_or(false) {
+    if api_nodes(d).is_some() {
         return Some("api");
     }
     None
@@ -301,20 +310,403 @@ pub fn load_map(p: &Path) -> Result<(Map<String, Value>, &'static str), String> 
     let d: Value = serde_json::from_str(&text).map_err(|e| format!("工作流不是合法 JSON：{e}"))?;
     let fmt = detect(&d).ok_or("这个 JSON 既没有 UI 导出的 nodes/links，也不是 API 导出的节点表（认不出是哪种工作流）")?;
     let mut m = Map::new();
-    if fmt == "api" {
-        read_api(&d, &mut m);
-    } else {
-        read_litegraph(&d, &mut m);
+    match api_nodes(&d) {
+        Some(nodes) if fmt == "api" => read_api(nodes, &mut m),
+        _ => read_litegraph(&d, &mut m),
     }
     Ok((m, fmt))
 }
 
-/// 本管线会用的节点类名。清点端点按这张表报"在不在位"，第二步的角色表就从这里长出来。
-pub const KNOWN_CLASSES: [&str; 13] = [
+/// 本管线会用的节点类名。清点端点按这张表报"在不在位"，角色表就从这里长出来。
+pub const KNOWN_CLASSES: [&str; 14] = [
     "LoadImage", "LoadImageMask", "UNETLoader", "CLIPLoader", "VAELoader",
     "TextEncodeQwenImage21", "KSampler", "InpaintCropImproved", "InpaintStitchImproved",
-    "LoraLoaderModelOnly", "SaveImage", "PreviewImage", "PrimitiveStringMultiline",
+    "LoraLoaderModelOnly", "SaveImage", "PreviewImage", "PrimitiveStringMultiline", "DrawMaskOnImage",
 ];
+
+// ---------------------------------------------------------------- 角色映射（M7 第二步）
+
+pub struct Role {
+    pub key: &'static str,
+    pub class: &'static str,
+    pub label: &'static str,
+    /// 缺了就**不能**用这张图提交。D14：认不出就硬失败，不回退到内置图——
+    /// 回退等于把"参数读自你的文件"那句谎从参数层搬到结构层。
+    pub required: bool,
+}
+
+/// Synco 要往工作流里填的东西全按角色寻址，不认节点号：用户挪节点、改编号都不影响。
+pub const ROLES: [Role; 13] = [
+    Role { key: "load_image", class: "LoadImage", label: "加载图", required: true },
+    Role { key: "load_mask", class: "LoadImageMask", label: "加载遮罩", required: true },
+    Role { key: "unet", class: "UNETLoader", label: "UNet", required: true },
+    Role { key: "clip", class: "CLIPLoader", label: "CLIP", required: true },
+    Role { key: "vae", class: "VAELoader", label: "VAE", required: true },
+    Role { key: "text_encode", class: "TextEncodeQwenImage21", label: "提示词编码", required: true },
+    Role { key: "ksampler", class: "KSampler", label: "采样器", required: true },
+    Role { key: "crop", class: "InpaintCropImproved", label: "裁切", required: true },
+    Role { key: "stitch", class: "InpaintStitchImproved", label: "缝合", required: true },
+    Role { key: "out_final", class: "SaveImage", label: "输出成图", required: true },
+    Role { key: "out_crop", class: "PreviewImage", label: "输出裁切区", required: false },
+    Role { key: "mask_viz", class: "DrawMaskOnImage", label: "遮罩可视化", required: false },
+    Role { key: "out_overlay", class: "PreviewImage", label: "输出遮罩图", required: false },
+];
+
+pub fn role(key: &str) -> Option<&'static Role> {
+    ROLES.iter().find(|r| r.key == key)
+}
+
+/// 读一个 API 导出的工作流，返回 `{节点号: {class_type, inputs}}`。不是 API 导出时给 None。
+pub fn load_api_graph(p: &Path) -> Option<Map<String, Value>> {
+    let text = std::fs::read_to_string(p).ok()?;
+    let d: Value = serde_json::from_str(&text).ok()?;
+    api_nodes(&d).cloned()
+}
+
+/// 要注入的那几样东西分别从哪个输入名进去。写在这里而不是散在 comfy.rs 里，
+/// 是为了让"角色 → 输入名"这张对照只有一处：名字对不上就提交不了，而不是填进不该填的地方。
+pub const INJECT_KEYS: [(&str, &str); 6] = [
+    ("load_image", "image"),
+    ("load_mask", "image"),
+    ("text_encode", "prompt"),
+    ("ksampler", "seed"),
+    ("ksampler", "steps"),
+    ("ksampler", "cfg"),
+];
+
+/// 输入值是 `["节点号", 引脚]` 时给出上游节点号
+fn upstream(v: &Value) -> Option<&str> {
+    v.as_array().and_then(|a| a.first()).and_then(|x| x.as_str())
+}
+
+/// `a` 的输出（直接或间接）是否流到 `b` 的输入。带 visited：环与菱形都不会转死。
+/// 从 `b` 的上游开始走，所以 `feeds(x, x)` 只有在 x 真的吃自己的输出时才为真——
+/// 把起点算进去会让"两个角色指到同一个节点"这种畸形映射看起来合法。
+pub fn feeds(g: &Map<String, Value>, from: &str, to: &str) -> bool {
+    let ups = |id: &str| -> Vec<String> {
+        g.get(id)
+            .and_then(|n| n.get("inputs"))
+            .and_then(|v| v.as_object())
+            .map(|o| o.values().filter_map(upstream).filter(|u| *u != id).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(to.to_string());
+    let mut stack = ups(to);
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        if id == from {
+            return true;
+        }
+        stack.extend(ups(&id));
+    }
+    false
+}
+
+/// 整张图有没有环（自环也算）：有环的话 ComfyUI 自己会拒，但报错在对面，不如这里说清
+pub fn has_cycle(g: &Map<String, Value>) -> bool {
+    fn walk(g: &Map<String, Value>, id: &str, stack: &mut Vec<String>, done: &mut std::collections::HashSet<String>) -> bool {
+        if stack.iter().any(|s| s == id) {
+            return true;
+        }
+        if done.contains(id) {
+            return false;
+        }
+        stack.push(id.to_string());
+        if let Some(o) = g.get(id).and_then(|n| n.get("inputs")).and_then(|v| v.as_object()) {
+            for v in o.values() {
+                if let Some(u) = upstream(v) {
+                    if walk(g, u, stack, done) {
+                        return true;
+                    }
+                }
+            }
+        }
+        stack.pop();
+        done.insert(id.to_string());
+        false
+    }
+    let mut stack = Vec::new();
+    let mut done = std::collections::HashSet::new();
+    g.keys().any(|id| walk(g, id, &mut stack, &mut done))
+}
+
+/// 按类名自动预填；输出类角色按"数据从哪来"判（同一个图里可能有好几个 SaveImage）。
+/// 认不出来的角色留空，交给设置里的手指覆盖。
+pub fn auto_roles(g: &Map<String, Value>) -> Map<String, Value> {
+    let ids_of = |cls: &str| -> Vec<String> {
+        g.iter().filter(|(_, n)| n["class_type"].as_str() == Some(cls)).map(|(k, _)| k.clone()).collect()
+    };
+    let mut out = Map::new();
+    for (key, cls) in [
+        ("load_image", "LoadImage"),
+        ("load_mask", "LoadImageMask"),
+        ("unet", "UNETLoader"),
+        ("clip", "CLIPLoader"),
+        ("vae", "VAELoader"),
+        ("text_encode", "TextEncodeQwenImage21"),
+        ("ksampler", "KSampler"),
+        ("crop", "InpaintCropImproved"),
+        ("stitch", "InpaintStitchImproved"),
+        ("mask_viz", "DrawMaskOnImage"),
+    ] {
+        if let Some(id) = ids_of(cls).into_iter().next() {
+            out.insert(key.into(), Value::String(id));
+        }
+    }
+    // 三个输出角色挑的是"哪一路数据要读回来"：成图必须是缝合那一路，
+    // 随便抓一个 SaveImage 存的可能直接是采样结果（那张图看着正常，但语义已经错了）。
+    // 可选那两路只认"另有一路"：指到成图那个节点上就等于没指——那一路只会回来同一张图，
+    // 界面上"裁切图/遮罩叠加"两个下载按钮点开的是成图。
+    let pick = |src: Option<&str>, prefer: &[&str], skip: &[String]| -> Option<String> {
+        let s = src?;
+        for cls in prefer {
+            if let Some(id) = ids_of(cls).into_iter().find(|id| feeds(g, s, id) && !skip.contains(id)) {
+                return Some(id);
+            }
+        }
+        None
+    };
+    let stitch = out.get("stitch").and_then(|v| v.as_str()).map(str::to_string);
+    let crop = out.get("crop").and_then(|v| v.as_str()).map(str::to_string);
+    let viz = out.get("mask_viz").and_then(|v| v.as_str()).map(str::to_string);
+    let final_id = pick(stitch.as_deref(), &["SaveImage", "PreviewImage"], &[]);
+    let taken = final_id.clone().into_iter().collect::<Vec<_>>();
+    let crop_id = pick(crop.as_deref(), &["PreviewImage"], &taken);
+    let mut taken2 = taken.clone();
+    taken2.extend(crop_id.clone());
+    let overlay = pick(viz.as_deref(), &["PreviewImage", "SaveImage"], &taken2);
+    for (key, id) in [("out_final", final_id), ("out_crop", crop_id), ("out_overlay", overlay)] {
+        if let Some(id) = id {
+            out.insert(key.into(), Value::String(id));
+        }
+    }
+    out
+}
+
+/// 生效映射 = 类名自动预填 ← 库里存的手指覆盖（空串与不认识的键都忽略）
+pub fn merge_roles(g: &Map<String, Value>, saved: Option<&str>) -> Map<String, Value> {
+    let mut roles = auto_roles(g);
+    let parsed: Map<String, Value> = saved
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    for r in ROLES.iter() {
+        if let Some(node) = parsed.get(r.key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            roles.insert(r.key.into(), Value::String(node.to_string()));
+        }
+    }
+    roles
+}
+
+/// 结构校验。返回问题清单；空 = 这张图可以接管提交。
+///
+/// 这一条是 M7 全部的赌注所在：缺了裁切-缝合那一对、或者成图不是从缝合出来的，
+/// 回来的是一张**重绘过的整图**，画面看着完全正常，没人会发现语义已经变了。
+pub fn validate(g: &Map<String, Value>, roles: &Map<String, Value>) -> Vec<String> {
+    let mut errs: Vec<String> = Vec::new();
+    let id = |k: &str| roles.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    for r in ROLES.iter().filter(|r| r.required) {
+        let Some(nid) = id(r.key) else {
+            errs.push(format!("「{}」找不到节点（类名 {}）", r.label, r.class));
+            continue;
+        };
+        if !g.contains_key(&nid) {
+            errs.push(format!("「{}」指向的节点 {nid} 不在这张图里", r.label));
+        }
+    }
+    if !errs.is_empty() {
+        return errs;
+    }
+    // 注入全靠输入名，名字对不上就是"提交时照片送不进去"，比缺节点更隐蔽
+    for (key, input) in INJECT_KEYS {
+        if let Some(nid) = id(key) {
+            let node = match g.get(&nid) {
+                Some(n) => n,
+                None => continue, // 上面已经报过
+            };
+            if !node.get("inputs").and_then(|v| v.as_object()).map(|o| o.contains_key(input)).unwrap_or(false) {
+                errs.push(format!("「{}」(节点 {nid}) 没有 {input} 这个输入，Synco 没法往里填", r_label(key)));
+            }
+        }
+    }
+    if has_cycle(g) {
+        errs.push("这张图里有环（某个节点的输入绕回了自己），ComfyUI 不会执行它".into());
+    }
+    if let (Some(c), Some(s)) = (id("crop"), id("stitch")) {
+        if !feeds(g, &c, &s) {
+            errs.push("缝合节点没有接在裁切节点之后：回来的图不会被贴回原图".into());
+        }
+    }
+    if let (Some(s), Some(f)) = (id("stitch"), id("out_final")) {
+        if !feeds(g, &s, &f) {
+            errs.push("输出成图不是从缝合节点出来的（可能直接存了采样结果）：那样回来的是一张重绘过的整图，画面看着正常但语义已经变了".into());
+        }
+    }
+    if let (Some(li), Some(c)) = (id("load_image"), id("crop")) {
+        if !feeds(g, &li, &c) {
+            errs.push("裁切节点没吃到「加载图」这条输入：提交时照片送不进你的图".into());
+        }
+    }
+    if let (Some(lm), Some(c)) = (id("load_mask"), id("crop")) {
+        if !feeds(g, &lm, &c) {
+            errs.push("裁切节点没吃到「加载遮罩」这条输入：提交时蒙版送不进你的图".into());
+        }
+    }
+    if let (Some(te), Some(ks)) = (id("text_encode"), id("ksampler")) {
+        if !feeds(g, &te, &ks) {
+            errs.push("采样器没接提示词编码：面板里写的指令不会生效".into());
+        }
+    }
+    // 三个输出角色指向同一个节点：那一路只会回来一张图，另外两个下载按钮是骗人的
+    for (a, b) in [("out_final", "out_crop"), ("out_final", "out_overlay"), ("out_crop", "out_overlay")] {
+        if let (Some(x), Some(y)) = (id(a), id(b)) {
+            if x == y {
+                errs.push(format!("「{}」和「{}」指向同一个节点 {x}：那一路只会回来一张图", r_label(a), r_label(b)));
+            }
+        }
+    }
+    errs
+}
+
+fn r_label(key: &str) -> String {
+    role(key).map(|r| r.label.to_string()).unwrap_or_else(|| key.to_string())
+}
+
+/// 角色映射按工作流文件各存一份（换文件不能沿用上一份的节点号）
+pub fn roles_key(path: &str) -> String {
+    format!("workflow_roles:{path}")
+}
+
+pub fn saved_roles(ctx: &Ctx, path: &str) -> Option<String> {
+    crate::repo::settings::get(ctx, &roles_key(path))
+}
+
+/// 手指覆盖先按类名校验再落库：存进去一个错类名的节点，下一次提交就会往不该填的输入里写。
+/// 返回（存下的映射，被拒的项）
+pub fn set_saved_roles(ctx: &Ctx, path: &str, roles: &Map<String, Value>) -> (Map<String, Value>, Vec<String>) {
+    let g = load_api_graph(Path::new(path));
+    let mut kept = Map::new();
+    let mut rejected = Vec::new();
+    for r in ROLES.iter() {
+        let Some(v) = roles.get(r.key) else { continue };
+        let Some(node) = v.as_str().map(str::trim) else {
+            rejected.push(format!("「{}」的值要写成节点号字符串", r.label));
+            continue;
+        };
+        if node.is_empty() {
+            continue; // 清空 = 交回自动预填
+        }
+        match g.as_ref().and_then(|g| g.get(node)).and_then(|n| n["class_type"].as_str()) {
+            Some(cls) if cls == r.class => {
+                kept.insert(r.key.into(), Value::String(node.to_string()));
+            }
+            Some(cls) => rejected.push(format!("「{}」要的是 {} 节点，节点 {node} 是 {cls}", r.label, r.class)),
+            None => rejected.push(format!("「{}」指的节点 {node} 不在这张图里", r.label)),
+        }
+    }
+    let key = roles_key(path);
+    if kept.is_empty() {
+        let _ = crate::repo::settings::del(ctx, &key);
+    } else if let Ok(text) = serde_json::to_string(&Value::Object(kept.clone())) {
+        let _ = crate::repo::settings::put(ctx, &key, &text);
+    }
+    (kept, rejected)
+}
+
+/// 一张文件 + 一份手指 → 该不该用它提交。`graph` 是 None 表示这文件根本当不了计算图
+/// （读不到、或不是 API 导出），此时只能走内置图，且原因要显示出来——不做静默替换。
+struct Assessment {
+    graph: Option<Map<String, Value>>,
+    roles: Map<String, Value>,
+    errors: Vec<String>,
+    reason: String,
+}
+
+fn assess(path: &str, saved: Option<&str>) -> Assessment {
+    let graph = load_api_graph(Path::new(path));
+    match graph {
+        Some(g) => {
+            let roles = merge_roles(&g, saved);
+            Assessment { errors: validate(&g, &roles), graph: Some(g), roles, reason: String::new() }
+        }
+        None => Assessment {
+            graph: None,
+            roles: Map::new(),
+            errors: Vec::new(),
+            reason: if Path::new(path).exists() {
+                "这个文件是 UI 导出（或读不出节点表），没法当计算图提交：在 ComfyUI 里用 Save (API Format) 另存一份再指过来".into()
+            } else {
+                format!("读不到工作流文件（{path}）")
+            },
+        },
+    }
+}
+
+/// 提交用哪张计算图。**不回退**是设计的一部分（D14）：
+/// 角色认不出却改用内置图，等于把"参数读自你的文件"那句谎从参数层搬到结构层。
+#[derive(Debug)]
+pub enum Plan {
+    /// 用你文件里这张图提交（已按角色校验通过）
+    Workflow { graph: Map<String, Value>, roles: Map<String, Value> },
+    /// 文件不是 API 导出（或读不到）：用内置图，并把原因显示出来
+    Builtin { reason: String },
+    /// 是你的图，但角色/结构对不上：拒绝提交
+    Refused { errors: Vec<String> },
+}
+
+pub fn plan_at(path: &str, saved: Option<&str>) -> Plan {
+    match assess(path, saved) {
+        Assessment { graph: Some(g), roles, errors, .. } if errors.is_empty() => Plan::Workflow { graph: g, roles },
+        Assessment { errors, .. } if !errors.is_empty() => Plan::Refused { errors },
+        Assessment { reason, .. } => Plan::Builtin { reason },
+    }
+}
+
+pub fn plan(ctx: &Ctx) -> Plan {
+    let p = workflow_path(ctx);
+    plan_at(&p, saved_roles(ctx, &p).as_deref())
+}
+
+/// 设置里那张角色表：节点清单 + 自动预填 + 存过的手指 + 生效值 + 校验结论
+pub fn roles_view(ctx: &Ctx) -> Result<Value, String> {
+    let p = workflow_path(ctx);
+    let saved_raw = saved_roles(ctx, &p);
+    let a = assess(&p, saved_raw.as_deref());
+    let mut nodes: Vec<Value> = Vec::new();
+    if let Some(g) = &a.graph {
+        for (id, n) in g {
+            nodes.push(serde_json::json!({
+                "id": id,
+                "class_type": n["class_type"].as_str().unwrap_or(""),
+                "title": n["_meta"]["title"].as_str().unwrap_or(""),
+            }));
+        }
+        nodes.sort_by(|x, y| (x["class_type"].as_str().unwrap_or("").to_string(), x["id"].as_str().unwrap_or("").to_string()).cmp(&(
+            y["class_type"].as_str().unwrap_or("").to_string(),
+            y["id"].as_str().unwrap_or("").to_string(),
+        )));
+    }
+    let saved_map: Map<String, Value> = saved_raw
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let can_takeover = a.graph.is_some() && a.errors.is_empty();
+    Ok(serde_json::json!({
+        "workflow_path": p,
+        "is_api": a.graph.is_some(),
+        "nodes": nodes,
+        "roles": ROLES.iter().map(|r| serde_json::json!({"key": r.key, "class": r.class, "label": r.label, "required": r.required})).collect::<Vec<_>>(),
+        "auto": Value::Object(a.graph.as_ref().map(auto_roles).unwrap_or_default()),
+        "saved": Value::Object(saved_map),
+        "effective": Value::Object(a.roles),
+        "errors": a.errors,
+        "reason": a.reason,
+        "can_takeover": can_takeover,
+    }))
+}
 
 /// 把文件里的节点摊平成可比对的 `(节点号, 类名, 输入名)` 列表，两种格式同一套出口
 pub fn inspect(p: &Path) -> Result<Value, String> {
@@ -323,7 +715,7 @@ pub fn inspect(p: &Path) -> Result<Value, String> {
     let fmt = detect(&d).ok_or("这个 JSON 既不是 ComfyUI 的 UI 导出，也不是 API 导出")?;
     let mut rows: Vec<Value> = Vec::new();
     if fmt == "api" {
-        if let Some(o) = d.as_object() {
+        if let Some(o) = api_nodes(&d) {
             for (id, n) in o {
                 rows.push(serde_json::json!({
                     "id": id,
@@ -597,5 +989,163 @@ mod tests {
         assert!(load_map(&p).unwrap_err().contains("合法 JSON"));
         assert!(inspect(&p).is_err());
         std::fs::remove_file(p).ok();
+    }
+
+    /// 一张能接管提交的最小图：形状照 ComfyUI 的 API 导出，节点号刻意不是内置图那套
+    const WF: &str = r#"{
+      "1":{"class_type":"LoadImage","inputs":{"image":"占位.png"}},
+      "2":{"class_type":"LoadImageMask","inputs":{"image":"占位m.png","channel":"red"}},
+      "3":{"class_type":"UNETLoader","inputs":{"unet_name":"u.safetensors"}},
+      "4":{"class_type":"LoraLoaderModelOnly","inputs":{"model":["3",0],"lora_name":"A.safetensors","strength_model":0.9}},
+      "5":{"class_type":"LoraLoaderModelOnly","inputs":{"model":["4",0],"lora_name":"B.safetensors","strength_model":0.5}},
+      "6":{"class_type":"CLIPLoader","inputs":{"clip_name":"c.safetensors"}},
+      "7":{"class_type":"VAELoader","inputs":{"vae_name":"v.safetensors"}},
+      "10":{"class_type":"InpaintCropImproved","inputs":{"image":["1",0],"mask":["2",0],"mask_expand_pixels":64}},
+      "11":{"class_type":"TextEncodeQwenImage21","inputs":{"clip":["6",0],"vae":["7",0],"prompt":"文件里的正向","negative_prompt":"文件里的负面","images.image_1":["10",1]}},
+      "12":{"class_type":"VAEEncode","inputs":{"pixels":["10",1],"vae":["7",0]}},
+      "13":{"class_type":"SetLatentNoiseMask","inputs":{"samples":["12",0],"mask":["10",2]}},
+      "14":{"class_type":"KSampler","inputs":{"model":["5",0],"positive":["11",0],"negative":["11",1],"latent_image":["13",0],"seed":7,"steps":18,"cfg":2.5,"sampler_name":"euler","scheduler":"simple","denoise":1}},
+      "15":{"class_type":"VAEDecode","inputs":{"samples":["14",0],"vae":["7",0]}},
+      "16":{"class_type":"InpaintStitchImproved","inputs":{"stitcher":["10",0],"inpainted_image":["15",0]}},
+      "17":{"class_type":"SaveImage","inputs":{"images":["16",0],"filename_prefix":"Mine"}},
+      "18":{"class_type":"DrawMaskOnImage","inputs":{"image":["10",1],"mask":["10",2]}},
+      "19":{"class_type":"PreviewImage","inputs":{"images":["10",1]}},
+      "20":{"class_type":"PreviewImage","inputs":{"images":["18",0]}},
+      "99":{"class_type":"SaveImage","inputs":{"images":["14",0],"filename_prefix":"别的图"}}
+    }"#;
+
+    fn wf() -> Map<String, Value> {
+        serde_json::from_str::<Value>(WF).unwrap().as_object().cloned().unwrap()
+    }
+
+    /// `{"prompt":{…}}` 这种把 /prompt 请求体存下来的形态也认
+    #[test]
+    fn prompt_包裹形态也当_api_导出() {
+        let p = tmp_json("wrapped", &format!(r#"{{"prompt":{WF}}}"#));
+        let g = load_api_graph(&p).expect("应该认出被 prompt 包起来的节点表");
+        assert_eq!(g["17"]["class_type"], Value::String("SaveImage".into()));
+        let (m, fmt) = load_map(&p).unwrap();
+        assert_eq!(fmt, "api");
+        assert_eq!(m["steps"], Value::from(18));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn 角色按类名自动认出_输出走缝合那一路() {
+        let g = wf();
+        let r = auto_roles(&g);
+        assert_eq!(r["load_image"], Value::String("1".into()));
+        assert_eq!(r["crop"], Value::String("10".into()));
+        assert_eq!(r["stitch"], Value::String("16".into()));
+        // 99 号那个 SaveImage 存的是采样结果，不是缝合结果——成图角色不能挑它
+        assert_eq!(r["out_final"], Value::String("17".into()));
+        assert_eq!(r["out_crop"], Value::String("19".into()));
+        assert_eq!(r["out_overlay"], Value::String("20".into()));
+        assert!(validate(&g, &r).is_empty(), "{:?}", validate(&g, &r));
+    }
+
+    /// 缝合没接在裁切后面 = 回来的图不会被贴回原图；成图直接存采样结果 = 整图重绘。
+    /// 两种都不会报错、画面也都正常，语义却已经变了，所以必须在提交前拦住。
+    /// 图里没有预览节点时，可选角色必须留空。把"输出裁切区"顺手指到成图那个 SaveImage 上，
+    /// 读回来的就是一张与成图重复的文件——下载按钮写着"裁切图"，点开是成图。
+    #[test]
+    fn 没有预览节点时可选角色留空() {
+        let mut g = wf();
+        for id in ["18", "19", "20"] {
+            g.remove(id);
+        }
+        let r = auto_roles(&g);
+        assert_eq!(r["out_final"], Value::String("17".into()));
+        assert!(!r.contains_key("out_crop"), "裁切区没节点可认就该空着");
+        assert!(!r.contains_key("out_overlay"));
+        assert!(validate(&g, &r).is_empty(), "{:?}", validate(&g, &r));
+
+        // 手工把两路输出指到同一个节点也要拦
+        let dup = merge_roles(&g, Some(r#"{"out_crop":"17"}"#));
+        let errs = validate(&g, &dup);
+        assert!(errs.iter().any(|e| e.contains("同一个节点")), "{errs:?}");
+    }
+
+    #[test]
+    fn 接错线的图被拒绝接管() {
+        let mut g = wf();
+        // 裁切经提示词编码喂到采样器，所以"接错线"要接一个与这条链无关的源才测得出来
+        g.insert("77".into(), serde_json::json!({"class_type":"LoadImage","inputs":{"image":"另一张.png"}}));
+        g.insert("16".into(), serde_json::json!({"class_type":"InpaintStitchImproved","inputs":{"stitcher":["77",0],"inpainted_image":["77",1]}}));
+        let errs = validate(&g, &auto_roles(&g));
+        assert!(errs.iter().any(|e| e.contains("缝合节点没有接在裁切")), "{errs:?}");
+
+        // 99 号那个 SaveImage 存的是没缝回去的采样结果：手指到它头上就得拦住
+        let g2 = wf();
+        let roles = merge_roles(&g2, Some(r#"{"out_final":"99"}"#));
+        let errs2 = validate(&g2, &roles);
+        assert!(errs2.iter().any(|e| e.contains("输出成图不是从缝合节点出来的")), "{errs2:?}");
+    }
+
+    #[test]
+    fn 缺缝合节点就硬失败而不是回退() {
+        let mut g = wf();
+        g.remove("16");
+        let p = tmp_json("nostitch", &Value::Object(g).to_string());
+        match plan_at(&p.to_string_lossy(), None) {
+            Plan::Refused { errors } => {
+                assert!(errors.iter().any(|e| e.contains("缝合") && e.contains("找不到节点")), "{errors:?}")
+            }
+            other => panic!("缺必需角色应该拒绝，拿到的是 {other:?}"),
+        }
+        std::fs::remove_file(p).ok();
+    }
+
+    /// UI 导出的文件当不了计算图：走内置图，但要把原因带出去（不做静默替换）
+    #[test]
+    fn ui_导出走内置图并把原因带出来() {
+        let p = tmp_json("uilite", LITE);
+        match plan_at(&p.to_string_lossy(), None) {
+            Plan::Builtin { reason } => assert!(reason.contains("UI 导出"), "{reason}"),
+            other => panic!("UI 导出应该是 Builtin，拿到 {other:?}"),
+        }
+        std::fs::remove_file(p).ok();
+    }
+
+    /// 手指过的节点号只在同一种类里收；指错类名的必须当场拒，不然提交时往不该填的输入里写值
+    #[test]
+    fn 角色映射的手指覆盖按类名收() {
+        let mut g = wf();
+        // 把成图角色改成手动指到 99 号（那是"直接存采样结果"那一路）：类名对得上，但结构校验要拦
+        let roles = merge_roles(&g, Some(r#"{"out_final":"99"}"#));
+        assert_eq!(roles["out_final"], Value::String("99".into()));
+        let errs = validate(&g, &roles);
+        assert!(errs.iter().any(|e| e.contains("输出成图")), "{errs:?}");
+        // 指到不存在的节点：merge_roles 照收（它是手指的入口），由 validate 判死
+        let roles2 = merge_roles(&g, Some(r#"{"out_final":"777"}"#));
+        let errs2 = validate(&g, &roles2);
+        assert!(errs2.iter().any(|e| e.contains("777")), "{errs2:?}");
+        // 指错类名（把采样器指到 LoadImage 上）：注入用的输入名根本不存在
+        let roles3 = merge_roles(&g, Some(r#"{"ksampler":"1"}"#));
+        let errs3 = validate(&g, &roles3);
+        assert!(errs3.iter().any(|e| e.contains("没有 seed")), "{errs3:?}");
+        // 空串 = 交回自动认出；这里 17 已被摘掉，所以那个键干脆不存在
+        g.remove("17");
+        g.remove("99");
+        let roles4 = merge_roles(&g, Some(r#"{"out_final":""}"#));
+        assert!(!roles4.contains_key("out_final"), "清空后不该留这个键");
+    }
+
+    #[test]
+    fn 有环的图在提交前就说清() {
+        let mut g = wf();
+        g.insert("14".into(), serde_json::json!({"class_type":"KSampler","inputs":{"model":["14",0],"positive":["11",0],"negative":["11",1],"latent_image":["13",0],"seed":7,"steps":18,"cfg":2.5}}));
+        assert!(has_cycle(&g));
+        let errs = validate(&g, &auto_roles(&g));
+        assert!(errs.iter().any(|e| e.contains("环")), "{errs:?}");
+    }
+
+    #[test]
+    fn feeds_认间接连线也不转死在菱形里() {
+        let g = wf();
+        assert!(feeds(&g, "1", "10"), "直连");
+        assert!(feeds(&g, "3", "14"), "要穿两条 LoRA");
+        assert!(!feeds(&g, "17", "14"), "下游不该反过来喂上游");
+        assert!(!feeds(&g, "1", "1"), "自己不算喂给自己");
     }
 }

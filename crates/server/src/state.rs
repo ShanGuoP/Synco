@@ -2,7 +2,7 @@
 //! `Connection` 是 Send 的，锁只在同步语句期间持有，不跨 await。
 
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -13,6 +13,17 @@ pub struct LiveJob {
     pub cancelled: bool,
 }
 
+/// 回传成图的占位：Drop 时释放。拿不到占位说明同一行已经有人在下载了
+pub struct DlGuard<'a> {
+    ctx: &'a Ctx,
+    id: i64,
+}
+impl Drop for DlGuard<'_> {
+    fn drop(&mut self) {
+        self.ctx.downloading().remove(&self.id);
+    }
+}
+
 pub struct Ctx {
     pub data: PathBuf,
     pub public: PathBuf,
@@ -21,6 +32,9 @@ pub struct Ctx {
     pub misses: Mutex<HashMap<i64, u8>>,
     /// 本进程正在跑的云端任务。队列 worker 进出这里，读接口靠它区分"还在飞"和"上一轮留下的僵尸"
     pub jobs: Mutex<HashMap<i64, LiveJob>>,
+    /// 正在回传成图的行。成图 20–33MB 要下好几秒，而轮询 2.5 秒一轮——没有这个占位，
+    /// 两轮会各自下载一套文件，先落的那套没人认领
+    pub downloading: Mutex<HashSet<i64>>,
     pub cfg: Mutex<Option<crate::service::workflow::Cache>>,
     pub http: reqwest::Client,
 }
@@ -38,6 +52,7 @@ impl Ctx {
             conn: Mutex::new(conn),
             misses: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            downloading: Mutex::new(HashSet::new()),
             cfg: Mutex::new(None),
         })
     }
@@ -54,9 +69,10 @@ impl Ctx {
     pub fn mark_error(&self, id: i64, msg: &str) {
         self.misses.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         let truncated: String = msg.chars().take(400).collect();
+        // 只推进还在排/还在跑的行：已经 done 的那张不该被一次迟到的判死改成 error
         let _ = self
             .db()
-            .prepare_cached("UPDATE results SET status=?, error=? WHERE id=?")
+            .prepare_cached("UPDATE results SET status=?, error=? WHERE id=? AND status IN ('running','queued')")
             .and_then(|mut st| st.execute(("error", truncated.as_str(), id)));
     }
 
@@ -73,6 +89,15 @@ impl Ctx {
     }
     pub fn job_live(&self, id: i64) -> bool {
         self.jobs().contains_key(&id)
+    }
+
+    fn downloading(&self) -> std::sync::MutexGuard<'_, HashSet<i64>> {
+        self.downloading.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 占这一行的回传位：已经被占就返 `None`，调用方直接走，别下载第二套
+    pub fn dl_enter(&self, id: i64) -> Option<DlGuard<'_>> {
+        self.downloading().insert(id).then(|| DlGuard { ctx: self, id })
     }
     /// 点中断：在飞的标记一下，worker 落盘前会看一眼；返回有没有这份在飞的活
     pub fn job_cancel(&self, id: i64) -> bool {

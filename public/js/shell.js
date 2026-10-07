@@ -11,6 +11,7 @@ const NAV = [
   { href: '/f/all',    ico: 'folder', label: '全部项目' },
   { href: '/f/nomask', ico: 'brush',  label: '待涂遮罩' },
   { href: '/f/masked', ico: 'gauge',  label: '已涂待提交' },
+  { href: '/f/canvas', ico: 'canvas', label: '画布' },
 ];
 
 let hooks = {};

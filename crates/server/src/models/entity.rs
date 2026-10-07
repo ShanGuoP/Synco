@@ -12,6 +12,9 @@ fn text(v: Option<&Value>) -> String {
 fn int(v: Option<&Value>) -> i64 {
     v.and_then(|x| x.as_i64()).unwrap_or(0)
 }
+fn opt_int(v: Option<&Value>) -> Option<i64> {
+    v.and_then(|x| x.as_i64()).filter(|x| *x != 0)
+}
 
 #[derive(Clone, Debug)]
 pub struct Image {
@@ -30,6 +33,11 @@ pub struct Image {
     /// 画稿也有 orig_path（它就是那张画稿的 PNG），但**不能**进修图那条链路：
     /// 没有"蒙版外要保持"这回事，裁切与缝合对它没有意义。路由全靠这一列判。
     pub kind: String,
+    /// 「另存为新图」造出来的子图指向的父图与来源结果行。
+    /// 以前这份信息只在文件名里（`… 派生{结果号}.png`），改个名就断，
+    /// 所以项目页的派生入口要靠这两列，而不是靠猜字符串。
+    pub derived_from: Option<i64>,
+    pub derived_result: Option<i64>,
 }
 
 impl Image {
@@ -46,6 +54,8 @@ impl Image {
             h: int(v.get("h")),
             created_at: own(v.get("created_at")),
             kind: own(v.get("kind")).unwrap_or_else(|| "photo".into()),
+            derived_from: opt_int(v.get("derived_from")),
+            derived_result: opt_int(v.get("derived_result")),
         }
     }
 
@@ -73,6 +83,8 @@ pub struct ResultRow {
     pub crop_path: Option<String>,
     pub maskoverlay_path: Option<String>,
     pub thumb_path: Option<String>,
+    /// 画布这一版提交时的线稿快照（照片那一路没有这一项）
+    pub sketch_path: Option<String>,
     pub backend: String,
     /// 提交那一刻的参数快照。云端队列按这一行的 `edge`/`invert` 出图，
     /// 而不是按跑到的那一刻的全局设置——设置改在两张中间不该让后一张变样。
@@ -92,6 +104,7 @@ impl ResultRow {
             crop_path: own(v.get("crop_path")),
             maskoverlay_path: own(v.get("maskoverlay_path")),
             thumb_path: own(v.get("thumb_path")),
+            sketch_path: own(v.get("sketch_path")),
             // 老行没这一列时按本机链路解释，历史云端结果才不会被拿步数/种子去说明
             backend: own(v.get("backend")).unwrap_or_else(|| "comfyui".into()),
             settings_json: v.get("settings_json").and_then(|x| x.as_str()).map(str::to_string),

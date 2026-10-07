@@ -43,10 +43,15 @@ export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, 
       /* 云端记录别拿步数/CFG 去解释：判据用行上的 backend，
          批量那条写库时 settings_json 里没有 cloud 这一节，早先只看 s.cloud 会漏掉它 */
       const c = settingsOf(r)?.cloud;
+      /* 本机那一路要说清用的是谁的图：接管失败退回内置图时，历史记录里看得见的差别
+         只有这一句，不然用户会以为改了自己那张图却出了内置的样 */
+      const graph = s?.graph_source === 'builtin' ? ' · 内置图' : '';
       const body = r.backend === 'cloud'
         ? [c?.model, c?.quality].filter(Boolean).join(' · ') || '云端'
-        : `${r.steps}步 CFG${fmtNum(r.cfg, 0.5)}${nl != null ? ` · LoRA ${nl}` : ''}`;
-      const meta = `${fmtStamp(r.created_at).slice(5)} · ${body}`;
+        : `${r.steps}步 CFG${fmtNum(r.cfg, 0.5)}${nl != null ? ` · LoRA ${nl}` : ''}${graph}`;
+      // 画布那一版带了参考图要在条目上看得见：不然"这条和那条差在哪"只能点开对比层猜
+      const withRefs = Array.isArray(s?.refs) && s.refs.length ? ` · 参考 ${s.refs.length}` : '';
+      const meta = `${fmtStamp(r.created_at).slice(5)} · ${body}${withRefs}`;
       /* 状态是 done 但 PNG 不在盘上（清过 data/projects、手工删过文件）：缩略图与对比都没有左边可画，
          这里按"文件丢失"渲染，比摆一张碎图标诚实 */
       /* 优先服务端切好的 320 成图缩略；没有才回落到裁切图/成图（老记录与成图丢失都走这条） */

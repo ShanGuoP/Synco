@@ -7,14 +7,15 @@ import { toast, toastErr, toastOk, toastBusy } from './ui/toast.js';
 /** resultId -> { imgId, t0, onDone } */
 const pending = new Map();
 const listeners = new Set();
-let timer = 0;
+let next = 0;                         // 下一轮的 setTimeout 句柄（0 = 没排）
+let running = false;                  // 上一轮还在飞：这时不能再排第二次，也别再插队
 
 export const pendingCount = () => pending.size;
 export function onTick(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 const emit = () => { for (const fn of [...listeners]) { try { fn(pendingCount()); } catch (e) { console.error(e); } } };
 
 function notify() {
-  if (!pending.size) { clearInterval(timer); timer = 0; }
+  if (!pending.size) { clearTimeout(next); next = 0; }
   emit();
 }
 
@@ -47,7 +48,20 @@ async function tick() {
   notify();
 }
 
-function startPolling() { if (!timer) timer = setInterval(tick, 2500); tick(); }
+/* 上一轮跑完才排下一轮。固定 setInterval 撞慢网络时会让同一个 result id 被并发查两次
+   （一次请求超过 2.5 秒，下一轮已经带着同一批 id 起飞），终态于是可能落两遍：
+   重复 toast、重复写回角标、onDone 里那次入库或删除跟着跑第二次。 */
+async function loop() {
+  running = true;
+  try { await tick(); } finally { running = false; }
+  if (pending.size) next = setTimeout(loop, 2500);
+  else notify();
+}
+function startPolling() {
+  if (running) return;                 // 正在飞的那一轮带着同一个 Map，跑完自然会看到新排进来的
+  clearTimeout(next); next = 0;
+  loop();
+}
 
 /**
  * 提交一批图片去生成。

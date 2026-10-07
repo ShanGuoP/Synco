@@ -128,7 +128,7 @@ function buildShell() {
     railBtn('help', 'book', '帮助', false, helpModal));
 
   const history = createHistory({ onPick: showCompare, onRestore: restoreFromResult, onFork: forkResult, onDel: delResult });
-  const params = createParams({ onSubmit: doSubmit, onStop: stopCurrent, onMode: applyMode, onInk: applyInvert });
+  const params = createParams({ onSubmit: doSubmit, onStop: stopCurrent, onMode: applyMode, onInk: applyScope });
   /* 预设按钮塞进参数列头部，紧挨重置键，不新增一行 */
   const presets = createPresetMenu({ onApply: applyPreset });
   const hd = params.node.querySelector('.col-hd');
@@ -352,7 +352,9 @@ function spotColor() {
 }
 
 function invertOn() {
-  return isCloud() && !!(store.peek('settings') || {}).invert;
+  const s = store.peek('settings') || {};
+  // 整张重绘根本不看遮罩，这时候铺朱红预览是在说一件不会发生的事
+  return isCloud() && !!s.invert && !s.full;
 }
 
 /** 朱红铺满整幅，再用笔迹按 alpha 挖洞：剩下的红就是"会被重绘的地方" */
@@ -377,19 +379,23 @@ function syncInvertHint() {
   x.globalCompositeOperation = 'source-over';
 }
 
-/** 涂要改的 / 涂要保留的：换的是这一枪的语义，遮罩文件本身不动 */
-function applyInvert(on) {
+/** 涂要改的 / 涂要保留的 / 整张重绘：换的是这一枪的语义，遮罩文件本身不动 */
+function applyScope(mode) {
   if (!ctx?.imgId) return;
-  const next = !!on;
-  if (next === !!store.peek('settings')?.invert) return;
-  patchSettings({ invert: next });
+  const s = store.peek('settings') || {};
+  const next = { invert: mode === 'keep', full: mode === 'full' };
+  if (!!s.invert === next.invert && !!s.full === next.full) return;
+  patchSettings(next);
   saveSettings().catch(() => { /* 参数写库失败不阻断这次编辑 */ });
   ctx.params.sync(store.peek('settings'));
+  ctx.params.setScope();
   paintHud();
   syncInvertHint();
-  ctx.params.line(next
-    ? '反向涂抹：涂住的是要保住的主体，其余整幅交给云端重绘'
-    : '正向涂抹：涂住的那块交给云端重绘，其余逐像素保持原图');
+  ctx.params.line(mode === 'full'
+    ? '整张重绘：原图整张发过去按提示词生成，蒙版外不再逐像素保持（这条只走云端）'
+    : mode === 'keep'
+      ? '反向涂抹：涂住的是要保住的主体，其余整幅交给云端重绘'
+      : '正向涂抹：涂住的那块交给云端重绘，其余逐像素保持原图');
 }
 
 /**
@@ -604,8 +610,12 @@ async function doSubmitCloud() {
      按原顺序会被"还没有遮罩"打回一次，用户看到的是按钮失灵 */
   await ctx.painter.flush();
   const s = store.peek('settings');
-  // 反向时"一笔没涂"是合法输入（= 整幅重绘），正向才要求先涂出区域
-  if (!s?.invert && !store.peek('images').find(i => i.id === imgId)?.has_mask) { toastErr('还没有遮罩', '先用画笔涂出要修的区域'); return; }
+  const full = !!s?.full;
+  // 反向与整张重绘都不要求涂过：前者"没涂=整幅"，后者根本不看遮罩；正向才要求先涂出区域
+  if (!full && !s?.invert && !store.peek('images').find(i => i.id === imgId)?.has_mask) {
+    toastErr('还没有遮罩', '先用画笔涂出要修的区域，或把上面切到「整张重绘」');
+    return;
+  }
   const st = ctx.params.stages;
   let cur = 'submit';
   /* 等模型的几十秒里可能已经切图：面板/阶段条是别人家的了，别再往上画 */
@@ -629,7 +639,7 @@ async function doSubmitCloud() {
   st.reset();
   st.set('submit', 'run');
   ctx.params.setBusy(true);
-  ctx.params.line('排队与裁切…');
+  ctx.params.line(full ? '排队与发送原图…' : '排队与裁切…');
   ctx.compare.hide();
   await saveSettings();
   lastSubmitted = { ...s };
@@ -645,6 +655,8 @@ async function doSubmitCloud() {
         edge: Number(s.edge) || 0,
         // 反向标志按行存进 results.settings_json：历史列回放才认得出"这张是反向生成的"
         invert: !!s.invert,
+        // 整张重绘同样按行存：它连遮罩都不读，回来也不缝合
+        full,
         cloud: { model: c.model, quality: c.quality },
       },
     });
@@ -652,16 +664,19 @@ async function doSubmitCloud() {
   if (!r?.result_id) { fail(r?.error || '云端应答异常'); return; }
 
   setJob(imgId, { state: 'run', resultId: r.result_id, error: null });
-  advance('sample', `云端重绘裁切区 #${r.result_id}…`);
+  advance('sample', full ? `云端整图生成 #${r.result_id}…` : `云端重绘裁切区 #${r.result_id}…`);
   // 之后与本机链路同一套：轮库里这一行，缝合与落盘都在服务端推进
   adopt(r.result_id, imgId, {
     onTick: status => {
       if (!here()) return;
       if (status === 'running' || status === 'queued') st.set('sample', 'run');
-      else if (status === 'done') advance('stitch', '服务端缝合落盘…');
+      else if (status === 'done') { if (full) st.set('sample', 'done'); else advance('stitch', '服务端缝合落盘…'); }
       else if (status === 'error') { st.set(cur, 'err'); }
     },
-    onDone: done => { if (done?.status === 'done') advance('stitch'); onJobSettled(done); },
+    onDone: done => {
+      if (done?.status === 'done' && !full) advance('stitch');
+      onJobSettled(done);
+    },
   });
 }
 
@@ -669,6 +684,11 @@ async function doSubmit() {
   if (!ctx?.imgId) return;
   if (ctx.info?.orig_dead) { toastErr('这张图的原文件已经不在磁盘上', '只剩一条记录，画布是空的，提交上去只会生成一张废图。回项目页删掉它或重新导入同名原图'); return; }
   if (isCloud()) return doSubmitCloud();
+  // 整张重绘只做了云端那一条：本机这条要整图重绘得换一张没有裁切/缝合的工作流，别悄悄改用局部重绘去跑
+  if (store.peek('settings')?.full) {
+    toastErr('整张重绘只走云端', '本机 ComfyUI 那一路始终会走裁切-缝合（蒙版外逐像素保持）。要整图重绘请切到云端。');
+    return;
+  }
   const imgId = ctx.imgId;
   await ctx.painter.flush();          // 同上：先落笔迹，再判这张有没有遮罩
   const img = store.peek('images').find(i => i.id === imgId);

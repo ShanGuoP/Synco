@@ -28,6 +28,15 @@ const ART = {
     <path d="m84 44 14-14 8 8-14 14z" fill="var(--bg-card)" stroke="currentColor" stroke-opacity=".55" stroke-width="1.3"/>
     <path d="M84 44 74 62l10-4z" fill="var(--spot)"/>
   </svg>`,
+  canvas: `<svg class="empty__art" viewBox="0 0 132 96" fill="none">
+    <rect x="20" y="14" width="70" height="56" fill="var(--bg-card)" stroke="currentColor" stroke-opacity=".45" stroke-width="1.4"/>
+    <path d="M28 58c10-16 18-5 26-16s14-6 20 3" stroke="currentColor" stroke-opacity=".4" stroke-width="1.6" stroke-dasharray="4 5"/>
+    <circle cx="40" cy="30" r="5.5" stroke="currentColor" stroke-opacity=".38" stroke-width="1.3"/>
+    <circle cx="57" cy="25" r="4" stroke="currentColor" stroke-opacity=".28" stroke-width="1.3"/>
+    <path d="M20 70h70" stroke="currentColor" stroke-opacity=".2" stroke-width="1.2"/>
+    <rect x="86" y="46" width="26" height="26" fill="var(--spot)"/>
+    <path d="M99 52v14M92 59h14" stroke="var(--txt-inv)" stroke-width="2"/>
+  </svg>`,
   compare: `<svg class="empty__art" viewBox="0 0 132 96" fill="none">
     <rect x="26" y="20" width="40" height="56" fill="var(--bg-card)" stroke="currentColor" stroke-opacity=".4" stroke-width="1.3"/>
     <rect x="66" y="20" width="40" height="56" fill="var(--bg-card)" stroke="var(--spot)" stroke-opacity=".6" stroke-width="1.3"/>

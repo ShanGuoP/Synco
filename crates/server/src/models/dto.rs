@@ -23,6 +23,9 @@ pub fn image_json(ctx: &Ctx, img: &Image, with_created: bool) -> Value {
     o.insert("project_id".into(), Value::from(img.project_id));
     o.insert("name".into(), Value::String(img.name.clone()));
     o.insert("kind".into(), Value::String(img.kind.clone()));
+    // 派生谱系是这一行自己的事实，不是聚合：单图接口与派生列表都要读得到
+    o.insert("derived_from".into(), img.derived_from.map(Value::from).unwrap_or(Value::Null));
+    o.insert("derived_result".into(), img.derived_result.map(Value::from).unwrap_or(Value::Null));
     o.insert("w".into(), Value::from(img.w));
     o.insert("h".into(), Value::from(img.h));
     if with_created {
@@ -60,6 +63,8 @@ pub fn image_row_json(ctx: &Ctx, row: &Value) -> Value {
     o.insert("result_count".into(), Value::from(num("result_count")));
     o.insert("result_done".into(), Value::from(num("result_done")));
     o.insert("latest_result_url".into(), url(latest.as_ref()));
+    // 角标的第二个数：这张图另存出去了几张子图（父子关系本身由 image_json 带）
+    o.insert("derived_count".into(), Value::from(num("derived_count")));
     Value::Object(o)
 }
 
@@ -80,6 +85,27 @@ pub fn result_json(ctx: &Ctx, row: &Value) -> Value {
     // M3 才有这一列；老库里没成图缩略图时回 null，前端回落到 final_url
     if o.contains_key("thumb_path") || r.thumb_path.is_some() {
         o.insert("thumb_url".into(), url(r.thumb_path.as_ref()));
+    }
+    // 画布那一版的线稿快照：照片那一路永远没有这一项，所以只在有的时候给
+    if o.contains_key("sketch_path") || r.sketch_path.is_some() {
+        o.insert("sketch_url".into(), url(r.sketch_path.as_ref()));
+        o.insert("sketch_dead".into(), dead(ctx, r.sketch_path.as_ref()));
+    }
+    // 这一版**实际带走**的参考图（行上的快照，不是此刻的槽位）：历史条目要数得出几张、
+    // 点开要看得见是哪几张，文件丢了也得说"丢了"而不是摆一张碎图
+    let ref_rels = crate::service::refs::row_refs(&r);
+    if !ref_rels.is_empty() {
+        let list: Vec<Value> = ref_rels
+            .iter()
+            .map(|rel| {
+                serde_json::json!({
+                    "url": format!("/file/{rel}"),
+                    "name": util::stem_of(rel),
+                    "dead": !util::file_alive(&ctx.data, &Value::String(rel.to_string())),
+                })
+            })
+            .collect();
+        o.insert("refs".into(), Value::Array(list));
     }
     Value::Object(o)
 }
