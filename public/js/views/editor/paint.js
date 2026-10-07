@@ -18,6 +18,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
   let painting = false;
   let undoStack = [];
   let saveTimer = 0;
+  let failStreak = 0;                // 连败几次：超过上限就不再自己重试
   let inflight = null;                // 正在飞的保存（含排队的那个），换图前必须等它落定
   let dirtyAt = 0, savedAt = 0;       // 落笔序号 / 已落盘序号：两者不等就有笔迹还没进磁盘
   let owner = 0;                      // 这批笔迹属于哪张图：落笔时定，异步段不再读外部上下文
@@ -187,11 +188,23 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
     return alphaEmpty(x, y, Math.min(mask.width, Math.ceil(bbox.x1)) - x, Math.min(mask.height, Math.ceil(bbox.y1)) - y);
   }
 
-  function markDirty() { if (dirtyAt === savedAt) onDirty?.(true); dirtyAt++; }
+  function markDirty() { if (dirtyAt === savedAt) onDirty?.(true); dirtyAt++; failStreak = 0; }
 
   function queueSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 700);
+  }
+
+  /* 保存失败的自动重试要有上限：这一张被服务端拒了（尺寸不合法、库里没这行）或者进程没起来时，
+     固定 700ms 的无限重试就是无限次重编码整张 PNG + 无限次 toast。
+     笔迹仍然挂着脏：换图、提交、关页那几次显式 flush，以及下一笔新落笔，都还会再试。 */
+  const RETRY_MAX = 3;
+  function retryLater() {
+    failStreak++;
+    if (failStreak > RETRY_MAX) return false;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 700 * 2 ** (failStreak - 1));   // 700ms → 1.4s → 2.8s
+    return false;
   }
 
   /**
@@ -210,11 +223,12 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
       if (!empty) {
         // 涂抹层原样落盘：上采样到原图尺寸是服务端的事（imagesvc::mask_to_orig）
         try { b64 = (await encodeMask(mask)).b64; }
-        catch (e) { queueSave(); throw e; }
+        catch (e) { retryLater(); throw e; }
       }
       /* 钩子返 false = 这次没落住：不推进落盘序号，下一次 flush/换图/定时器都会带上这批笔迹 */
-      if (await onSaved?.({ empty, b64, id }) === false) { queueSave(); return false; }
+      if (await onSaved?.({ empty, b64, id }) === false) return retryLater();
       savedAt = upto;
+      failStreak = 0;
       return true;
     });
     inflight = run.catch(() => false);
@@ -243,7 +257,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
       if (seq !== loadSeq) return false;   //等的这段时间里已经有人换过图了，这一批参数不属于这里
       iw = w; ih = h;
       owner = id || 0;
-      // 涂抹层与底图同分辨率（proxy 档），保存时原样落盘，上采样交服务端
+      // 涂抹层的档位由调用方定（修图页见 PAINT_EDGE），保存时原样落盘，上采样交服务端
       k = Math.max(1e-6, (paint?.w || w) / Math.max(1, w));
       mask.width = Math.max(1, Math.round(paint?.w || w));
       mask.height = Math.max(1, Math.round(paint?.h || h));

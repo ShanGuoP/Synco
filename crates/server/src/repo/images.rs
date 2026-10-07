@@ -54,7 +54,9 @@ pub fn list_missing_thumb(ctx: &Ctx, limit: i64) -> Result<Vec<Image>> {
     Ok(rows_to_images(
         &repo::all(
             ctx,
-            &format!("SELECT {COLS} FROM images WHERE thumb_path IS NULL ORDER BY id LIMIT ?"),
+            // 画稿不参与派生档（imagesvc::derive 对它直接返回），把它算进批次就是
+            // "补空当"永远补不动：一批 400 个名额全被画稿占完，照片一张都排不上
+            &format!("SELECT {COLS} FROM images WHERE thumb_path IS NULL AND kind <> 'sketch' ORDER BY id LIMIT ?"),
             &[repo::i(limit)],
         )?,
     ))

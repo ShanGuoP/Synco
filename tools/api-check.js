@@ -29,8 +29,12 @@ async function boot(dataDir) {
   proc.stderr.on('data', b => log.push(b.toString()));
   const t0 = Date.now();
   let port = 0;
+  // 数据目录已经被人占着（桌面壳开着）时，服务不重试随机端口，直接带原因退出——
+  // 这条从 boot 里冒出来是"已经有另一个在用了"，不是"起不来"
+  const held = () => /已经有另一个 Synco/.test(log.join(''));
   while (!port) {
     try { const p = fs.readFileSync(path.join(dataDir, 'port.txt'), 'utf8').trim(); if (/^\d+$/.test(p)) port = Number(p); } catch {}
+    if (proc.exitCode !== null && held()) throw new Error('这个数据目录已经有另一个 Synco 在用了（自检要的是隔离实例：先设 SYNCO_DATA）');
     if (proc.exitCode !== null) throw new Error(`服务提前退出 code=${proc.exitCode}：\n${log.join('')}`);
     if (Date.now() - t0 > 20000) throw new Error(`等 port.txt 超时：\n${log.join('')}`);
     await new Promise(r => setTimeout(r, 120));
@@ -385,6 +389,44 @@ async function refsSelfCheck(base, dataDir) {
 
   const one = await req(base, 'GET', `/api/canvas/${a}`);
   ok('画布详情带得上槽位集合与上限', Array.isArray(one.body.refs) && one.body.refs_max >= 1, JSON.stringify(one.body).slice(0, 160));
+
+  /* 非相邻重复：`Vec::dedup()` 只去相邻的，body 给 ["a","b","a"] 时同一张参考图会被发两次。
+     反向对照就是这条——以前留下的集合是 3 张而不是 2 张。 */
+  const two = await req(base, 'POST', `/api/canvas/${a}/refs`, { files: [{ b64: PNG }, { b64: PNG }] });
+  const paths = (two.body.refs || []).map(r => r.path);
+  const dup = await req(base, 'PUT', `/api/canvas/${a}/refs`, { paths: paths.length >= 2 ? [paths[0], paths[1], paths[0]] : paths });
+  const kept = (dup.body.refs || []).map(r => r.path);
+  ok('整组替换里非相邻的重复只算一张', dup.status === 200 && kept.length === 2 && new Set(kept).size === 2,
+    `${dup.status} 留下 ${kept.length} 张`);
+  return fails;
+}
+
+/**
+ * 数据目录独占（回归：双开毁图那条链路）。
+ * 第二份进程要是跑通了，它会覆写 port.txt（运维菜单从此指向死端口）并按自己那份空白的
+ * 在飞表把第一份正在跑的成图判成僵尸——所以这里看的不是"退没退"，而是盘上什么都没变。
+ */
+async function lockSelfCheck(base, dataDir) {
+  const fails = [];
+  const ok = (name, cond, detail) => {
+    console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond ? '' : '：' + detail}`);
+    if (!cond) fails.push(name);
+  };
+  const portFile = path.join(dataDir, 'port.txt');
+  const before = fs.readFileSync(portFile, 'utf8');
+  const proc = spawn(BIN, [], { cwd: ROOT, env: { ...process.env, SYNCO_DATA: dataDir, SYNCO_PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  proc.stdout.on('data', b => { out += b.toString(); });
+  proc.stderr.on('data', b => { out += b.toString(); });
+  const code = await new Promise(res => {
+    const t = setTimeout(() => { proc.kill(); res('15 秒没退'); }, 15000);
+    proc.on('exit', c => { clearTimeout(t); res(c); });
+  });
+  ok('第二份进程被挡在开库之前（非 0 退出）', typeof code === 'number' && code !== 0, `退出码 ${code}｜${out.slice(0, 120)}`);
+  ok('理由说的是这个目录已经在用', /已经有另一个 Synco/.test(out), out.slice(0, 160));
+  ok('port.txt 没被第二份改写', fs.readFileSync(portFile, 'utf8') === before, `${before.trim()} → ${fs.readFileSync(portFile, 'utf8').trim()}`);
+  const alive = await req(base, 'GET', '/api/projects');
+  ok('第一份照常服务', alive.status === 200, `${alive.status}`);
   return fails;
 }
 
@@ -420,15 +462,18 @@ async function main() {
 
   console.log('\n画布参考图槽位自检');
   const rf = await refsSelfCheck(base, dataDir);
+
+  console.log('\n数据目录独占自检');
+  const lk = await lockSelfCheck(base, dataDir);
   proc.kill();
-  if (bad || m1.length || m3.length || ph.length || wf.length || rf.length || tv.length) console.log('\n—— 服务输出 ——\n' + log.join('').split('\n').slice(-40).join('\n'));
+  if (bad || m1.length || m3.length || ph.length || wf.length || rf.length || lk.length || tv.length) console.log('\n—— 服务输出 ——\n' + log.join('').split('\n').slice(-40).join('\n'));
   if (!process.argv.includes('--keep')) {
     // 进程还在退的时候 Windows 会锁着目录，等一会儿再删，删不掉也不算失败
     await new Promise(r => setTimeout(r, 600));
     try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { console.log(`（临时目录留着了：${dataDir}）`); }
   }
-  console.log(`\n失败计数 → 端点扫查 ${bad} · 穿越 ${tv.length} · M1 ${m1.length} · M3 ${m3.length} · 短语 ${ph.length} · 工作流 ${wf.length} · 参考图 ${rf.length}`);
-  process.exit(bad || tv.length || m1.length || m3.length || ph.length || wf.length || rf.length ? 1 : 0);
+  console.log(`\n失败计数 → 端点扫查 ${bad} · 穿越 ${tv.length} · M1 ${m1.length} · M3 ${m3.length} · 短语 ${ph.length} · 工作流 ${wf.length} · 参考图 ${rf.length} · 目录锁 ${lk.length}`);
+  process.exit(bad || tv.length || m1.length || m3.length || ph.length || wf.length || rf.length || lk.length ? 1 : 0);
 }
 
 main().catch(e => { console.error(e); process.exit(2); });

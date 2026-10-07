@@ -414,6 +414,7 @@ mod tests {
         assert_eq!(got, want, "清单里数出来的瓦片数要和盘上的一一对应");
         assert!(got > 100, "24MP 至少该切出上百张，实得 {got}");
         println!("  24MP 实测（debug 构建）：thumb+proxy {derive_ms}ms，瓦片 {tiles_ms}ms（{got} 张 / {} 级）", levels.len());
+        drop(ctx);   // 58MB 的目录以前就是这么一年年留在临时盘上的：连接没撒手，删除在 Windows 上静默失败
         let _ = std::fs::remove_dir_all(&dir);
     }
 

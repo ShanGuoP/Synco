@@ -4,6 +4,7 @@
 import { createStore } from './core/store.js';
 import { api } from './core/api.js';
 import { baseName } from './core/format.js';
+import { routeGen } from './core/router.js';
 
 export const store = createStore({
   cfg: null,
@@ -130,7 +131,11 @@ export async function loadPhrases() {
 }
 
 export async function loadProject(id) {
+  const g = routeGen();
   const d = await api.project(id);
+  // 连着切两个项目时，前一个的响应可能后到：那一份 images/settings 属于已经走掉的那一页，
+  // 写进 store 就是"屏幕上开着 B，数据却是 A"，随后任何一张卡片的动作都作用在错的图上
+  if (g !== routeGen()) return d;
   if (!d.project) throw new Error('项目不存在');
   const cfg = store.peek('cfg') || await api.cfg().then(c => { store.set({ cfg: c }); return c; });
   store.set({
@@ -150,8 +155,17 @@ export function saveSettings() {
   return api.saveSettings(project.id, settings).catch(() => { /* 参数写库失败不阻断生成 */ });
 }
 
+/** 面板与预设共用的参数区间。两处各写一套数字时，套进来的预设就会"滑杆停在 60、store 里是 100、发出去也是 100" */
+export const PARAM_RANGE = { steps: [4, 60], cfg: [0.5, 14] };
+
 export function patchSettings(patch) {
-  store.set({ settings: { ...store.peek('settings'), ...patch } }, 'settings');
+  const next = { ...store.peek('settings'), ...patch };
+  // 数值项进门就夹一次：预设弹窗以前按 1–100 / 0–20 收值，老库里还躺着面板表达不了的步数。
+  // 夹在这个唯一的写入口，屏幕上的、store 里的、发出去的就只能是同一个数
+  for (const [k, [lo, hi]] of Object.entries(PARAM_RANGE)) {
+    if (typeof next[k] === 'number' && Number.isFinite(next[k])) next[k] = Math.min(hi, Math.max(lo, next[k]));
+  }
+  store.set({ settings: next }, 'settings');
 }
 
 export function collectLoras(list) {

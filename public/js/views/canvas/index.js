@@ -34,6 +34,7 @@ const ZOOMS = [
 ];
 
 let c = null;                      // 上下文：只建一次，换画布复用
+const inFlight = new Set();        // 有提交在飞的画布 id：闸门要按画布存，切走再回来才知道按钮该不该禁着
 let seq = 0;                       // 装载序号，晚到的旧响应要能认出自己过期
 let rerunFrom = null;              // 下一次生成是"哪条成图的再来一版"
 
@@ -262,6 +263,9 @@ async function load(imgId) {
   syncResults(d.results || []);
   c.refMax = d.refs_max || c.refMax || 4;
   paintRefs(d.refs || []);
+  // 按钮状态要跟着"这张有没有在飞"走：从生成中的画布切走再切回来，禁用的必须是禁用、
+  // 能点的必须是能点，而不是沿用上一张的界面
+  c.paintGo(inFlight.has(imgId));
 }
 
 function syncResults(rows, activeId) {
@@ -416,18 +420,25 @@ async function onSketchSaved({ empty, b64, id }) {
 
 /* ==================== 生成 ==================== */
 async function submit() {
-  if (!c?.imgId || c.busy) return;
+  if (!c?.imgId || inFlight.has(c.imgId)) return;
   const prompt = (c.ta.value || '').trim();
   if (!prompt) { toastErr('提示词是空的', '画布只看这句话生成'); return; }
-  await c.painter.flush();
   const imgId = c.imgId;
   const rerunOf = rerunFrom; rerunFrom = null;
+  /* 闸门在第一个 await 之前落下。写在 await 之后就等于没设：提交要飞几秒，
+     这期间判据读到的还是 false，双击就是两条云端任务、两份钱。
+     按钮禁用只挡鼠标，Ctrl+Enter 绕得过来，所以两条路径都看这个集合。 */
+  inFlight.add(imgId);
+  c.paintGo(true);
+  const release = () => {
+    inFlight.delete(imgId);
+    if (c && c.imgId === imgId) c.paintGo(false);
+  };
+  try { await c.painter.flush(); } catch (e) { release(); toastErr('画稿没落盘', e.message); return; }
   let r;
   try { r = await api.canvasGenerate(imgId, { prompt }, rerunOf); }
-  catch (e) { toastErr('提交失败', e.message); return; }
-  if (!r?.result_id) { toastErr('没有排上', r?.error || '云端没接这次提交'); return; }
-  c.busy = true;
-  c.paintGo(true);
+  catch (e) { release(); toastErr('提交失败', e.message); return; }
+  if (!r?.result_id) { release(); toastErr('没有排上', r?.error || '云端没接这次提交'); return; }
   const withRefs = c.refList.length ? ` · 带 ${c.refList.length} 张参考图` : '';
   line(rerunOf
     ? `已排进云端队列 #${r.result_id}（改自 #${rerunOf}${withRefs}）…`
@@ -435,7 +446,7 @@ async function submit() {
   adopt(r.result_id, imgId, {
     onTick: s => { if (c.imgId === imgId) line(s === 'queued' ? '排队中…' : '云端生成中…'); },
     onDone: async done => {
-      if (c.imgId === imgId) { c.busy = false; c.paintGo(false); }
+      release();
       line(done?.status === 'done' ? `完成 #${done.id}` : `失败：${String(done?.error || '未知原因').slice(0, 90)}`);
       try {
         const d = await api.canvas(imgId);

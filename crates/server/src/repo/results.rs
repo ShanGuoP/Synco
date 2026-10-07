@@ -297,6 +297,7 @@ mod tests {
         let row = value_by_id(&ctx, id).unwrap().unwrap();
         assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("error"));
         assert!(row.get("final_path").and_then(|v| v.as_str()).unwrap_or("").is_empty(), "中断的行不该挂着成图路径");
+        drop(ctx);   // 连接还开着的时候 Windows 删不掉 app.db
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

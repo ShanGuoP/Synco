@@ -3,7 +3,7 @@
 import { el, fill } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { api } from '../core/api.js';
-import { store } from '../state.js';
+import { store, PARAM_RANGE } from '../state.js';
 import { modal, confirm, askName } from './modal.js';
 import { toastOk, toastErr } from './toast.js';
 import { fmtNum } from '../core/format.js';
@@ -24,14 +24,14 @@ function askPreset({ title, name = '', prompt = '', negative = '', steps = 20, c
     pt.value = prompt;
     const ng = el('textarea.textarea', { rows: '2', placeholder: '多余的手指、塑料感皮肤、噪点…', spellcheck: 'false' });
     ng.value = negative;
-    const st = el('input.input', { type: 'number', min: '1', max: '100', step: '1', value: String(steps) });
-    const cf = el('input.input', { type: 'number', min: '0', max: '20', step: '0.5', value: String(cfg) });
+    const st = el('input.input', { type: 'number', min: String(PARAM_RANGE.steps[0]), max: String(PARAM_RANGE.steps[1]), step: '1', value: String(steps) });
+    const cf = el('input.input', { type: 'number', min: String(PARAM_RANGE.cfg[0]), max: String(PARAM_RANGE.cfg[1]), step: '0.5', value: String(cfg) });
     const fld = (label, node) => el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: label }), node);
     const save = () => {
       const v = {
         name: nm.value.trim(), prompt: pt.value, negative: ng.value,
-        steps: Math.min(100, Math.max(1, Number(st.value) || 20)),
-        cfg: Math.min(20, Math.max(0, Number(cf.value) || 3)),
+        steps: Math.min(PARAM_RANGE.steps[1], Math.max(PARAM_RANGE.steps[0], Number(st.value) || 20)),
+        cfg: Math.min(PARAM_RANGE.cfg[1], Math.max(PARAM_RANGE.cfg[0], Number(cf.value) || 3)),
       };
       if (!v.name) { toastErr('先起个名字'); nm.focus(); return; }
       done(v);

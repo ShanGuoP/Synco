@@ -228,6 +228,8 @@ mod tests {
         drop(db);
         let db2 = open(&dir).unwrap();
         assert_eq!(tables(&db2).len(), 6);
+        // Windows 上句柄还开着就删不掉：连接必须先撒手，否则这句静默失败，每次跑测试留一个目录
+        drop(db2);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -251,6 +253,7 @@ mod tests {
         // 幂等：第二次不该再有改动
         assert_eq!(heal_blank_names(&db).unwrap(), ());
         assert_eq!(got(2), "0925 漫展");
+        drop(db);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -284,6 +287,7 @@ mod tests {
         // 幂等：第二次一条都不该再改
         heal_derived_from_names(&db).unwrap();
         assert_eq!(got(4), (Some(3), Some(7)));
+        drop(db);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -316,6 +320,7 @@ mod tests {
         db2.execute("DELETE FROM presets WHERE kind='phrase'", []).unwrap();
         seed_phrases(&db2).unwrap();
         assert_eq!(phrase_count(&db2), 0, "删光的短语被重新播出来了");
+        drop(db2);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -347,6 +352,7 @@ mod tests {
             .query_row("SELECT updated_at FROM projects WHERE id=2", [], |r| r.get(0))
             .unwrap();
         assert_eq!(healthy, "2026-10-02 09:00:00", "健康行不该被动");
+        drop(db);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

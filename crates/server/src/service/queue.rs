@@ -270,7 +270,9 @@ fn prepare(ctx: &Shared, img: &Image, settings: &Value) -> std::result::Result<P
     // 反向涂抹且没存过遮罩 = 一笔没保 = 整幅重绘，这时没有遮罩文件是合法输入；正向仍然要拦
     let mask_alpha = match img.mask_path.as_deref().and_then(|m| util::data_file(&ctx.data, m)) {
         Some(p) => codec::decode(&std::fs::read(&p).map_err(|e| format!("读遮罩失败：{e}"))?)?.alpha(),
-        None if params.invert => stitch_core::Alpha::new(img.w.max(1) as usize, img.h.max(1) as usize),
+        // 按**已解码的真实尺寸**开这张空笔迹缓冲：库里那对 w/h 是导入时客户端自报的（只夹到 3 万），
+        // 跟着它开就是 30000×30000 = 900MB，dilate 再 clone 一份，ink_bbox 单线程扫 9 亿个点
+        None if params.invert => stitch_core::Alpha::new(photo.w, photo.h),
         None => return Err("遮罩上没有可用笔迹，涂一处再提交".into()),
     };
     match build_crop_payload(&photo, &mask_alpha, &params) {

@@ -23,7 +23,24 @@ async function tick() {
   if (!pending.size) return notify();
   for (const [rid, job] of [...pending]) {
     let r;
-    try { r = await api.result(rid); } catch (e) { continue; /* 单次网络抖动，下轮再试 */ }
+    try { r = await api.result(rid); }
+    catch (e) {
+      /* 404 = 这一行已经不在了（被删、或从来没建起来）。继续敲下去只会一直敲到刷新页面为止，
+         而角标会永远停在"生成中"——那是撒谎，不是等待。 */
+      if (e instanceof ApiError && e.status === 404) {
+        pending.delete(rid);
+        setJob(job.imgId, { state: 'idle', resultId: null });
+        continue;
+      }
+      // 其余错误按网络抖动处理，但也要有尽头：服务换了端口、后端整个不在时失败是永远不会成功的
+      if (++job.fails >= 8) {
+        pending.delete(rid);
+        setJob(job.imgId, { state: 'err', resultId: rid, error: '读不到这条任务的状态，已停止轮询' });
+        toastErr('轮询已停止', `#${rid}：连续 8 次读不到状态（服务可能已经重启）`);
+      }
+      continue;
+    }
+    job.fails = 0;
     // 服务端队列里的 queued 与 running 都还没落定，都算"在跑"
     if (r.status === 'running' || r.status === 'queued') { job.onTick?.(r.status, r); continue; }
     pending.delete(rid);
@@ -101,7 +118,7 @@ export async function submit(ids, settings, opt = {}) {
       continue;
     }
     ok++;
-    pending.set(one.result_id, { imgId: one.image_id, t0: Date.now(), onTick: opt.onTick, onDone: opt.onDone });
+    pending.set(one.result_id, { imgId: one.image_id, t0: Date.now(), fails: 0, onTick: opt.onTick, onDone: opt.onDone });
     setJob(one.image_id, { state: 'run', error: null, resultId: one.result_id });   // 记下 id，界面上才有"中断这一张"的对象
     done.push(one);
   }
@@ -123,7 +140,7 @@ export function drop(resultId) {
  */
 export function adopt(resultId, imgId, opt = {}) {
   if (!resultId || pending.has(resultId)) return false;
-  pending.set(resultId, { imgId, t0: 0, onTick: opt.onTick, onDone: opt.onDone });
+  pending.set(resultId, { imgId, t0: 0, fails: 0, onTick: opt.onTick, onDone: opt.onDone });
   setJob(imgId, { state: 'run', resultId });
   startPolling();
   return true;

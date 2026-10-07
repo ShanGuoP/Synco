@@ -5,7 +5,7 @@ import { el, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { makeProw } from '../../ui/controls.js';
 import { makeSteps, STAGES } from '../../ui/progress.js';
-import { store, patchSettings, defaultsFromCfg, effMode } from '../../state.js';
+import { store, patchSettings, defaultsFromCfg, effMode, PARAM_RANGE } from '../../state.js';
 import { phrasesManager } from '../../ui/phrases.js';
 import { baseName, fmtNum } from '../../core/format.js';
 
@@ -94,8 +94,8 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
   panePrompt.append(cloudNote, edgeRow);
 
   /* ---------------- 采样页 ---------------- */
-  const stepsCtl = makeProw({ label: '采样步数', min: 4, max: 60, step: 1, value: 20, tip: '越大越细，也越慢', onChange: v => patchSettings({ steps: v }) });
-  const cfgCtl = makeProw({ label: 'CFG 引导', min: 0.5, max: 14, step: 0.5, value: 3, tip: '越高越贴指令，过高会糊', onChange: v => patchSettings({ cfg: v }) });
+  const stepsCtl = makeProw({ label: '采样步数', min: PARAM_RANGE.steps[0], max: PARAM_RANGE.steps[1], step: 1, value: 20, tip: '越大越细，也越慢', onChange: v => patchSettings({ steps: v }) });
+  const cfgCtl = makeProw({ label: 'CFG 引导', min: PARAM_RANGE.cfg[0], max: PARAM_RANGE.cfg[1], step: 0.5, value: 3, tip: '越高越贴指令，过高会糊', onChange: v => patchSettings({ cfg: v }) });
   const seedCtl = makeProw({ label: '种子', min: 0, max: SEED_MAX, step: 1, value: 0, tip: '关闭随机种子时生效', onChange: v => patchSettings({ seed: v }) });
   const rndCtl = toggleRow('随机种子', v => { patchSettings({ randomSeed: v }); seedCtl.setDisabled(v); });
 
@@ -109,7 +109,9 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
     el('p', { class: 'muted', text: '开关与强度直接改写提交时的 Lora 链；关掉等于从模型链上摘掉。' }));
 
   function buildLoras(list) {
-    loras = list.map(l => ({ name: l.name, strength: l.strength, enabled: l.enabled !== false }));
+    // missing 是"本机没有这个 LoRA"的标记，重建对象时得带上：丢了它，下面那句 l.missing 永远为假，
+    // 界面上就再也不标那一格
+    loras = list.map(l => ({ name: l.name, strength: l.strength, enabled: l.enabled !== false, missing: l.missing === true }));
     if (!list.length) { fill(loraBox, el('p', { class: 'muted', text: '工作流里没有挂 LoRA。' })); return; }
     fill(loraBox, loras.map((l, i) => {
       const num = el('input.input.input--num', { type: 'number', min: 0, max: 2, step: 0.05, value: fmtNum(l.strength, 0.05), 'aria-label': `${baseName(l.name)} 强度` });

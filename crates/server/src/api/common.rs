@@ -14,6 +14,33 @@ pub const BODY_LIMIT: usize = 80 * 1024 * 1024;
 /// 种子取 int32 正区间：面板滑杆与直输框夹在同一上限，回填历史参数才不会被截断成别的种子
 pub const SEED_MAX: i64 = 2_147_483_647;
 
+/// 提交时实际下发的种子：面板（或回填）的种子 + 这张图的序号，两端都先夹进 int32 正区间。
+///
+/// 夹在最前面而不是加完再取模：库里躺着的旧种子可能是 2^48 那种当年放开的随机值，
+/// 不夹就直接加会在 debug 构建溢出 panic、release 静默绕回，最后得到一个"合法但复现不了当时那张"的种子。
+pub(crate) fn seed_for(raw: i64, img_id: i64) -> i64 {
+    (raw.rem_euclid(SEED_MAX) + img_id.rem_euclid(SEED_MAX)).rem_euclid(SEED_MAX)
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::seed_for;
+    use super::SEED_MAX;
+
+    #[test]
+    fn 野种子先夹进区间再叠图片序号() {
+        assert_eq!(seed_for(0, 7), 7);
+        assert_eq!(seed_for(5, 0), 5);
+        assert_eq!(seed_for(-1, 0), SEED_MAX - 1, "负数要走欧几里得取模，不能往负里偏");
+        // 顶格再叠序号：绕回区间头部，而不是溢出
+        assert_eq!(seed_for(SEED_MAX - 1, 5), 4);
+        // 当年放开到 2^48 的老种子：夹进来仍然是个合法值（旧写法在这里 debug 构建直接 panic）
+        let wild = seed_for(i64::MAX, i64::MAX);
+        assert!((0..SEED_MAX).contains(&wild), "{wild} 跑出 int32 正区间了");
+        assert_eq!(seed_for(i64::MAX, 0), seed_for(i64::MAX, 0));
+    }
+}
+
 pub(crate) fn j(code: u16, body: Value) -> Response {
     let status = StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, [(CONTENT_TYPE, "application/json; charset=utf-8")], body.to_string()).into_response()

@@ -46,18 +46,22 @@ fn region_alpha(img: &Alpha, b: &Box2) -> Vec<f32> {
     f
 }
 
-/// 等价 `putImageData`：越界值夹住、按 Uint8Clamped 取整；`a=None` 时 alpha 全 255
-fn write_region(img: &mut Rgba, b: &Box2, rgb: &[f32], a: Option<&[f32]>) {
-    let w = b.w.min(img.w.saturating_sub(b.x));
-    let h = b.h.min(img.h.saturating_sub(b.y));
+/// 把平面 `rgb`（铺在画布上的 `win` 那块）写进画布，只写 `clip` 与 `win` 相交的那一段。
+/// 越界值夹住、按 Uint8Clamped 取整；`a=None` 时 alpha 全 255。
+/// 窗口比盒子大一圈（见 `WIN_PAD`），多算出来的一圈不该进结果——没人认领的像素就该保持原样。
+fn write_region(img: &mut Rgba, win: &Box2, clip: &Box2, rgb: &[f32], a: Option<&[f32]>) {
+    let w = win.w.min(img.w.saturating_sub(win.x));
+    let h = win.h.min(img.h.saturating_sub(win.y));
+    let (x0, y0) = (clip.x.max(win.x), clip.y.max(win.y));
+    let (x1, y1) = ((clip.x + clip.w).min(win.x + w).min(img.w), (clip.y + clip.h).min(win.y + h).min(img.h));
     par_chunks_mut(&mut img.px, img.w * 4, |row, y| {
-        if y < b.y || y >= b.y + h {
+        if y < y0 || y >= y1 {
             return;
         }
-        let src_row = (y - b.y) * w;
-        for x in 0..w {
-            let q = src_row + x;
-            let i = (b.x + x) * 4;
+        let src_row = (y - win.y) * w;
+        for x in x0..x1 {
+            let q = src_row + (x - win.x);
+            let i = x * 4;
             row[i] = to_u8(rgb[q * 3]);
             row[i + 1] = to_u8(rgb[q * 3 + 1]);
             row[i + 2] = to_u8(rgb[q * 3 + 2]);
@@ -76,8 +80,80 @@ struct Lap {
     a: Vec<f32>,
 }
 
-/// 返回裁切区尺寸的画布：RGB 是融合结果，alpha 是贴回权重。
-/// 权重为 0 的地方完全透明，原图逐像素保留。
+/// 一层上的"盒面"：所在层的整幅画布尺寸 + 盒面位置与夹过边界后的尺寸。
+/// 放大映射必须按画布尺寸算（与各层 `grow_rgba` 同一个锚点），否则残差与累加项错开半像素，
+/// 逐层相消就漏了——高频行上会露出上百个色阶的偏差。
+struct Plane {
+    cw: usize,
+    ch: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+}
+
+fn plane_at(img: &Rgba, b: &Box2) -> Plane {
+    Plane {
+        cw: img.w,
+        ch: img.h,
+        x: b.x,
+        y: b.y,
+        w: b.w.min(img.w.saturating_sub(b.x)),
+        h: b.h.min(img.h.saturating_sub(b.y)),
+    }
+}
+
+/// 把低一层的盒面放大铺到高一层的盒面上，全程留在 f32。
+///
+/// 手写双线性而不是走 `fast_image_resize`：那套接口只吃 u8，而带通残差是有符号的——
+/// 借一张 u8 画布中转，每层都把越界的那一半夹掉一次（回归：`融合结果对整体平移不变`）。
+/// 映射中心与锚点同 FIR；盒外按边缘值延拓（补零会在盒子边框留一道台阶，
+/// 而那条边框正贴着权重最小的那一圈像素）。
+fn grow_plane(src: &[f32], from: &Plane, to: &Plane) -> Vec<f32> {
+    let mut dst = vec![0.0f32; to.w * to.h * 3];
+    if from.w == 0 || from.h == 0 || to.w == 0 || to.h == 0 || src.len() < from.w * from.h * 3 {
+        return dst;
+    }
+    let (rx, ry) = (from.cw as f32 / to.cw as f32, from.ch as f32 / to.ch as f32);
+    let at = |x: usize, y: usize, c: usize| src[(y * from.w + x) * 3 + c];
+    for y in 0..to.h {
+        let fy = ((to.y + y) as f32 + 0.5) * ry - 0.5 - from.y as f32;
+        let y0 = (fy.floor().max(0.0) as usize).min(from.h - 1);
+        let y1 = (y0 + 1).min(from.h - 1);
+        let ty = (fy - y0 as f32).clamp(0.0, 1.0);
+        for x in 0..to.w {
+            let fx = ((to.x + x) as f32 + 0.5) * rx - 0.5 - from.x as f32;
+            let x0 = (fx.floor().max(0.0) as usize).min(from.w - 1);
+            let x1 = (x0 + 1).min(from.w - 1);
+            let tx = (fx - x0 as f32).clamp(0.0, 1.0);
+            for c in 0..3 {
+                let a0 = at(x0, y0, c) * (1.0 - tx) + at(x1, y0, c) * tx;
+                let a1 = at(x0, y1, c) * (1.0 - tx) + at(x1, y1, c) * tx;
+                dst[(y * to.w + x) * 3 + c] = a0 * (1.0 - ty) + a1 * ty;
+            }
+        }
+    }
+    dst
+}
+
+/// 返回裁切区尺寸的画布：RGB 是融合结果，alpha 是"这一块要不要贴回"的覆盖标记。
+/// 本层计算窗口 = 盒子在本层的投影再向四周垫几格（夹到画布内）。
+///
+/// 往上一层放大时，盒子边缘那一圈要用到"盒外"的低频；只带盒子本身就得靠延拓去猜，
+/// 而猜错的边缘会顺着金字塔往下渗——最高层差一格，等于原图层差 2^levels 格。
+/// 垫窗口比只垫第 0 层有效，因为每一层都要有自己的余量。
+const WIN_PAD: usize = 4;
+
+fn win_at(canvas: &Rgba, b: &Box2) -> Box2 {
+    let x = b.x.saturating_sub(WIN_PAD);
+    let y = b.y.saturating_sub(WIN_PAD);
+    let x1 = (b.x + b.w + WIN_PAD).min(canvas.w).max(x + 1);
+    let y1 = (b.y + b.h + WIN_PAD).min(canvas.h).max(y + 1);
+    Box2::new(x, y, x1 - x, y1 - y)
+}
+
+/// 权重为 0 的地方完全透明，原图逐像素保留；权重不为 0 的地方贴回那步原样采用这里的 RGB
+/// （羽化权重已经在每一带里掺过一次，贴回再按它掺就是掺第二遍）。
 pub fn pyramid_blend(orig: &Rgba, out: &Rgba, alpha: &Alpha, box0: Box2, levels: usize) -> Rgba {
     let mut l = levels;
     while l > 0 {
@@ -97,10 +173,11 @@ pub fn pyramid_blend(orig: &Rgba, out: &Rgba, alpha: &Alpha, box0: Box2, levels:
         gu.push(half_rgba(&gu[i - 1]));
         ga.push(half_alpha(&ga[i - 1]));
     }
+    let wins: Vec<Box2> = (0..=l).map(|i| win_at(&go[i], &box_at(&box0, i))).collect();
 
     let mut lap: Vec<Lap> = Vec::with_capacity(l + 1);
     for i in 0..=l {
-        let b = box_at(&box0, i);
+        let b = wins[i];
         let pw = b.w.min(go[i].w.saturating_sub(b.x));
         let mut o = region_rgba(&go[i], &b);
         let mut u = region_rgba(&gu[i], &b);
@@ -127,8 +204,9 @@ pub fn pyramid_blend(orig: &Rgba, out: &Rgba, alpha: &Alpha, box0: Box2, levels:
 
     let mut acc: Option<Vec<f32>> = None;
     for i in (0..=l).rev() {
-        let Lap { w, o, u, a } = &lap[i];
-        let pw = *w;
+        let cur = &lap[i];
+        let pw = cur.w;
+        let (o, u, a) = (&cur.o, &cur.u, &cur.a);
         let mut mixv = vec![0.0f32; o.len()];
         let prev_buf = std::mem::take(&mut acc);
         let prev = prev_buf.as_deref();
@@ -149,12 +227,13 @@ pub fn pyramid_blend(orig: &Rgba, out: &Rgba, alpha: &Alpha, box0: Box2, levels:
             }
         });
         if i > 0 {
-            let mut part = Rgba::new(go[i].w, go[i].h);
-            write_region(&mut part, &box_at(&box0, i), &mixv, None);
-            acc = Some(region_rgba(&grow_rgba(&part, go[i - 1].w, go[i - 1].h), &box_at(&box0, i - 1)));
+            // 往下的累加留在 f32 里：借一张 u8 画布中转，这一层越界的那一半就被夹掉一次
+            let (from, to) = (plane_at(&go[i], &wins[i]), plane_at(&go[i - 1], &wins[i - 1]));
+            acc = Some(grow_plane(&mixv, &from, &to));
         } else {
             let mut res = Rgba::new(orig.w, orig.h);
-            write_region(&mut res, &box0, &mixv, Some(&lap[0].a));
+            let cov: Vec<f32> = a.iter().map(|&v| if v > 0.0 { 1.0 } else { 0.0 }).collect();
+            write_region(&mut res, &wins[0], &box0, &mixv, Some(&cov));
             return res;
         }
     }
@@ -323,5 +402,92 @@ mod tests {
             prev = v;
         }
         assert!(max_jump < 40, "过渡带跳变 {} 太硬", max_jump);
+    }
+
+    /// 羽化权重只能生效一次。金字塔内部已经按权重混过一遍，输出 alpha 若还是那个权重，
+    /// `composite_over` 会再掺一次，中段就变成 a²：a=0.5 处模型只占 25%，被擦的东西整条带里透回来。
+    /// 所以输出的 alpha 只能是"这一块要不要贴"的覆盖标记。
+    #[test]
+    fn 过渡带按权重线性掺入而不是权重的平方() {
+        let (w, h) = (64usize, 8usize);
+        let orig = flat(w, h, [0, 0, 0]);
+        let out = flat(w, h, [200, 200, 200]);
+        // 恒定权重时每一层的权重都一样，多频段重构就等于线性交叉淡入——期望值是解析的
+        let a = full_alpha(w, h, 128);
+        let b = pyramid_blend(&orig, &out, &a, Box2::new(0, 0, w, h), 4);
+        let wg = 128.0f32 / 255.0;
+        let want = wg * 200.0;
+        for y in 0..h {
+            for x in 0..w {
+                let p = b.get(x, y);
+                assert_eq!(p[3], 255, "({x},{y}) 的输出 alpha 应是覆盖标记，不是第二次权重");
+                // 贴回那步按输出 alpha 走一次 source-over：这里必须正好是掺了 wg 的结果
+                let after = p[0] as f32 * (p[3] as f32 / 255.0);
+                assert!(
+                    (after - want).abs() <= 2.0,
+                    "({x},{y})：权重 {wg:.3} 应掺到 {want:.1}，实际 {after:.1}（按 a² 掺只剩 {:.1}）",
+                    wg * wg * 200.0
+                );
+            }
+        }
+        // 权重为 0 的那一侧仍然逐像素不贴：覆盖标记只能是 0
+        let mut half = full_alpha(w, h, 0);
+        for x in 0..w / 2 {
+            for y in 0..h {
+                half.set(x, y, 200);
+            }
+        }
+        let b2 = pyramid_blend(&orig, &out, &half, Box2::new(0, 0, w, h), 4);
+        for y in 0..h {
+            assert_eq!(b2.get(0, y)[3], 255, "有权重的一侧要贴");
+            assert_eq!(b2.get(w - 1, y)[3], 0, "权重 0 的一侧不该被贴上");
+        }
+    }
+
+    /// 层间累加必须在浮点里做。把中间结果写回 u8 画布，越界的那一半每层都被夹掉一次，
+    /// 结果是"两张图一起提亮"不等于"融合完再提亮"——贴回区里高对比边周围系统性偏亮、纹理被压平。
+    #[test]
+    fn 融合结果对整体平移不变() {
+        let (w, h) = (80usize, 8usize);
+        let mut a = Alpha::new(w, h);
+        for x in 0..w {
+            for y in 0..h {
+                a.set(x, y, (x * 255 / (w - 1)) as u8);
+            }
+        }
+        // 原图近白、模型近黑的高对比棋盘：过渡带里逐带权重不同，中间值会跨过 0 与 255
+        let mk = |shift: u8| -> (Rgba, Rgba) {
+            let mut o = Rgba::new(w, h);
+            let mut u = Rgba::new(w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    let cell = (x / 4 + y / 4) % 2 == 0;
+                    o.set(x, y, [{ if cell { 200u8 } else { 60u8 } }.saturating_add(shift), 180, 100, 255]);
+                    u.set(x, y, [{ if cell { 40u8 } else { 170u8 } }.saturating_add(shift), 60, 200, 255]);
+                }
+            }
+            (o, u)
+        };
+        let (o0, u0) = mk(0);
+        let (o1, u1) = mk(20);
+        let r0 = pyramid_blend(&o0, &u0, &a, Box2::new(0, 0, w, h), 4);
+        let r1 = pyramid_blend(&o1, &u1, &a, Box2::new(0, 0, w, h), 4);
+        let mut worst = 0f32;
+        let mut at = 0usize;
+        for y in 0..h {
+            for x in 0..w {
+                // 只比两端都留有余量的像素：那 20 的平移本该原样穿过去
+                let a0 = r0.get(x, y)[0] as i32;
+                let a1 = r1.get(x, y)[0] as i32;
+                if a0 > 40 && a0 < 180 && a1 > 60 && a1 < 200 {
+                    let d = ((a1 - a0) as f32 - 20.0).abs();
+                    if d > worst {
+                        worst = d;
+                        at = x;
+                    }
+                }
+            }
+        }
+        assert!(worst <= 3.0, "提亮 20 之后结果位移了 {:.1}（x={at}）：中间层被夹进 0..255 了", worst);
     }
 }

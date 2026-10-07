@@ -101,7 +101,7 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     } else {
         util::num_or(settings.get("seed"), 0.0) as i64
     };
-    let seed = (base + i.id).rem_euclid(SEED_MAX);
+    let seed = super::common::seed_for(base, i.id);
     let takeover = matches!(plan, cfg::Plan::Workflow { .. });
     let (graph, outs) = match plan {
         cfg::Plan::Workflow { graph: g, roles } => {

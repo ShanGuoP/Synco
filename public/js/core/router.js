@@ -1,6 +1,10 @@
 // Hash 路由：#/ 首页 · #/p/:id 项目 · #/p/:id/e/:imgId 编辑器
 'use strict';
 
+let gen = 0;    // 路由世代号：号一变就是用户已经走掉，慢回来的响应不该再往 store 里写
+
+export const routeGen = () => gen;
+
 const compile = pattern => {
   const keys = [];
   const re = new RegExp('^' + pattern
@@ -22,6 +26,7 @@ export function createRouter() {
 
   async function resolve() {
     const path = parse();
+    gen++;
     for (const r of routes) {
       const m = r.re.exec(path);
       if (!m) continue;

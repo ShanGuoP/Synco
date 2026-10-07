@@ -162,15 +162,20 @@ fn abs_path(s: &str) -> Option<PathBuf> {
 
 impl Shell {
     fn info(&self, ctx: &synco_server::state::Shared) -> DirInfo {
-        let db = ctx.db();
-        let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+        // 两条计数各取一次连接就撒手：这把守卫不能在 dir_bytes 遍历整棵 data/ 期间还握着——
+        // SQLite 连接全局只有一个，几十 GB 瓦片走一遍的工夫里，所有走库的 HTTP handler（含队列轮询）都在排队
+        let (projects, images) = {
+            let db = ctx.db();
+            let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+            (count("SELECT count(*) FROM projects"), count("SELECT count(*) FROM images"))
+        };
         DirInfo {
             path: self.data.to_string_lossy().replace('\\', "/"),
             source: self.source,
             remembered: self.remembered,
             has_db: self.data.join("app.db").is_file(),
-            projects: count("SELECT count(*) FROM projects"),
-            images: count("SELECT count(*) FROM images"),
+            projects,
+            images,
             bytes: dir_bytes(&self.data),
             restart_required: self.restart_required,
         }
@@ -224,7 +229,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::result::Result<(usize, u64), String
     for e in fs::read_dir(from).map_err(|e| format!("读 {} 失败：{e}", from.display()))? {
         let e = e.map_err(|e| e.to_string())?;
         let name = e.file_name();
-        if ["port.txt", "desktop.json"].contains(&name.to_string_lossy().as_ref()) {
+        if ["port.txt", "desktop.json", "instance.lock"].contains(&name.to_string_lossy().as_ref()) {
             continue;
         }
         let src = e.path();
@@ -265,11 +270,6 @@ fn main() {
     synco_server::DESKTOP.store(true, std::sync::atomic::Ordering::Relaxed);
     let (data, remembered, source) = resolve_data();
     let public = synco_server::public_dir();
-    // 服务先起来：窗口地址要带真实端口
-    let boot = tauri::async_runtime::block_on(synco_server::serve(data.clone(), public, synco_server::want_port()))
-        .expect("本地服务起不来，桌面窗口没法打开（看看数据目录是否可写）");
-    let ctx = boot.ctx;
-    let port = boot.port;
     // 就近老库 / 绿色模式 / 默认位置这三条都是"我们替他选的"，选过一次就记下来——
     // 否则每次启动都算"没记过"，选址页会一遍遍地摊开（绿色模式那次尤其明显）。
     // 只有那个位置真的还没有库（第一次用）才弹；他自己换过址的判据在 remembered 里。
@@ -285,6 +285,11 @@ fn main() {
         // 单实例：服务与窗口同进程，双击两次就是两个进程共写同一个 app.db，
         // 而端口被占时服务会静默退到随机端口——第二份"看起来能开"，库却只有一个。
         // 第二次的动作改成把已经在跑的窗口叫到前面。
+        //
+        // 所以服务不能在 main 顶部起：插件的初始化发生在 Builder::build()，而这里写的
+        // setup 要等事件循环的 Ready 才跑——早先 serve() 排在 Builder 之前，第二份进程已经
+        // 覆写过 port.txt、已经按自己那份空白的在飞表把第一份正在跑的成图判成僵尸收掉了。
+        // 挪进 setup 之后，第二份在碰库和 port.txt 之前就 exit(0)。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -293,10 +298,14 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .manage(Shell { data, remembered, source, restart_required: false })
-        .manage(ctx)
         .invoke_handler(tauri::generate_handler![data_dir_info, set_data_dir, copy_data_to, set_window_theme, restart_app])
         .setup(move |app| {
+            // 服务到这里才起来：窗口地址要带真实端口
+            let boot = tauri::async_runtime::block_on(synco_server::serve(data.clone(), public, synco_server::want_port()))
+                .map_err(|e| format!("本地服务起不来，桌面窗口没法打开（看看数据目录是否可写）：{e}"))?;
+            let port = boot.port;
+            app.manage(Shell { data, remembered, source, restart_required: false });
+            app.manage(boot.ctx);
             let url = format!("http://127.0.0.1:{port}/{}", if prompt { "?firstrun=1" } else { "" });
             let url: tauri::Url = url.parse()?;
             let _w = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))

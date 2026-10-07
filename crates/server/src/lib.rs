@@ -21,7 +21,7 @@ use repo::db;
 use service::{backend, imagesvc, queue};
 use state::{Ctx, Shared};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
 use web::{files, guard};
 
@@ -61,6 +61,41 @@ pub fn want_port() -> u16 {
     env::var("SYNCO_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(7861)
 }
 
+/// 一个数据目录只许一个进程动。锁就是 `<data>/instance.lock` 的独占句柄，必须在开库之前拿到。
+///
+/// 第二份进程若照常启动，它会：把 port.txt 改成自己那个随机端口（运维菜单从此指向死端口）、
+/// 并按**自己进程**的在飞表收尸——第一份真正在飞的那一张在它眼里是僵尸，判成 error 之后，
+/// 第一份回来落盘时状态守卫不认，刚生成的成图和缩略档被当成没人认领的孤儿删掉。
+/// 钱花了、图没了、库里写着 error。
+///
+/// 句柄故意不关：进程活着锁就在，进程被 kill 时由系统回收，盘上不留脏状态。
+/// 只加 Windows 锁：发布形态是 Windows 安装包，没有别的平台多进程共目录的用法。
+fn lock_data_dir(data: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .share_mode(0)
+            .open(data.join("instance.lock"))
+        {
+            Ok(f) => std::mem::forget(f),
+            // 32 = ERROR_SHARING_VIOLATION：另一个进程正持有这个目录
+            Err(e) if e.raw_os_error() == Some(32) => {
+                return Err(AppError::Fail(
+                    "这个数据目录已经有另一个 Synco 在用了：回到已经开着的那个窗口即可（再双击图标会把它叫到前面）".into(),
+                ))
+            }
+            Err(e) => return Err(AppError::Io(e)),
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = data;
+    Ok(())
+}
+
 pub struct Boot {
     pub port: u16,
     pub ctx: Shared,
@@ -72,10 +107,11 @@ pub struct Boot {
 /// 「关于」分区要据此说清界面是从盘上还是从 exe 里取的。
 pub static DESKTOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// 起服务：建库、绑端口（占用就退随机）、写 port.txt、收尸、补派生档。
+/// 起服务：先独占数据目录（同目录的第二份进程在这里就被挡下），再建库、绑端口（占用就退随机）、写 port.txt、收尸、补派生档。
 /// 返回的 server 一旦完成，端口与队列就已经在跑了。
 pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     fs::create_dir_all(&data).map_err(AppError::Io)?;
+    lock_data_dir(&data)?;
     let ctx = Ctx::new(data.clone(), public, db::open(&data)?);
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), want);

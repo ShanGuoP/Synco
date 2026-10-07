@@ -5,7 +5,7 @@ import { el, $, $$, fill, raf } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { api, importPhotos } from '../core/api.js';
 import { store, loadProject, saveSettings, selectWhere, clearSel, invertSel, toggleSel, isSel, stateOf, isCloud, cloudPrompt } from '../state.js';
-import { go, back } from '../core/router.js';
+import { go, back, routeGen } from '../core/router.js';
 import { setCrumb } from '../shell.js';
 import { toastOk, toastErr, toastBusy } from '../ui/toast.js';
 import { confirm, askName, modal } from '../ui/modal.js';
@@ -19,9 +19,11 @@ let first = true;
 
 /* ==================== 入口 ==================== */
 export async function renderProject(id) {
+  const g = routeGen();
   const busy = toastBusy('打开项目…');
   try { await loadProject(id); } catch (e) { busy.close(); toastErr('打开失败', e.message); go('/'); return; }
   busy.close();
+  if (g !== routeGen()) return;              // 这一页已经被切走了，别再重绘别人的网格
   applyIntent();
   first = true;
   paint();
@@ -73,7 +75,7 @@ function header(p, images) {
       importBtn(),
       el('button.btn.btn--ghost', { type: 'button', html: icon('canvas', { cls: 'icon icon--sm' }) + '<span>新建画布</span>', onclick: newCanvasHere }),
       el('button.btn.btn--ghost', { type: 'button', html: icon('check', { cls: 'icon icon--sm' }) + '<span>全选已涂</span>', onclick: () => { selectWhere(i => i.has_mask); paint(); } }),
-      el('button.btn.btn--primary', { type: 'button', id: 'pjSubmit', html: icon('play', { cls: 'icon icon--sm' }) + `<span>提交已选</span><b id="pjSelN">${store.peek('sel').length}</b>`, onclick: submitSelected }),
+      el('button.btn.btn--primary', { type: 'button', id: 'pjSubmit', disabled: submitting || !store.peek('sel').length, html: icon('play', { cls: 'icon icon--sm' }) + `<span>提交已选</span><b id="pjSelN">${store.peek('sel').length}</b>`, onclick: submitSelected }),
     ));
 }
 
@@ -97,7 +99,7 @@ function bulkRow(images) {
     b('images', '反选', sel.length, () => { invertSel(); paint(); }),
     b('close', '清除选择', null, () => { clearSel(); paint(); }, !sel.length),
     b('trash', '删除已选', null, () => removeSelected(), !sel.length),
-    b('play', '提交已选', sel.length, submitSelected, !sel.length, 'bulk--go'),
+    b('play', '提交已选', sel.length, submitSelected, !sel.length || submitting, 'bulk--go'),
   );
 }
 
@@ -204,7 +206,7 @@ function syncSel() {
   const badge = $('#pjSelN'); if (badge) badge.textContent = String(n);
   const chips = $$('.list-hd__tools .chip b'); if (chips[0]) chips[0].textContent = String(n);
   for (const c of $$('.icard')) c.classList.toggle('is-sel', isSel(+c.dataset.id));
-  const goBtn = $('#pjSubmit'); if (goBtn) goBtn.disabled = !n;
+  const goBtn = $('#pjSubmit'); if (goBtn) goBtn.disabled = !n || submitting;
 }
 
 /* ==================== 动作 ==================== */
@@ -358,7 +360,12 @@ async function removeSelected() {
   paint();
 }
 
+/* 提交在飞的闸门：按钮 disabled 只挡鼠标，连点与键盘绕得过来，
+   而一次批量提交要飞几秒——这期间再点就是第二批任务 */
+let submitting = false;
+
 async function submitSelected() {
+  if (submitting) return;
   const ids = store.peek('sel');
   if (!ids.length) { toastErr('没有可提交的图', '先勾选，或点「全选已涂」'); return; }
   const settings = store.peek('settings');
@@ -367,12 +374,19 @@ async function submitSelected() {
   const full = !!settings?.full;
   const reverse = isCloud() && (full || !!settings?.invert);
   if (!reverse && nomask.length === ids.length) { toastErr('选中的都还没涂遮罩', '打开图片涂出要修的区域'); return; }
-  await saveSettings();
-  if (isCloud()) return submitSelectedCloud(ids, settings, reverse ? 0 : nomask.length);
-  const r = await submit(ids, settings);
-  if (r.ok) { toastOk(`已提交 ${r.ok} 张`, r.skipped.length ? `${r.skipped.length} 张没提交，原因见卡片` : ''); paint(); }
-  else toastErr('没有提交成功', r.error || '选中的图片都还没有遮罩');
-  clearSel();
+  submitting = true;
+  paint();
+  try {
+    await saveSettings();
+    if (isCloud()) return await submitSelectedCloud(ids, settings, reverse ? 0 : nomask.length);
+    const r = await submit(ids, settings);
+    if (r.ok) { toastOk(`已提交 ${r.ok} 张`, r.skipped.length ? `${r.skipped.length} 张没提交，原因见卡片` : ''); paint(); }
+    else toastErr('没有提交成功', r.error || '选中的图片都还没有遮罩');
+    clearSel();
+  } finally {
+    submitting = false;
+    paint();
+  }
 }
 
 /**

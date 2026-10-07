@@ -143,11 +143,19 @@ pub async fn canvas_generate(State(ctx): State<Shared>, APath(id): APath<String>
     }
     // 参考图同理复制成这一行自己的快照：排着队的时候换槽位，不该改"这一版参考了哪几张"
     if !slots.is_empty() {
-        match refs::snapshot(&ctx, &img, rid, &slots) {
-            Ok(snapped) => {
-                rres::set_refs(&ctx, rid, &snapped)?;
+        // 行已经建起来了，这两步再往上传 Err 就是留一条永远"生成中"又没人跑它的僵尸：
+        // 判死这一行、把原因还给用户。也不能退化成"少发几张照跑"——界面上写着带 N 张参考图
+        let snapped = match refs::snapshot(&ctx, &img, rid, &slots) {
+            Ok(v) => v,
+            Err(e) => {
+                ctx.mark_error(rid, &format!("参考图快照没存下：{e}"));
+                return Ok(bad(format!("参考图快照失败，这一版没有提交：{e}")));
             }
-            Err(e) => eprintln!("  参考图快照没存下（#{rid}）：{e}"),
+        };
+        if let Err(e) = rres::set_refs(&ctx, rid, &snapped) {
+            refs::drop(&ctx, img.project_id, &snapped);
+            ctx.mark_error(rid, &format!("参考图没能挂上这一版：{e}"));
+            return Ok(bad(format!("参考图没能挂上这一版，这一版没有提交：{e}")));
         }
     }
     rres::set_queued(&ctx, rid)?;
@@ -227,8 +235,14 @@ pub async fn canvas_refs_set(State(ctx): State<Shared>, APath(id): APath<String>
         return Ok(bad(format!("参考图最多 {} 张（这次给了 {} 张）", refs::MAX, want.len())));
     }
     let before = refs::slots(&ctx, &img);
-    let mut kept: Vec<String> = want.into_iter().filter(|r| before.contains(r)).collect();
-    kept.dedup();
+    // 只认"之前 GET 到的集合里的、而且这次只算一张"：dedup() 只去相邻重复，
+    // body 里 ["a","b","a"] 会原样留着，同一张参考图就被发两次
+    let mut kept: Vec<String> = Vec::new();
+    for r in want {
+        if before.contains(&r) && !kept.contains(&r) {
+            kept.push(r);
+        }
+    }
     // 只删"这次不再认"的那些：前端传来的 rel 一定来自之前 GET 到的集合，
     // 不在集合里的字符串不认账，免得跟着一个坏 body 删到别人的文件
     let removed: Vec<String> = before.iter().filter(|r| !kept.contains(r)).cloned().collect();

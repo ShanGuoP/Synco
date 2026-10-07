@@ -42,6 +42,14 @@ const EDITS = [
   { key: 'clear', ico: 'trash', label: '清空', tip: '擦掉整张遮罩' },
 ];
 
+/**
+ * 涂抹层的长边档位，与底图脱钩。
+ * 底图在 321–3072 这一档只有 320 的缩略图（proxy 只在原图超出档位时才切），
+ * 跟着底图走就等于把笔迹画在 213×320 的格子上再让服务端放大——边界成块，外扩与羽化全算在粗格子上。
+ * 上限就是 proxy 那一档：撤销栈存 8 张同尺寸快照，24MP 满尺寸要 768MB。
+ */
+const PAINT_EDGE = 3072;
+
 export const isEditorOpen = () => !!ctx && !$('#editor').hidden;
 
 /* ==================== 骨架（只建一次） ==================== */
@@ -262,8 +270,11 @@ async function showImage(imgId) {
   if (stale()) return;
 
   ctx.viewport.setContentSize(info.w, info.h);
-  // 涂抹层与底图同分辨率：看见多少就画多少，上采样到原图尺寸是服务端的事
-  const paint = { w: ctx.poster.naturalWidth || info.w, h: ctx.poster.naturalHeight || info.h };
+  // 涂抹层按自己的档位走（见 PAINT_EDGE），不再跟着底图：底图可能只是一张 320 的缩略图，
+  // 跟着它就把笔迹锁死在粗格子上，边界成块、外扩与羽化全算在粗格子上。上采样到原图尺寸是服务端的事。
+  // 原图文件已丢失时底图 naturalWidth 是 0，过去会退化成按库里的报称尺寸开满尺寸缓冲（24MP 的撤销栈≈768MB）
+  const s = Math.min(1, PAINT_EDGE / Math.max(1, info.w, info.h));
+  const paint = { w: Math.max(1, Math.round(info.w * s)), h: Math.max(1, Math.round(info.h * s)) };
   const had = await ctx.painter.load(info.w, info.h, info.mask_url, imgId, paint);
   if (stale()) return;
   syncInvertHint();
