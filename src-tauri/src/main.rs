@@ -338,7 +338,7 @@ mod url_guard_tests {
             "https://github.com/ShanGuoP/Synco/releases/tag/v0.2.0",
             "https://github.com/ShanGuoP/Synco/releases/download/v0.2.0/Synco_0.2.0_x64-setup.exe",
             "https://github.com/a-b/repo.name/releases/download/v1.0/My%20App_1.0-setup.exe",
-            "https://v.douyin.com/VoXx5-pqL9c/",
+            "https://github.com/ShanGuoP",
             "http://127.0.0.1:7861/api/version",
         ] {
             assert_eq!(url_gate(u), None, "不该挡：{u}");

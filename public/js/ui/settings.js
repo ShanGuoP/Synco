@@ -616,7 +616,7 @@ function createThemePane() {
 
 /** 关于：版本号 + 这次构建的 commit + 最近提交当日志；没有发布渠道就不装「自动更新」 */
 /* 作者页是写死的：这一栏不读库、不读配置，装了安装包也照样在 */
-const AUTHOR = { name: '@杉果派', url: 'https://v.douyin.com/VoXx5-pqL9c/' };
+const AUTHOR = { name: '@杉果派', url: 'https://github.com/ShanGuoP' };
 /* 仓库地址：更新日志那一栏由服务端回，读不到时退到这个常量（致谢里的 NOTICE 链接也用它） */
 const REPO = 'https://github.com/ShanGuoP/Synco';
 
