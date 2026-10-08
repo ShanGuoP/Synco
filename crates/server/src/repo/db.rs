@@ -29,6 +29,20 @@ CREATE TABLE IF NOT EXISTS presets(
   loras_json TEXT DEFAULT '[]',
   created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT);
 
+/* 0.3 本地精修：参数链与两类人脸缓存。都是"跟着图走"的附属表，
+   删图时由 api::images::image_delete 逐表清（与 results 同一惯例，不靠 REFERENCES） */
+CREATE TABLE IF NOT EXISTS image_adjust(
+  image_id INTEGER PRIMARY KEY, ops TEXT NOT NULL,
+  updated_at TEXT DEFAULT (datetime('now','localtime')));
+CREATE TABLE IF NOT EXISTS image_face(
+  image_id INTEGER, idx INTEGER, box TEXT, landmarks TEXT, score REAL,
+  updated_at TEXT DEFAULT (datetime('now','localtime')),
+  PRIMARY KEY(image_id, idx));
+CREATE TABLE IF NOT EXISTS image_landmark(
+  image_id INTEGER, idx INTEGER, points TEXT,
+  updated_at TEXT DEFAULT (datetime('now','localtime')),
+  PRIMARY KEY(image_id, idx));
+
 /* 按项目/按图聚合结果行用的（项目页角标、派生弹窗）。表一直没有任何索引，
    这两条新查询是每个项目一次全表扫，加了才够快 */
 CREATE INDEX IF NOT EXISTS idx_results_image ON results(image_id);
@@ -219,7 +233,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let db = open(&dir).unwrap();
         let t = tables(&db);
-        for want in ["app_settings", "backends", "images", "presets", "projects", "results"] {
+        for want in ["app_settings", "backends", "images", "presets", "projects", "results", "image_adjust", "image_face", "image_landmark"] {
             assert!(t.iter().any(|x| x == want), "缺表 {want}，实有 {t:?}");
         }
         assert!(has_column(&db, "results", "backend").unwrap());
@@ -227,7 +241,7 @@ mod tests {
         // 再开一次必须幂等（迁移循环不能重复 ALTER 报错）
         drop(db);
         let db2 = open(&dir).unwrap();
-        assert_eq!(tables(&db2).len(), 6);
+        assert_eq!(tables(&db2).len(), 9);
         // Windows 上句柄还开着就删不掉：连接必须先撒手，否则这句静默失败，每次跑测试留一个目录
         drop(db2);
         std::fs::remove_dir_all(&dir).ok();

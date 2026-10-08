@@ -17,6 +17,7 @@ import { createViewport } from './viewport.js';
 import { createTileView } from './tiles.js';
 import { createPainter } from './paint.js';
 import { createParams, SEED_MAX } from './params.js';
+import { createAdjust } from './adjust.js';
 import { createHistory } from './history.js';
 import { createFilmstrip } from '../../views/editor/filmstrip.js';
 import { createCompare } from './compare.js';
@@ -83,6 +84,7 @@ function buildShell() {
     hudZoom.textContent = pct;
     syncZoomPills();
     ctx?.painter?.invalidate?.();   // 缩放变了，光标尺寸/定位缓存作废
+    ctx?.adjust?.setScale(s);       // 液化盘跟着缩放重定位（手柄尺寸走 CSS 的 --iz）
   } });
 
   const toolBtn = (k, ico, label, tip, onclick) => el('button.tool', {
@@ -95,7 +97,6 @@ function buildShell() {
     min: 8, max: 320, step: 2, value: 70, ariaLabel: '笔刷大小',
     onChange: v => { brushVal.textContent = String(v); ctx.painter?.setBrush(v); },
   });
-
   const tools = el('div.ed-tools', {},
     el('button.tool-zoom', { type: 'button', 'data-tip': '点击适应窗口', onclick: () => viewport.fit() }, zoomPct),
     ...ZOOMS.map(z => toolBtn(z.key, z.ico, z.label, z.tip, () => onZoom(z.key))),
@@ -157,13 +158,25 @@ function buildShell() {
     onDirty: () => { setFlag('有未保存的涂抹', 'busy'); syncInvertHint(); },
   });
 
+  /* 「本地调整」：参数在这一层，像素永远交给服务端算。它要用 params 那条状态行，
+     所以必须排在 params 之后；面板那一页再反向挂回 params 的标签条上 */
+  const adjust = createAdjust({
+    layer, poster, stage, viewport, tiles,
+    line: txt => params.line(txt),
+    idOf: () => ctx?.imgId || 0,
+    infoOf: () => ctx?.info,
+    onForked: id => forkAdjusted(id),
+    brushLocked: msg => { if (msg) toastErr('现在不能涂遮罩', msg); },
+  });
+  params.setAdjust(adjust.node, k => { if (k !== 'adjust') adjust.exit(); });
+
   const setFlag = (txt, kind = '') => {
     saveFlag.textContent = txt;
     saveFlag.className = `saveflag${kind === 'busy' ? ' is-busy' : kind === 'ok' ? ' is-ok' : kind === 'err' ? ' is-err' : ''}`;
   };
 
   return { top, tools, stage, vp, layer, poster, tiles, mask, invert, cursor, hint, hudSize, hudFit, hudOne,
-           viewport, painter, compare, brushSlider, brushVal, fname, fdims, saveFlag, setFlag,
+           viewport, painter, compare, adjust, brushSlider, brushVal, fname, fdims, saveFlag, setFlag,
            history, params, presets, film, rail, exportBtn, zoomPct };
 }
 
@@ -222,11 +235,15 @@ export function closeEditor() {
   $('#shell').style.visibility = '';
   /* 不等：路由已经要走了。这笔由画笔模块串行排出去，下一次 showImage 的 load() 会 await 到它 */
   Promise.resolve(ctx?.painter.flush()).catch(() => {});
+  /* 调整面板同理：最后一次滑杆改动可能还压在 150ms 防抖里，落库要赶在关窗前发出去 */
+  ctx?.adjust.exit();
+  Promise.resolve(ctx?.adjust.flush()).catch(() => {});
 }
 
 /* 关页/刷新/系统休眠前的最后一搏：防抖里的 700ms 和排队中的保存都得此刻冲出去（能不能落地看网络，至少不静默） */
 window.addEventListener('pagehide', () => {
   Promise.resolve(ctx?.painter.flush()).catch(() => {});
+  Promise.resolve(ctx?.adjust?.flush()).catch(() => {});
 });
 
 const goBack = () => { const p = store.peek('project'); go(p ? `/p/${p.id}` : '/'); };
@@ -277,12 +294,17 @@ async function showImage(imgId) {
   const paint = { w: Math.max(1, Math.round(info.w * s)), h: Math.max(1, Math.round(info.h * s)) };
   const had = await ctx.painter.load(info.w, info.h, info.mask_url, imgId, paint);
   if (stale()) return;
+  /* 「本地调整」要在这一步把底图换成库里那套参数渲染出来的预览（如果有参数）。
+     它排在 fit 之前：裁切/旋转会换画幅尺寸，先定尺寸再适应窗口才不会再歪一次。
+     返回 true = 这一张显示的是调整预览，源图瓦片就不该再去摆 */
+  const adjustedView = await ctx.adjust.onImage(info);
+  if (stale()) return;
   syncInvertHint();
   ctx.viewport.fit();
   showHint(!had && !info.orig_dead);
   setTool('brush');
   // 瓦片是懒切的，首次进去可能要等它几秒；海报先到，画面不会空
-  if (!info.orig_dead && info.tiles_url) {
+  if (!info.orig_dead && info.tiles_url && !adjustedView) {
     api.tiles(imgId).then(m => {
       if (ctx.imgId !== imgId) return;
       ctx.tiles.setMeta(m);
@@ -430,6 +452,13 @@ function applyMode(next) {
 
 /* ==================== 工具 / 缩放 ==================== */
 function setTool(k) {
+  /* 裁切/旋转换了画幅，遮罩那一层还是按源图坐标系存的：这时涂上去的笔迹会歪。
+     与其静默错位，不如挡住并说清楚出口（先「应用为新图」，新图的源图就是那张裁好的） */
+  if ((k === 'brush' || k === 'erase') && ctx.adjust?.geometryActive) {
+    toastErr('现在不能涂遮罩', '裁切/旋转后的画面与遮罩不是同一个坐标系：先点「应用为新图」，在那张图上继续涂');
+    return;
+  }
+  if (k === 'brush' || k === 'erase') ctx.adjust?.exit();   // 交回画笔：裁切框与液化盘让位
   ctx.tool = k;
   for (const b of $$('.ed-tools .tool[data-k]')) b.classList.toggle('is-on', b.dataset.k === k);
   ctx.viewport.setMode(k === 'pan' ? 'pan' : 'paint');
@@ -515,6 +544,17 @@ function applyPreset(p) {
 }
 
 /** 把某条成图复制成项目里的一张新图，并跳过去在它上面涂 */
+/** 「本地调整 → 应用为新图」之后：项目要重取（多了一行），并跳到那张新图上 */
+async function forkAdjusted(imageId) {
+  if (!imageId) return;
+  const busy = toastBusy('登记新图…');
+  try {
+    await loadProject(ctx.projectId);
+    busy.close();
+    go(`/p/${ctx.projectId}/e/${imageId}`);
+  } catch (e) { busy.close(); toastErr('新图没接上', e.message); }
+}
+
 async function forkResult(r) {
   if (!r?.final_url) { toastErr('这条记录还没有成图'); return; }
   if (r.final_dead) { toastErr('这条成图的文件已经不在了', '记录还留着，PNG 不在盘上了。删掉这条记录即可'); return; }
@@ -694,6 +734,10 @@ async function doSubmitCloud() {
 async function doSubmit() {
   if (!ctx?.imgId) return;
   if (ctx.info?.orig_dead) { toastErr('这张图的原文件已经不在磁盘上', '只剩一条记录，画布是空的，提交上去只会生成一张废图。回项目页删掉它或重新导入同名原图'); return; }
+  /* 提交的是"调整后"那张（服务端在链里先算参数再走裁切缝合）。几何段动了画幅时
+     遮罩与画面不同域，这一步必须挡住，不然发出去的是错位的一版 */
+  if (ctx.adjust?.geometryActive) { toastErr('先处理掉裁切/旋转', '带着裁切或旋转提交，遮罩会落在错位的那一版上：先「应用为新图」再提交'); return; }
+  await ctx.adjust.flush();          // 面板里最后一次改动还没发出去就先补上，参数与预览要一致
   if (isCloud()) return doSubmitCloud();
   // 整张重绘只做了云端那一条：本机这条要整图重绘得换一张没有裁切/缝合的工作流，别悄悄改用局部重绘去跑
   if (store.peek('settings')?.full) {

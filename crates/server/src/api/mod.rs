@@ -1,6 +1,7 @@
 //! 路由表：一张表看全 39 条端点，实现在同目录按域分开的文件里。
 
 pub mod backends;
+pub mod adjust;
 pub mod canvas;
 pub mod cloud;
 pub mod common;
@@ -46,6 +47,10 @@ pub fn router() -> Router<Shared> {
         .route("/api/projects/{id}/settings", get(projects::project_settings_get).post(projects::project_settings_set))
         .route("/api/images/{id}", get(images::image_get).delete(images::image_delete))
         .route("/api/images/{id}/mask", post(images::mask_post))
+        .route("/api/images/{id}/adjust", get(adjust::adjust_get).post(adjust::adjust_post))
+        .route("/api/images/{id}/adjust/preview", post(adjust::preview_post))
+        .route("/api/images/{id}/adjust/render", post(adjust::render_post))
+        .route("/api/images/{id}/adjust/fork", post(adjust::fork_post))
         .route("/api/images/{id}/derived", get(images::derived_get))
         .route("/api/images/{id}/thumb", get(images::thumb_get))
         .route("/api/images/{id}/tiles", get(images::tiles_get))

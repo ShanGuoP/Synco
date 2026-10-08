@@ -90,15 +90,17 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     }
     // 涂抹层存的是 proxy 分辨率，而工作流里 DrawMaskOnImage 要和原图同尺寸，先上采样。
     // 读原图与这次上采样都是全分辨率的活，整段过阻塞池：压在 worker 上时桌面壳的窗口会一起卡住
-    let photo_abs = util::data_file(&ctx.data, &i.orig_path).ok_or_else(|| AppError::bad("原图文件已不在磁盘上"))?;
     let mask_rel = mask_path.clone();
     let (mw, mh) = (i.w as usize, i.h as usize);
-    let (photo_bytes, mask_bytes) = {
+    // 提交的是"调整后"的图（拍板 4）：本机这条与工作流看到的都是用户在屏幕上那张。
+    // 没动过滑杆时 submit_artifact 原样回文件字节与原路径，链路与 0.2.1 逐字节一致。
+    let (photo_bytes, mask_bytes, sent_rel) = {
         let ctx2 = ctx.clone();
-        util::blocking(move || -> Result<(Vec<u8>, Vec<u8>)> {
-            let p = std::fs::read(&photo_abs).map_err(|e| AppError::Fail(format!("读原图失败：{e}")))?;
+        let img = i.clone();
+        util::blocking(move || -> Result<(Vec<u8>, Vec<u8>, String)> {
+            let (p, rel) = crate::service::adjust::submit_artifact(&ctx2, &img).map_err(AppError::Fail)?;
             let m = imagesvc::mask_to_orig(&ctx2, &mask_rel, mw, mh).map_err(AppError::bad)?;
-            Ok((p, m))
+            Ok((p, m, rel))
         })
         .await?
     };
@@ -144,7 +146,7 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
         util::num_or(settings.get("steps"), 0.0),
         util::num_or(settings.get("cfg"), 0.0),
         seed,
-        &i.orig_path,
+        &sent_rel,
         &Value::Object(snap).to_string(),
         rerun_of,
     )?;

@@ -193,6 +193,31 @@ a:hover { color: var(--spot-txt); }
 .muted { color: var(--txt-3); font-size: var(--f-sm); }
 .nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* ---------------- 视图过渡（F7b / F7d）----------------
+   谁发起在 core/router.js（翻页）与 core/theme.js（换主题），两处都先过 core/motion.js 的特征检测：
+   浏览器不认 startViewTransition、开了「减弱动效」、或画布/精修覆盖层在场，就一律不演——
+   那时 <html> 上下面这几个类一个都不会挂，页面行为回到 0.2 的瞬切，这条条规则一行都不生效。
+   只淡 opacity，不位移不缩放：杂志翻的是纸，界面本身不该跟着晃。 */
+
+/* 时长仍从令牌取：VT 伪元素继承 :root，所以 var() 在这里有效；
+   万一哪一档浏览器拿不到自定义属性，兜底值与令牌同数，不至于退成 0s（那就等于没过渡） */
+::view-transition-old(root), ::view-transition-new(root) {
+  animation-duration: var(--vt-fade, .22s);
+  animation-timing-function: var(--ease);
+}
+/* 主题切换（F7d）：整根一次 opacity 交叉淡入，约 300ms（--t-vt）。
+   刻意不给颜色属性加 transition——纸面、墨线、字各自漂的话，中间帧会是一团脏色 */
+:root.vt-theme { --vt-fade: var(--t-vt); }
+
+/* 外壳里不跟着翻页的两块：书脊与刊头。view-transition-name 必须挂唯一（同名两处 = 整场过渡被判失败），
+   所以 core/router.js 是按 #shell > .rail / #shell > .topbar 逐个给类，只有翻页那一档才挂。
+   主题切换不挂它们（.vt-theme 只改时长）——那时颜色是主角，框和内容得一起淡，不然书脊先黑、页面后黑。
+   旧快照直接藏掉、新快照不演：纸在翻，框留在原地。 */
+.rail.vt-rail { view-transition-name: synco-rail; }
+.topbar.vt-topbar { view-transition-name: synco-topbar; }
+::view-transition-old(synco-rail), ::view-transition-old(synco-topbar) { display: none; }
+::view-transition-new(synco-rail), ::view-transition-new(synco-topbar) { animation: none; }
+
 /* ---------------- 窄屏：左栏压成顶部横条，顶栏让位给搜索 ---------------- */
 @media (max-width: 900px) {
   .shell { flex-direction: column; }

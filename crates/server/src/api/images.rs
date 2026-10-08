@@ -5,7 +5,7 @@ use crate::error::{AppError, Result};
 use crate::models::dto;
 use crate::repo::{images as rimg, results as rres};
 use crate::state::Shared;
-use crate::{service::imagesvc, service::refs, util};
+use crate::{service::adjust, service::imagesvc, service::refs, util};
 use axum::body::Bytes;
 use axum::extract::{Path as APath, State};
 use axum::response::Response;
@@ -82,10 +82,15 @@ pub async fn image_delete(State(ctx): State<Shared>, APath(id): APath<String>) -
         rels.extend(rres::list_paths(&ctx, "image_id=?", crate::repo::i(iid))?);
         rres::delete_for_image(&ctx, iid)?;
         rimg::delete(&ctx, iid)?;
+        // 本地调整的三张附属表只存 image_id，行没了就再没人知道这些参数是谁的
+        crate::repo::adjust::clear(&ctx, iid)?;
         // 子图不跟着删（它们是用户另存出去的独立成品），但来源引用要清掉，
         // 否则「派生查看」的计数会指向一个已经不存在的 id
         rimg::clear_derived_refs(&ctx, iid)?;
         imagesvc::purge(&ctx, &i);
+        // `_adjprev` / `_adjusted` / `_adjthumb` / `_adjinput` 都是按父图名拼出来的，
+        // 库里不留引用，只能按前缀扫一遍目录请走
+        adjust::purge_all(&ctx, &i);
         // 画布的参考图槽位是存在设置里的一串 rel：行没了要连着清，不然键与文件都留在库里当孤儿
         if i.is_sketch() {
             refs::clear(&ctx, i.project_id, iid)?;

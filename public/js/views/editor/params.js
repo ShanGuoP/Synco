@@ -1,4 +1,4 @@
-// 右栏属性面板：快速指令胶囊 + 「指令 / 采样 / LoRA」子标签 + 底部提交区
+// 右栏属性面板：快速指令胶囊 + 「指令 / 采样 / LoRA / 本地调整」子标签 + 底部提交区
 // 胶囊行 → 子标签行 → 参数行（标签+数值直输+滑杆）
 'use strict';
 import { el, fill } from '../../core/dom.js';
@@ -9,7 +9,9 @@ import { store, patchSettings, defaultsFromCfg, effMode, PARAM_RANGE } from '../
 import { phrasesManager } from '../../ui/phrases.js';
 import { baseName, fmtNum } from '../../core/format.js';
 
-const TABS = [['prompt', '指令'], ['sample', '采样'], ['lora', 'LoRA']];
+/* 「本地调整」那一页的内容由 adjust.js 交进来：生成参数与图像调整是两套状态机，
+   共用的是这一列的骨架和标签条，不是数据结构 */
+const TABS = [['prompt', '指令'], ['sample', '采样'], ['lora', 'LoRA'], ['adjust', '本地调整']];
 
 /* 与后端 api/common.rs 的 SEED_MAX 对齐：滑杆范围就是实际会提交的范围，回填才不会变成另一个种子 */
 export const SEED_MAX = 2147483647;
@@ -185,11 +187,19 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
   /* ---------------- 子标签 + 主体 ---------------- */
   const body = el('div.prop-body');
   const tabs = el('div.prop-tabs', {}, ...TABS.map(([k, label]) => el('button', {
-    type: 'button', dataset: { k }, text: label, onclick: () => { tab = k; show(); },
+    type: 'button', dataset: { k }, text: label, onclick: () => { tab = k; show(); onTabSwitch?.(k); },
   })));
+  /* 「本地调整」那一页由外部交进来（没交进来之前这一格不显示，免得点出一个空壳） */
+  let adjustNode = null;
+  let onTabSwitch = null;
   function show() {
-    for (const b of tabs.children) b.classList.toggle('is-on', b.dataset.k === tab);
-    fill(body, tab === 'prompt' ? panePrompt : tab === 'sample' ? paneSample : paneLora);
+    for (const b of tabs.children) {
+      const hidden = b.dataset.k === 'adjust' && !adjustNode;
+      b.hidden = hidden;
+      b.classList.toggle('is-on', b.dataset.k === tab);
+    }
+    const pane = tab === 'prompt' ? panePrompt : tab === 'sample' ? paneSample : tab === 'lora' ? paneLora : adjustNode;
+    fill(body, pane || panePrompt);
     if (tab === 'prompt') syncPrompt();
   }
 
@@ -312,8 +322,9 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
     inkRow.hidden = !on;
     if (on === cloudMode) return;
     cloudMode = on;
-    if (on && tab !== 'prompt') tab = 'prompt';
-    for (const b of tabs.children) b.style.display = on && b.dataset.k !== 'prompt' ? 'none' : '';
+    // 「本地调整」与生成模式无关（它根本不走后端），云端模式下也要留着；被强制收回的只有采样与 LoRA
+    if (on && tab !== 'prompt' && tab !== 'adjust') tab = 'prompt';
+    for (const b of tabs.children) b.style.display = on && b.dataset.k !== 'prompt' && b.dataset.k !== 'adjust' ? 'none' : '';
     cloudNote.hidden = !on;
     edgeRow.hidden = !on;
     const tip = on ? '重置为默认指令' : '重置为工作流默认';
@@ -325,6 +336,9 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
 
   return {
     node, sync, setBusy, line, applySettings, clearMarks, setCloud, setScope,
+    /** 把「本地调整」那一页挂进来（编辑器骨架只建一次，所以这是一次性的） */
+    setAdjust(node2, onSwitch) { adjustNode = node2; onTabSwitch = onSwitch || null; show(); },
+    get tab() { return tab; },
     get stages() { return stages; },
     get cloud() { return cloudMode; },
     get busy() { return busy; },      // .is-busy 只挡鼠标，键盘路径要自己看一眼

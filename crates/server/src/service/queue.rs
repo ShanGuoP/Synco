@@ -265,8 +265,9 @@ fn prepare(ctx: &Shared, img: &Image, settings: &Value) -> std::result::Result<P
         levels: stitch_core::DEFAULT_LEVELS,
         invert: settings.get("invert").and_then(Value::as_bool).unwrap_or(false),
     };
-    let photo = codec::decode(&std::fs::read(util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| "读不到原图".to_string())?)
-        .map_err(|e| format!("读原图失败：{e}"))?)?;
+    // 云端吃的也是"调整后"的那一张（拍板 4）：用户涂的蒙版画在调整后预览上，坐标天然同域
+    let ops = crate::service::adjust::load_ops(ctx, img.id);
+    let photo = crate::service::adjust::photo_with(ctx, img, &ops)?;
     // 反向涂抹且没存过遮罩 = 一笔没保 = 整幅重绘，这时没有遮罩文件是合法输入；正向仍然要拦
     let mask_alpha = match img.mask_path.as_deref().and_then(|m| util::data_file(&ctx.data, m)) {
         Some(p) => codec::decode(&std::fs::read(&p).map_err(|e| format!("读遮罩失败：{e}"))?)?.alpha(),
@@ -448,12 +449,17 @@ fn prepare_full(ctx: &Shared, img: &Image, settings: &Value) -> std::result::Res
         .filter(|n| *n >= 1.0)
         .map(|n| n.clamp(512.0, 3840.0) as u32)
         .unwrap_or_else(|| s.stitch_edge.max(1) as u32);
-    let raw = std::fs::read(util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| "读不到原图".to_string())?)
-        .map_err(|e| format!("读原图失败：{e}"))?;
-    let dec = codec::decode(&raw)?;
+    // 整图重绘同样吃"调整后"的图；调整过就不能再走"原样透传文件字节"那条捷径，
+    // 透传的意义是不为一张没动过的图多付一次解码重编码
+    let ops = crate::service::adjust::load_ops(ctx, img.id);
+    let dec = crate::service::adjust::photo_with(ctx, img, &ops)?;
     let (fw, fh, passthrough) = full_target(dec.w, dec.h, edge)?;
-    if passthrough && raw_sendable(&raw) {
-        return Ok((raw, format!("{}x{}", dec.w, dec.h)));
+    if passthrough && ops.is_identity() {
+        let raw = std::fs::read(util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| "读不到原图".to_string())?)
+            .map_err(|e| format!("读原图失败：{e}"))?;
+        if raw_sendable(&raw) {
+            return Ok((raw, format!("{}x{}", dec.w, dec.h)));
+        }
     }
     let scaled = stitch_core::resize_rgba(&dec, fw as usize, fh as usize);
     Ok((codec::encode_png(&scaled), format!("{fw}x{fh}")))

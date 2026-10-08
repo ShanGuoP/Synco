@@ -76,6 +76,11 @@
   --t-fast: .15s;
   --t:      .22s;
   --t-slow: .4s;
+  /* 视图过渡的两档（F7b 翻页 / F7d 主题淡入）：都压在 320ms 的克制上限里，不用 --t-slow 那一档。
+     --vt-fade 是"眼下这一场过渡多长"，默认走翻页；theme.js 挂上 .vt-theme 才换成主题那一档。
+     规则本体在 base.css 末尾（::view-transition-*）。 */
+  --t-vt:    .3s;
+  --vt-fade: var(--t);
   --ease:   cubic-bezier(.4, 0, .2, 1);
   --ease-out: cubic-bezier(.16, 1, .3, 1);
 
@@ -125,10 +130,29 @@
   --sh-3: 0 16px 40px rgba(0, 0, 0, .65);
 }
 
+/* ============================================================
+   减弱动效（F7 的兜底那一档）：两个来源任一到就一律瞬时——
+     · 系统的 prefers-reduced-motion
+     · 应用内「减弱动效」开关（设置 → 外观）：core/motion.js 把类挂在 <body> 上，
+       首帧之前由 core/theme-boot.js 先抢挂到 <html>（那时 body 还不存在）
+   .01ms 而不是 0：留住 animationend / transitionend 事件，靠事件收尾的代码不会卡在"永远等不到"。
+   连 delay 一起掐掉：卡片原本按序号错峰进场（--i * 28ms），那种排队出现对减弱动效的人同样是动效。
+   CSS 管不着的那两样（视口惯性、视图过渡）由 core/motion.js 的 reduce() 在同一处判掉。
+   ============================================================ */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
     transition-duration: .01ms !important;
+    transition-delay: 0s !important;
   }
+}
+html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after,
+body.reduce-motion, body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after {
+  animation-duration: .01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: .01ms !important;
+  transition-delay: 0s !important;
 }

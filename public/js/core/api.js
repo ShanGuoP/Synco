@@ -54,6 +54,14 @@ export const api = {
   thumb:   id => request(`/api/images/${id}/thumb`),
   /** 瓦片清单：首次访问会当场切一套，所以这个请求可能慢 */
   tiles:   id => request(`/api/images/${id}/tiles`),
+  /** 本地调整（0.3）：读参数+预设/LUT 名单、存参数、预览、成图、另存为新图 */
+  adjust:       id => request(`/api/images/${id}/adjust`),
+  saveAdjust:   (id, ops) => request(`/api/images/${id}/adjust`, { method: 'POST', body: { ops } }),
+  adjustPreview: id => request(`/api/images/${id}/adjust/preview`, { method: 'POST', body: {} }),
+  /** 带 inline 参数的那次预览只有一种场合用得到：裁切 overlay 背后要铺"没裁但其它都算完"的那一张 */
+  adjustPreviewWith: (id, ops) => request(`/api/images/${id}/adjust/preview`, { method: 'POST', body: { ops } }),
+  adjustRender: id => request(`/api/images/${id}/adjust/render`, { method: 'POST', body: {} }),
+  adjustFork:   id => request(`/api/images/${id}/adjust/fork`, { method: 'POST', body: {} }),
 
   run:      (imageIds, settings, rerunOf) => request('/api/run', { method: 'POST', body: { image_ids: imageIds, settings, rerun_of: rerunOf || null } }),
   result:   id => request(`/api/results/${id}`),

@@ -2,8 +2,10 @@
 //! 这里只放"能脱离 HTTP 单测"的东西，axum handler 全在 `crate::api`。
 
 pub mod backend;
+pub mod adjust;
 pub mod cloud;
 pub mod comfy;
+pub mod face;
 pub mod imagesvc;
 pub mod queue;
 pub mod refs;

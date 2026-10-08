@@ -136,6 +136,9 @@
 /* 云端挡位那种长串（模型名 + 尺寸）撑破 27px 的盒会把整条顶栏顶高：收成一行带省略号 */
 .chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chip:hover { border-color: var(--line-strong); color: var(--txt); }
+/* F7e：能按的那几个（排序 / 刷新 / 批量计数）给按下与禁用两档；纯信息的小票（"共 N 张"）不跟着闪 */
+button.chip:active:not(:disabled) { background: var(--wash); border-color: var(--line-strong); }
+button.chip:disabled { opacity: .38; cursor: not-allowed; }
 .chip b { color: var(--spot-txt); font-family: var(--f-mono); font-weight: 700; }
 .chip.is-on { background: var(--spot-dim); border-color: var(--spot-line); color: var(--spot-txt); }
 .chip.is-on b { color: var(--spot-txt); }

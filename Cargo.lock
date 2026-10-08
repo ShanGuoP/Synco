@@ -2694,6 +2694,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "moving-least-squares"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "695185f2faae61336d238c7b7016de3ea48068bcd662e09e65532c92da355303"
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3272,6 +3278,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266"
 dependencies = [
  "siphasher",
+]
+
+[[package]]
+name = "photoedit-core"
+version = "0.3.0"
+dependencies = [
+ "moving-least-squares",
+ "serde",
+ "serde_json",
+ "stitch-core",
 ]
 
 [[package]]
@@ -4571,7 +4587,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stitch-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fast_image_resize",
  "imageproc",
@@ -4673,7 +4689,7 @@ dependencies = [
 
 [[package]]
 name = "synco-desktop"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4686,13 +4702,14 @@ dependencies = [
 
 [[package]]
 name = "synco-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
  "futures-util",
  "image",
  "pathdiff",
+ "photoedit-core",
  "rand 0.10.3",
  "reqwest 0.12.28",
  "rusqlite",

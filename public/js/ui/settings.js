@@ -5,6 +5,7 @@ import { icon } from '../core/icons.js';
 import { api } from '../core/api.js';
 import { isDesktop, call, pickFolder, human, openExternal } from '../core/desktop.js';
 import { MODES, apply, mode, resolved, watch } from '../core/theme.js';
+import { osReduce, reduce, saved, set as setMotion, watch as watchMotion } from '../core/motion.js';
 import { store } from '../state.js';
 import { modal } from './modal.js';
 import { toastOk, toastErr, toastBusy } from './toast.js';
@@ -565,10 +566,26 @@ function createDataPane() {
   return { node };
 }
 
-/** 外观：三档选择 + 当前实际生效的那一档 */
+/** 外观：三档底色 + 减弱动效 + 当前实际生效的那一档 */
 function createThemePane() {
   const row = el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
   const now = el('div.set__state');
+  /* 减弱动效（F7 的兜底开关）：和系统的 prefers-reduced-motion 同一个语义，任一到就全站瞬时——
+     视口惯性、瓦片淡入、翻页的视图过渡、主题 crossfade 全关掉，悬停那些也给压成 .01ms。
+     和主题一个道理存 localStorage 而不是库里：它是这台机器的显示偏好，换台机器不该被带走，
+     而且首帧之前就要读到（CSP 之下只有 core/theme-boot.js 赶得上，它抢在 body 存在之前挂 <html>）。 */
+  const sw = el('button.toggle', {
+    type: 'button', role: 'switch', 'aria-checked': String(saved()), 'aria-label': '减弱动效',
+    onclick: () => { setMotion(!saved()); paint(); },
+  });
+
+  /* 哪一路在起作用要说清楚：应用开关关掉不等于系统那一档也关了（那就还是减弱的） */
+  const motionLine = () => {
+    if (!reduce()) return '动效：全开（画布惯性、翻页淡入、主题淡入都在）';
+    if (saved() && osReduce()) return '动效：已减弱（这一档开关与系统的「减少动态效果」都开着）';
+    if (saved()) return '动效：已减弱（这一档开关）';
+    return '动效：已减弱（来自系统的「减少动态效果」偏好；这里留关即可只跟系统）';
+  };
 
   function paint() {
     const cur = mode();
@@ -576,22 +593,42 @@ function createThemePane() {
       type: 'button', class: `btn btn--sm${k === cur ? ' btn--primary' : ' btn--ghost'}`,
       text: label, onclick: () => { apply(k); paint(); },
     })));
-    fill(now, el('p.muted', {
-      text: `当前生效：${resolved() === 'dark' ? '墨黑' : '纸白'}${cur === 'system' ? '（跟随系统，改系统外观会立刻跟着变）' : '（固定档，不随系统）'}`,
-    }));
+    sw.setAttribute('aria-checked', String(saved()));
+    fill(now,
+      el('p.muted', {
+        text: `当前生效：${resolved() === 'dark' ? '墨黑' : '纸白'}${cur === 'system' ? '（跟随系统，改系统外观会立刻跟着变）' : '（固定档，不随系统）'}`,
+      }),
+      el('p.muted', { text: motionLine() }));
   }
 
   const node = el('div.dlg-flow', {},
-    el('div', {}, el('h4.dlg-h4', { text: '界面底色' }), row, now,
-      el('p.muted', { text: '只换窗口、列表与面板。画布四周那一圈一直是中性深底——判色要在稳定底色下做，换主题不会把照片往冷暖任何一边带。' })));
+    el('div', {}, el('h4.dlg-h4', { text: '界面底色' }), row,
+      el('p.muted', { text: '只换窗口、列表与面板。画布四周那一圈一直是中性深底——判色要在稳定底色下做，换主题不会把照片往冷暖任何一边带。' })),
+    el('div', {}, el('h4.dlg-h4', { text: '动效' }),
+      el('div.set__ck', {}, sw, el('span', { text: '减弱动效（翻页不再淡入、画布手势不再滑行，主题一改就到位）' })),
+      now,
+      el('p.muted', { text: '对着系统里那个「减少动态效果」是同一档事：任一边开着，这里就一律瞬时。开着时主题切换没有淡入（那本来就是淡入），底色照样立刻换到位。' })));
   paint();
   watch(() => paint());
+  watchMotion(() => paint());
   return { node };
 }
 
 /** 关于：版本号 + 这次构建的 commit + 最近提交当日志；没有发布渠道就不装「自动更新」 */
 /* 作者页是写死的：这一栏不读库、不读配置，装了安装包也照样在 */
 const AUTHOR = { name: '@杉果派', url: 'https://v.douyin.com/VoXx5-pqL9c/' };
+/* 仓库地址：更新日志那一栏由服务端回，读不到时退到这个常量（致谢里的 NOTICE 链接也用它） */
+const REPO = 'https://github.com/ShanGuoP/Synco';
+
+/* 开源致谢：只列真的进了这个二进制的东西，许可口径见仓库根的 NOTICE.md。
+   评估过但没采用的（photon-rs、YuNet/FaceMesh 权重）不写在这里——
+   写没在包里的署名既没义务也没意义，还会让人以为界面里有人脸功能。 */
+const CREDITS = [
+  ['axum · tokio · rusqlite · image · imageproc · fast_image_resize · reqwest · rust-embed', 'MIT / Apache-2.0'],
+  ['Tauri 2 桌面壳', 'MIT / Apache-2.0'],
+  ['moving-least-squares（几何形变数学）', 'MPL-2.0', 'https://github.com/mpizenberg/rust_mls'],
+  ['Noto Serif SC 界面字体', 'SIL OFL 1.1', 'https://fonts.google.com/noto/specimen/Noto+Serif+SC'],
+];
 
 /**
  * 关于：版本、GitHub Releases 的更新日志、仓库与作者。
@@ -617,7 +654,7 @@ function createAboutPane() {
     try { v = await api.get('/api/version'); } catch (e) { fill(state, okRow(false, '读不到版本', e.message)); return; }
     try { r = await api.get('/api/releases'); } catch (e) { r = { releases: [], error: e.message }; }
 
-    const repo = r.repo || 'https://github.com/ShanGuoP/Synco';
+    const repo = r.repo || REPO;
     const built = v.commit && v.commit !== 'unknown' ? `构建 ${v.commit} · ${String(v.date).slice(0, 10)}` : '';
     const latest = (r.latest || {}).tag ? String(r.latest.tag).replace(/^v/, '') : '';
     const rows = [
@@ -648,7 +685,12 @@ function createAboutPane() {
   const node = el('div.dlg-flow', {},
     el('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
       el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '重新读取', onclick: load })),
-    state, log);
+    state, log,
+    el('h4.dlg-h4', { text: '开源致谢' }),
+    ...CREDITS.map(([what, lic, url]) => el('div.set__row', {},
+      el('span.dot'), el('span', { text: what }), el('span.muted', { text: lic }),
+      url ? link('来源', url) : null)),
+    linkRow('完整清单', link('NOTICE.md', `${REPO}/blob/main/NOTICE.md`)));
   load();
   return { node };
 }

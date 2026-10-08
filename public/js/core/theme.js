@@ -3,6 +3,7 @@
 // 也不该为了上色多等一次接口：首帧之前由 core/theme-boot.js 先定好 data-theme。
 'use strict';
 import { call, isDesktop } from './desktop.js';
+import { canTransition } from './motion.js';
 
 const KEY = 'synco.theme';
 
@@ -17,12 +18,30 @@ export function resolved(m = mode()) {
   return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+/* F7d 主题 crossfade：整根淡入淡出，不逐属性过渡。
+   逐条 transition 会让纸面、墨线、文字各自漂到不同的时间上（底色先变、字后变），比瞬切更难看；
+   根级那一下用 View Transition 的快照做，时长读 --vt-fade（tokens.css），主题这一档给 300ms。
+   能不能演由 core/motion.js 一处判：API 不在（特征检测）、减弱动效、或画布/精修覆盖层在场，
+   任一成立就落回原来的瞬切——判色区不该被一张半透明的快照污染，也不该为它花一次大纹理拷贝。 */
+const VT_FLAG = 'vt-theme';
+const paint = r => { document.documentElement.dataset.theme = r; tellShell(r); };
+
 /** 传 m 就是"用户选了这一档"（顺带记住），不传只是按当前选择重新上色 */
 export function apply(m) {
   if (m) { try { localStorage.setItem(KEY, m); } catch { /* 隐私模式写不进去，本次显示照样对 */ } }
   const r = resolved(m);
-  document.documentElement.dataset.theme = r;
-  tellShell(r);
+  const flip = r !== document.documentElement.dataset.theme;   // 首帧与重复上色都不演一遍
+  if (!flip || !canTransition()) { paint(r); return r; }
+  // 类名要在 startViewTransition 之前挂：新旧两侧的 animation-duration 才取到同一个值
+  document.documentElement.classList.add(VT_FLAG);
+  const done = () => document.documentElement.classList.remove(VT_FLAG);
+  try {
+    // finished 会被"后一次过渡顶掉"而 reject，那不是错误：接住它，只为了收尾摘类名
+    document.startViewTransition(() => paint(r)).finished.then(done, done);
+  } catch {   // 快照阶段出问题（极少）就把这一次当普通上色，颜色不能不落地
+    done();
+    paint(r);
+  }
   return r;
 }
 

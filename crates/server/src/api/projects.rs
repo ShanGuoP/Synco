@@ -99,6 +99,8 @@ pub async fn project_delete(State(ctx): State<Shared>, APath(id): APath<String>)
         }
     }
     rels.extend(rres::list_paths(&ctx, "project_id=?", repo::i(pid))?);
+    // 三张调整附属表靠子查询找归属，必须赶在 images 行没之前清
+    repo::adjust::clear_project(&ctx, pid)?;
     rimg::delete_for_project(&ctx, pid)?;
     rres::delete_for_project(&ctx, pid)?;
     rproj::delete(&ctx, pid)?;

@@ -70,6 +70,8 @@
 }
 .input::placeholder, .textarea::placeholder { color: var(--txt-3); }
 .input:hover, .textarea:hover, .select:hover { border-bottom-color: var(--line-strong); }
+/* 禁用态与按钮同一档：原来只有按钮有"点不动"的样子，输入框禁了看着还能打字 */
+.input:disabled, .textarea:disabled, .select:disabled { opacity: .38; cursor: not-allowed; }
 .input:focus, .textarea:focus, .select:focus {
   outline: none; border-bottom-color: var(--spot);
   box-shadow: inset 0 -2px 0 var(--spot);
@@ -100,8 +102,12 @@
 }
 .toggle[aria-checked="true"] { background: var(--spot-dim); border-color: var(--spot); }
 .toggle[aria-checked="true"]::after { transform: translateX(17px); background: var(--spot); }
+/* F7e 三态对齐按钮那一档：悬停给一条更重的墨线（不预填颜色——开关的颜色是"结论"，不该悬停就猜） */
+.toggle:hover:not(:disabled) { border-color: var(--line-strong); background: var(--wash); }
+.toggle[aria-checked="true"]:hover:not(:disabled) { border-color: var(--spot); background: var(--spot-dim); }
 .toggle:focus-visible { box-shadow: var(--focus); }
 .toggle:active::after { width: 17px; }
+.toggle:disabled { opacity: .38; cursor: not-allowed; }
 
 /* ---------- 滑杆 ---------- */
 .slider {
@@ -118,8 +124,8 @@
   background: var(--txt); border: 0;
   transition: transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
-.slider:hover .slider__thumb { transform: scale(1.18); }
-.slider:active .slider__thumb { box-shadow: 0 0 0 5px var(--spot-dim); }
+.slider:hover .slider__thumb, .slider.is-drag .slider__thumb { transform: scale(1.18); }
+.slider:active .slider__thumb, .slider.is-drag .slider__thumb { box-shadow: 0 0 0 5px var(--spot-dim); }
 .slider:focus-visible .slider__thumb { box-shadow: var(--focus); }
 .slider__bubble {
   position: absolute; bottom: 22px; left: 50%; transform: translate(-50%, 4px) scale(.9);
@@ -144,6 +150,8 @@
 }
 .seg__it:last-child { border-right: 0; }
 .seg__it:hover { color: var(--txt); background: var(--wash); }
+.seg__it:active:not(:disabled) { background: var(--line-hi); }
+.seg__it:disabled { opacity: .38; cursor: not-allowed; }
 .seg__it.is-on { background: var(--spot-dim); color: var(--spot-txt); font-weight: 600; }
 
 /* ---------- 标签页 tabs ---------- */
@@ -241,7 +249,12 @@
   font-size: var(--f-md); color: var(--txt);
   pointer-events: auto; cursor: pointer;
   animation: toast-in var(--t) var(--ease-out) both;
+  /* F7e：它能点（点一下就走），所以给一档悬停反馈；墨线加重就够，不再叠位移 */
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
+.toast:hover { border-color: var(--line-strong); box-shadow: var(--sh-3); }
+.toast:active { border-color: var(--line-strong); box-shadow: var(--sh-1); }
+.toast:focus-visible { box-shadow: var(--focus); }
 .toast.is-out { animation: toast-out var(--t) var(--ease) both; }
 @keyframes toast-in { from { opacity: 0; transform: translateX(24px); } }
 @keyframes toast-out { to { opacity: 0; transform: translateX(24px); } }
@@ -338,6 +351,7 @@
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .set__nav__it:hover { background: var(--wash); color: var(--txt); }
+.set__nav__it:active { background: var(--line-hi); }
 .set__nav__it.is-on { background: var(--spot-dim); color: var(--spot-txt); font-weight: 600; }
 .set__pane { min-width: 0; max-height: 62vh; overflow-y: auto; }
 .set__add { display: grid; grid-template-columns: 1fr auto; gap: var(--s-2); align-items: end; }
@@ -355,5 +369,17 @@
 .set__track { height: 3px; background: var(--line-hi); }
 .set__track i { display: block; height: 100%; background: var(--spot); }
 @media (max-width: 620px) { .set { grid-template-columns: 1fr; } .set__nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding-bottom: var(--s-2); } }
+
+/* ---------- F7e/f 微交互统一 ----------
+   这些可点的行与块原来只有悬停一档（只有 .btn 那一路有按下反馈），补齐同一口径：
+   按下去只加重底色，不位移、不变形、不加阴影——杂志风那条克制线。
+   时长仍走 --t-fast，减弱动效那一档由 tokens.css 末尾统一压成瞬时。
+   （.seg__it / .chip-s / .set__nav__it / .toggle / .slider / .toast 的就近规则写在各自那一段） */
+.rail-btn:active:not(:disabled) { background: var(--line-hi); }
+.tool:active:not(:disabled):not(.is-on) { background: var(--line-hi); }
+.tool-zoom:active { background: var(--line-hi); }
+.tab:active:not(:disabled) { color: var(--spot-txt); }
+.promo:active { background: var(--line-hi); }
+.rail__link:active, .rail__recent:active { background: var(--line-hi); }
 
 

@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 
 pub mod db;
+pub mod adjust;
 pub mod images;
 pub mod presets;
 pub mod projects;

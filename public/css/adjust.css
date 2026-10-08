@@ -1,0 +1,57 @@
+/* 「本地调整」：右栏那一页的排布 + 视口上的裁切框与液化盘。
+   画布区仍然保持中性（遮罩与边框用白/黑），朱红只出现在边框与选中态那几处细线上——
+   在照片上盖一层彩色，用户就没法判色了。 */
+
+/* ---------- 面板 ---------- */
+.adj-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.adj-row .muted { flex: 0 0 auto; }
+.adj-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; padding-top: var(--s-2); border-top: 1px solid var(--line); }
+.adj-actions .btn { flex: 1 1 auto; }
+select.input {
+  height: 26px; padding: 0 var(--s-2); border: 1px solid var(--line-hi); border-radius: var(--r-2);
+  background: var(--bg-field); color: var(--txt); font: inherit; font-size: var(--f-sm);
+}
+select.input:focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* ---------- overlay：都挂在 .vp__canvas 里，坐标就是图像的像素 ---------- */
+.adj-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+/* --iz = 1/缩放：手柄与边框按它反向 sizing，放大缩小时屏幕上一样粗 */
+.adj-crop { position: absolute; inset: 0; pointer-events: auto; }
+.adj-crop__box {
+  position: absolute; box-sizing: border-box; cursor: move;
+  border: calc(1px * var(--iz, 1)) solid var(--on-spot);
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .55);
+  transition: opacity var(--t-fast) var(--ease);
+}
+.adj-crop__grid {
+  position: absolute; inset: 0; pointer-events: none; opacity: .55;
+  background-image:
+    linear-gradient(to right, transparent calc(100% / 3 - 1px), rgba(255, 255, 255, .8) 0),
+    linear-gradient(to right, transparent calc(200% / 3 - 1px), rgba(255, 255, 255, .8) 0),
+    linear-gradient(to bottom, transparent calc(100% / 3 - 1px), rgba(255, 255, 255, .8) 0),
+    linear-gradient(to bottom, transparent calc(200% / 3 - 1px), rgba(255, 255, 255, .8) 0);
+}
+.adj-hd {
+  position: absolute; width: calc(13px * var(--iz, 1)); height: calc(13px * var(--iz, 1));
+  background: var(--on-spot); border: calc(1px * var(--iz, 1)) solid var(--spot);
+  border-radius: calc(2px * var(--iz, 1)); pointer-events: auto;
+}
+.adj-hd--nw { left: 0; top: 0; transform: translate(-50%, -50%); cursor: nwse-resize; }
+.adj-hd--n  { left: 50%; top: 0; transform: translate(-50%, -50%); cursor: ns-resize; }
+.adj-hd--ne { left: 100%; top: 0; transform: translate(-50%, -50%); cursor: nesw-resize; }
+.adj-hd--e  { left: 100%; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize; }
+.adj-hd--se { left: 100%; top: 100%; transform: translate(-50%, -50%); cursor: nwse-resize; }
+.adj-hd--s  { left: 50%; top: 100%; transform: translate(-50%, -50%); cursor: ns-resize; }
+.adj-hd--sw { left: 0; top: 100%; transform: translate(-50%, -50%); cursor: nesw-resize; }
+.adj-hd--w  { left: 0; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize; }
+
+/* 液化：盘面只是给一个"手在这儿"的凭据，反馈层与盘都不吃指针 */
+.adj-warp { position: absolute; pointer-events: none; }
+.adj-disc {
+  position: absolute; border-radius: 50%; pointer-events: none;
+  border: calc(2px * var(--iz, 1)) solid rgba(255, 255, 255, .85);
+  box-shadow: 0 0 0 calc(1px * var(--iz, 1)) rgba(0, 0, 0, .6), inset 0 0 calc(12px * var(--iz, 1)) rgba(0, 0, 0, .18);
+}
+/* 调整模式下遮罩那一层让位：这时涂不了（几何段动了画幅会被 setTool 挡住），留着只会干扰判色 */
+.ed-stage.is-adjust #edMask { opacity: 0; pointer-events: none; }
+.ed-stage.is-warp .vp__poster, .ed-stage.is-warp .vp__tiles { cursor: crosshair; }

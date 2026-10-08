@@ -47,7 +47,12 @@
 }
 
 /* 纸：画稿是墨+透明底，屏幕上这层白就是发给云端的白，四周仍留中性深底判色 */
-.cv-stage { grid-area: stage; position: relative; overflow: hidden; background: var(--bg-canvas); min-width: 0; }
+.cv-stage {
+  grid-area: stage; position: relative; overflow: hidden; background: var(--bg-canvas); min-width: 0;
+  /* 与编辑器那张画布同一口径：判色区不进视图过渡的快照（发起与否在 core/motion.js 判） */
+  view-transition-name: none;
+  @view-transition { navigation: none; }
+}
 .cv-stage.is-pan { cursor: grab; }
 .cv-stage.is-pan:active { cursor: grabbing; }
 .cv-stage.is-paint { cursor: none; }

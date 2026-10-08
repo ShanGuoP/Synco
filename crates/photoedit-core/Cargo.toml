@@ -1,0 +1,12 @@
+[package]
+name = "photoedit-core"
+description = "本地精修内核：裁切/旋转、液化与 MLS 变形、调色、美颜、LUT——纯函数、无 IO，服务端与基准测试共用"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+moving-least-squares = "0.1.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+stitch-core = { path = "../stitch-core" }

@@ -102,6 +102,12 @@ body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
   grid-area: stage; position: relative; min-width: 0; min-height: 0;
   background: var(--bg-canvas); overflow: hidden;
   background-image: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, .03), transparent 65%);
+  /* 判色区不参与视图过渡：整块瓦片视口抓成快照既是一次大纹理拷贝，
+     半透明的中间帧又会把照片往纸色上带。@view-transition 按元素作用在这一档 Chromium 上可用；
+     真挡下快照的是 core/motion.js 的 stageOpen()（那两条覆盖层路由根本不发起过渡），
+     这一行是把"画布区一律 none"写死在样式表里，别人将来给 img/canvas 挂名字也挂不到它头上。 */
+  view-transition-name: none;
+  @view-transition { navigation: none; }
 }
 .ed-stage.is-pan { cursor: grab; }
 .ed-stage.is-pan:active { cursor: grabbing; }
@@ -112,12 +118,20 @@ body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
   position: absolute; top: 0; left: 0; transform-origin: 0 0;
   box-shadow: 0 0 0 1px rgba(246, 242, 234, .28), 0 14px 40px rgba(0, 0, 0, .5);
   will-change: transform;
+  view-transition-name: none;   /* 底图那一整层都不进快照（惯性滑动的正是它） */
 }
 .vp__canvas > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* 海报与瓦片只是"看"的，指针一律穿透到涂抹层 */
 .vp__poster { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; user-select: none; -webkit-user-drag: none; }
-.vp__tiles { position: absolute; inset: 0; pointer-events: none; }
-.vp__tiles img { position: absolute; display: block; pointer-events: none; -webkit-user-drag: none; }
+.vp__tiles { position: absolute; inset: 0; pointer-events: none; view-transition-name: none; }
+/* F7c 瓦片渐进：刚解码出来的那一格淡进（150ms，只动 opacity），不"啪"地拍在海报上。
+   换图那一批按列错峰（tiles.js 只给列号，时长留在样式表里算），平移/缩放补进来的不错峰：
+   补格是要立刻盖住糊图的，晚一帧就是拖影。reduced-motion 由 tokens.css 末尾那一档统一掐掉。 */
+.vp__tiles img {
+  position: absolute; display: block; pointer-events: none; -webkit-user-drag: none;
+  animation: fade-in var(--t-fast) var(--ease) both;
+  animation-delay: calc(var(--tile-col, 0) * 45ms);
+}
 #edMask { cursor: none; touch-action: none; opacity: .5; }
 /* 平移模式下让画布穿透，好让 stage 收到拖动手势 */
 .vp__canvas.pan-through > canvas { pointer-events: none; }
@@ -221,6 +235,8 @@ body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 .chip-s:hover { color: var(--txt); background: var(--wash); border-color: var(--line-strong); }
+.chip-s:active:not(:disabled) { background: var(--line-hi); }
+.chip-s:disabled { opacity: .38; cursor: not-allowed; }
 .chip-s.is-on { color: var(--spot-txt); border-color: var(--spot); background: var(--spot-dim); font-weight: 600; }
 /* 管理短语那颗不是短语：虚线框、靠到行尾，和真胶囊一眼分得开 */
 .chip-s--mgr { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; border-style: dashed; color: var(--txt-3); font-size: var(--f-xs); }

@@ -91,6 +91,30 @@ const SWEEP = [
   ['单图 404', 'GET', '/api/images/999', undefined, [404]],
   ['清遮罩', 'POST', '/api/images/1/mask', {}, [200]],
   ['派生列表（没有子图也回 200）', 'GET', '/api/images/1/derived', undefined, [200], r => (Array.isArray(r.body?.images) ? '' : '没有 images 数组')],
+  /* ---------------- 0.3 本地调整：形状、域与"参数不是覆盖"这几件事 ----------------
+     像素级的正确性与真实渲染由 tools/adjust-check.js 在隔离实例上跑一张 900×600 的图去验，
+     这一批只钉契约：状态码、字段形状、越界夹逼、坏输入被拒——回归里最容易被改坏的就是这些。 */
+  ['读调整参数（没存过=全默认）', 'GET', '/api/images/1/adjust', undefined, [200],
+    r => (r.body?.ops?.v === 1 && r.body?.ops?.color?.exposure === 0 && Array.isArray(r.body?.presets) && r.body.presets.length >= 8 && Array.isArray(r.body?.luts) ? '' : `形状不对：${JSON.stringify(r.body).slice(0, 120)}`)],
+  ['调整参数 404', 'GET', '/api/images/999/adjust', undefined, [404]],
+  ['调整参数越界被夹并记账', 'POST', '/api/images/1/adjust', { ops: { color: { exposure: 900, contrast: -400 } } }, [200],
+    r => (r.body?.ops?.color?.exposure === 100 && r.body?.ops?.color?.contrast === -100 && (r.body?.clamped || []).includes('color.exposure') ? '' : `没夹住：${JSON.stringify(r.body).slice(0, 140)}`)],
+  ['调整参数坏 JSON 不回 5xx', 'POST', '/api/images/1/adjust', { ops: '不是对象' }, [400, 200],
+    r => (r.status === 200 ? (r.body?.ops?.color?.exposure === 0 ? '' : '字段类型不对却没退默认') : '')],
+  ['LUT 名字带穿越被拒', 'POST', '/api/images/1/adjust', { ops: { lut: { name: '../../app', strength: 50 } } }, [400]],
+  ['预览带 inline 参数（不落库）', 'POST', '/api/images/1/adjust/preview', { ops: { color: { temp: 40 } } }, [200],
+    r => (/_adjprev[0-9a-f]{8}\.jpg$/.test(r.body?.preview_url || '') && r.body?.w > 0 ? '' : `预览形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
+  /* 上一条把整条参数链换成了全默认（保存就是整体替换，这是契约的一部分），
+     所以这里要重新存一组真参数再落盘——不然测到的是"没参数时拒绝落盘"那条守卫。 */
+  ['再存一组真参数（整体替换）', 'POST', '/api/images/1/adjust', { ops: { color: { exposure: 30, clarity: 20 } } }, [200],
+    r => (r.body?.ops?.color?.exposure === 30 && r.body?.ops?.color?.sharpen === 0 ? '' : `替换不干净：${JSON.stringify(r.body?.ops?.color).slice(0, 120)}`)],
+  ['成图落盘并回报真实宽高', 'POST', '/api/images/1/adjust/render', {}, [200],
+    r => (/_adjusted[0-9a-f]{8}\.jpg$/.test(r.body?.url || '') && r.body?.w > 0 ? '' : `成图形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
+  ['另存为新图挂着父子关系', 'POST', '/api/images/1/adjust/fork', {}, [200],
+    r => (r.body?.image_id > 0 && r.body?.derived_from === 1 ? '' : `没挂上父子：${JSON.stringify(r.body).slice(0, 120)}`)],
+  ['新图参数起始为空', 'GET', '/api/images/2/adjust', undefined, [200],
+    r => (r.body?.ops?.color?.temp === 0 && r.body?.ops?.geometry?.rotate_deg === 0 ? '' : '新图继承了父图参数')],
+  ['预览不存在的图 404', 'POST', '/api/images/999/adjust/preview', {}, [404]],
   ['取回画稿缺 result_id 被拒', 'POST', '/api/canvas/1/use-sketch', {}, [400]],
   ['项目设置读写', 'POST', '/api/projects/1/settings', { loras: [{ name: 'x', strength: 1, enabled: true }] }, [200]],
   ['参数 cfg', 'GET', '/api/cfg', undefined, [200]],

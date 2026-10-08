@@ -13,6 +13,7 @@ export function createTileView(box) {
   let cur = null;                  // 当前使用的那一级 { z, k }
   let wanted = new Set();          // 这一轮该显示的键
   let gen = 0;                     // 换图/换清单时自增：在飞的瓦片发现自己过期就不再贴
+  let switched = true;             // 下一批贴上来的是"换图后的第一批"：那才按列错峰（F7c）
   let raf = 0;
   let view = null;
 
@@ -26,6 +27,7 @@ export function createTileView(box) {
     clear();
     wanted = new Set();
     gen++;
+    switched = true;
   }
 
   /** 切图时在飞的请求全部作废：晚到的那一格会盖到另一张照片上 */
@@ -34,6 +36,7 @@ export function createTileView(box) {
     view = null;
     clear();
     wanted = new Set();
+    switched = true;
   }
 
   /** 取"分辨率够屏幕用、但字节最少"的那一级 */
@@ -67,6 +70,10 @@ export function createTileView(box) {
     }
     if (!next.size) return;
     const g = gen;
+    /* F7c：只有"换图后的第一批"按列错峰进场。平移/缩放补进来的那些不错峰——
+       它们是要立刻盖住海报那档糊图的，晚一帧都是拖影（淡入本身照旧，见 editor.css） */
+    const stagger = switched;
+    switched = false;
     for (const key of next) {
       if (live.has(key)) continue;
       const [z, x, y] = key.split('/').map(Number);
@@ -79,6 +86,8 @@ export function createTileView(box) {
         // 等到这时候视口可能已经变了：过期或已被别人贴上就不动 DOM
         if (g !== gen || !wanted.has(key) || live.has(key)) return;
         img.style.cssText = `position:absolute;left:${px(x)}px;top:${px(y)}px;width:${tw}px;height:${th}px`;
+        // 列号交给 CSS 去乘时长：动效的数都留在样式表里，这里只给"第几列"
+        if (stagger) img.style.setProperty('--tile-col', String(x % 4));
         img.alt = '';
         img.draggable = false;
         box.appendChild(img);

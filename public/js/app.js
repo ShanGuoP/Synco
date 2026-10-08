@@ -13,6 +13,7 @@ import { helpModal, shortcutsModal, flowModal } from './ui/dialogs.js';
 import { settingsModal } from './ui/settings.js';
 import { toastErr } from './ui/toast.js';
 import { apply, watch } from './core/theme.js';
+import { apply as applyMotion, watch as watchMotion } from './core/motion.js';
 
 const show = which => {
   $('#viewHome').classList.toggle('is-active', which === 'home');
@@ -94,7 +95,11 @@ function paintChip() {
 
 /* ---------- 启动 ---------- */
 async function boot() {
-  /* 底色已由 index.html 的内联脚本定过；这里再走一次是为了把生效档位递给了桌面壳，
+  /* 减弱动效（F7 的兜底）：首帧之前 core/theme-boot.js 已经把类抢挂到 <html> 上，
+     这里补上 <body> 那一份，并盯着系统那一档——它变了应用侧的判定要跟着重算 */
+  applyMotion();
+  watchMotion();
+  /* 底色已由 index.html 那条外链脚本定过；这里再走一次是为了把生效档位递给了桌面壳，
      并且让"跟随系统"这一档在设置页没打开时也跟着变 */
   apply();
   watch(() => apply());
