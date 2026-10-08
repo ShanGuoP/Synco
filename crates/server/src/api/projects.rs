@@ -42,7 +42,7 @@ fn project_name(body: &Value) -> String {
 }
 
 pub async fn projects_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
-    let body = body_of(raw).await?;
+    let mut body = body_of(raw).await?;
     let name = project_name(&body);
     // 张数在建项目之前先判：反过来先建后判会留下一个空项目挂在库里
     if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
@@ -52,8 +52,8 @@ pub async fn projects_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Re
     }
     let pid = rproj::create(&ctx, &name)?;
     let mut ids: Vec<i64> = Vec::new();
-    if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
-        ids = save_batch(&ctx, pid, files)?;
+    if let Some(files) = body.get_mut("files").and_then(|v| v.as_array_mut()) {
+        ids = save_batch(&ctx, pid, files).await?;
     }
     rproj::touch(&ctx, pid)?;
     Ok(ok(serde_json::json!({ "id": pid, "name": name, "image_ids": ids })))
@@ -106,22 +106,28 @@ pub async fn project_delete(State(ctx): State<Shared>, APath(id): APath<String>)
     for iid in ids {
         refs::clear(&ctx, pid, iid)?;
     }
-    // 中途断掉留下的是没人认领的文件，而不是指向空气的记录——后者会在界面上长成碎图
-    for rel in &rels {
-        if let Some(p) = util::data_file(&ctx.data, rel) {
-            let _ = std::fs::remove_file(p);
+    // 中途断掉留下的是没人认领的文件，而不是指向空气的记录——后者会在界面上长成碎图。
+    // 一个项目的目录里能躺着几百张原片，递归删是秒级磁盘活，别按在 handler 的 worker 上
+    let data = ctx.data.clone();
+    let dir = data.join("projects").join(pid.to_string());
+    let _ = util::blocking(move || -> Result<()> {
+        for rel in &rels {
+            if let Some(p) = util::data_file(&data, rel) {
+                let _ = std::fs::remove_file(p);
+            }
         }
-    }
-    let _ = std::fs::remove_dir_all(ctx.data.join("projects").join(pid.to_string()));
+        Ok(std::fs::remove_dir_all(dir)?)
+    })
+    .await;
     Ok(ok(serde_json::json!({ "ok": true })))
 }
 
 pub async fn images_add(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let pid = path_id(&id)?;
-    let body = body_of(raw).await?;
+    let mut body = body_of(raw).await?;
     let mut ids: Vec<Value> = Vec::new();
-    if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
-        ids = save_batch(&ctx, pid, files)?.into_iter().map(Value::from).collect();
+    if let Some(files) = body.get_mut("files").and_then(|v| v.as_array_mut()) {
+        ids = save_batch(&ctx, pid, files).await?.into_iter().map(Value::from).collect();
     }
     rproj::touch(&ctx, pid)?;
     Ok(ok(serde_json::json!({ "ids": ids })))

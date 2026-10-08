@@ -267,20 +267,23 @@ fn restart_app(app: AppHandle) {
 
 /// 在系统默认浏览器里打开一条外链：这个窗口跳去 GitHub 就等于把工坊关掉了。
 ///
-/// 只接 http/https，并且不许出现空白与引号——`cmd /C start` 的注入面恰好在这两处，
-/// 链接本身来自设置页的常量，不该有机会变成一条命令行。
+/// 只接 http/https，并且逐字符过白名单：这条链接**不是常量**——仓库地址、每条 Release 的
+/// 页面与安装包下载链都来自 GitHub API 回来的 JSON（`service::releases` → 设置页 → 这里），
+/// 所以它是一条远端可控的字符串，两件事都要挡：跳到别的 scheme，和变成一条命令行。
+///
+/// Windows 上不走 `cmd /C start`：cmd 会把整行**再解析一遍**，`&`、`|`、`^`、`%VAR%` 在那里
+/// 是第二层语义。`explorer.exe` 拿到的是 CreateProcess 交出去的原始参数，直接进 ShellExecute。
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     let u = url.trim();
-    let scheme_ok = u.starts_with("https://") || u.starts_with("http://");
-    if !scheme_ok || u.len() > 500 || u.chars().any(char::is_whitespace) || u.contains('"') {
-        return Err("只能打开不含空格的 http/https 链接".into());
+    if let Some(why) = url_gate(u) {
+        return Err(why.into());
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", u])
+        std::process::Command::new("explorer.exe")
+            .arg(u)
             // GUI 子系统进程里 spawn 控制台程序会新开一个黑框，与启动时取 git 信息同一套处理
             .creation_flags(0x0800_0000)
             .spawn()
@@ -294,6 +297,76 @@ fn open_url(url: String) -> Result<(), String> {
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("叫不动系统浏览器：{e}"))
+    }
+}
+
+/// 一条能交给系统浏览器的链接：只认 http/https、不许超长，再逐字符过白名单。
+/// 判不动就给出理由（界面要把它说给用户，而不是只回一句"失败"）。
+fn url_gate(u: &str) -> Option<&'static str> {
+    if u.len() > 500 {
+        return Some("这条链接长得离谱");
+    }
+    if !(u.starts_with("https://") || u.starts_with("http://")) {
+        return Some("只能打开 http/https 链接");
+    }
+    if !url_chars_ok(u) {
+        return Some("这条链接里有不该出现的字符，没敢直接打开");
+    }
+    None
+}
+
+/// RFC 3986 里真能出现在一条 URL 上的字符。刻意不收的：空白、`"` `'` `` ` ``、`\`、`<` `>`、
+/// `|` `;`（断开 URL 或喂给解析器的就是这几个），收 `%` 是因为资产名里的空格会编码成 `%20`。
+fn url_chars_ok(u: &str) -> bool {
+    u.chars().all(|c| match c {
+        'a'..='z' | 'A'..='Z' | '0'..='9' => true,
+        '-' | '.' | '_' | '~' | '%' | ':' | '/' | '?' | '#' | '[' | ']' | '@' => true,
+        '!' | '$' | '(' | ')' | '*' | '+' | ',' | '=' => true,
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod url_guard_tests {
+    use super::url_gate;
+
+    /// 「关于」那一页真会交下来的地址形状，一个都不能被误伤
+    #[test]
+    fn 真链接都放行() {
+        for u in [
+            "https://github.com/ShanGuoP/Synco",
+            "https://github.com/ShanGuoP/Synco/releases/tag/v0.2.0",
+            "https://github.com/ShanGuoP/Synco/releases/download/v0.2.0/Synco_0.2.0_x64-setup.exe",
+            "https://github.com/a-b/repo.name/releases/download/v1.0/My%20App_1.0-setup.exe",
+            "https://v.douyin.com/VoXx5-pqL9c/",
+            "http://127.0.0.1:7861/api/version",
+        ] {
+            assert_eq!(url_gate(u), None, "不该挡：{u}");
+        }
+    }
+
+    /// 旧实现把这种串交给 `cmd /C start` 时，本机要多执行一条命令；
+    /// 别的 scheme 则是"窗口跳去别处"或 file:// 直读本机盘
+    #[test]
+    fn 命令行形状与别的_scheme_都挡() {
+        for u in [
+            "https://x.example/&calc.exe",
+            "https://x.example/|calc.exe",
+            "https://x.example/;calc.exe",
+            "https://x.example/`calc.exe`",
+            "https://x.example/<nul",
+            "https://x.example/\\..\\a.exe",
+            "https://x.example/a b",
+            "https://x.example/a\"b",
+            "https://x.example/\nhttps://evil",
+            "file:///C:/Windows/system32/calc.exe",
+            "javascript:alert(1)",
+            "javascript://x.example/%0aalert(1)",
+        ] {
+            assert!(url_gate(u).is_some(), "不该放行：{u}");
+        }
+        let long = format!("https://x.example/{}", "a".repeat(600));
+        assert!(url_gate(&long).is_some(), "超长的那条没挡");
     }
 }
 

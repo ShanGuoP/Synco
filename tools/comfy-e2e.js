@@ -152,7 +152,11 @@ async function submit(base, iid, settings) {
 async function main() {
   if (!fs.existsSync(BIN)) throw new Error(`先 cargo build -p synco-server（找不到 ${BIN}）`);
   const keep = process.argv.includes('--keep');
-  const dataDir = path.join(os.tmpdir(), `synco-comfy-${Date.now()}`);
+  const dataDir = path.resolve(os.tmpdir(), `synco-comfy-${Date.now()}`);
+  // 与另外两条自检同一条纪律：临时 DATA 绝不能落在仓库里，否则写的就是他真实的 data/
+  if (dataDir === path.resolve(ROOT) || dataDir.startsWith(path.resolve(ROOT) + path.sep)) {
+    throw new Error(`临时 DATA 落在仓库里了：${dataDir}（TMPDIR=${os.tmpdir()}）`);
+  }
   fs.mkdirSync(dataDir, { recursive: true });
   const mock = await startMock();
   const { proc, base } = await boot(dataDir);
@@ -264,7 +268,11 @@ async function main() {
 
   proc.kill();
   mock.close();
-  if (!keep) fs.rmSync(dataDir, { recursive: true, force: true });
+  // 进程还在退的时候 Windows 锁着目录，删不掉是常事：不能因为它把一次全绿的跑法报成退出码 1
+  if (!keep) {
+    await new Promise(r => setTimeout(r, 600));
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { console.log(`（临时目录留着了：${dataDir}）`); }
+  }
   console.log(`\n${fails.length ? '✗ 失败 ' + fails.length + ' 条：' + fails.join('、') : '✓ 全绿'}${keep ? `（DATA 留在 ${dataDir}）` : ''}`);
   process.exit(fails.length ? 1 : 0);
 }

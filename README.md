@@ -32,7 +32,7 @@ Windows 桌面应用（64 位），不需要管理员权限，照片始终只待
 
 ## 下载与安装
 
-从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco_0.2.0_x64-setup.exe`**，双击安装
+从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco_0.2.1_x64-setup.exe`**，双击安装
 （装到当前用户目录，不需要管理员权限；安装界面是简体中文）。装完从开始菜单启动 **Synco**。
 
 > Releases 里还没有东西时，见下面的[从源码构建](#从源码构建)。
@@ -185,7 +185,7 @@ Synco 自己不带模型，它是**调度台 + 缝合内核**。下面二选一�
 git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # 得到 synco.exe / synco-tools.exe / synco-desktop.exe
-npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_0.2.0_x64-setup.exe
+npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_0.2.1_x64-setup.exe
 ```
 
 只想跑起来看看，不用打包：

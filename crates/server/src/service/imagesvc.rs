@@ -2,7 +2,7 @@
 //!
 //! 落盘约定见方案 §4：派生档与原图同目录，档位写进文件名，所以重生成即换名，
 //! 换名之后旧 URL 自然失效，新 URL 可以放心 immutable。
-//! 这里的函数全是同步重活，调用方负责丢进 `spawn_blocking`（只有 `*_async` 两个入口碰 tokio）。
+//! 这里的函数全是同步重活：调用方一律过 `util::blocking`，不要在 handler 里直接调（`*_async` 两个入口已经自带了）。
 
 use crate::models::entity::Image;
 use crate::repo;
@@ -148,11 +148,17 @@ static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 /// 后台补一张图的派生档：导入和"首次读到这张图"都走这条，接口不等着它
 pub fn spawn_derive(ctx: &Shared, img: Image) {
     let ctx = ctx.clone();
+    let rel = img.orig_path.clone();
     tokio::spawn(async move {
         let Ok(_slot) = SLOTS.acquire().await else { return };
+        // derive 里是一次全分辨率解码加两档重编码，秒级 CPU：留在当前 worker 上等于
+        // 把一整条连接按住（桌面壳与服务同进程，窗口会跟着卡），所以要过一道阻塞池
+        let ran = util::blocking(move || derive(&ctx, &img).map_err(crate::error::AppError::Fail))
+            .await
+            .map_err(|e| e.to_string());
         // 补不出来只记一行：原图被手动删过是常态，前端回退 orig_url 就行
-        if let Err(e) = derive(&ctx, &img) {
-            tracing_lite(&img.orig_path, &e);
+        if let Err(e) = ran {
+            tracing_lite(&rel, &e);
         }
     });
 }

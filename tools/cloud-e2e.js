@@ -172,7 +172,11 @@ function check(name, cond, detail) {
 
 async function main() {
   if (!fs.existsSync(RUST_BIN)) throw new Error(`先 cargo build -p synco-server（找不到 ${RUST_BIN}）`);
-  const data = path.join(os.tmpdir(), `synco-e2e-${Date.now()}`);
+  const data = path.resolve(os.tmpdir(), `synco-e2e-${Date.now()}`);
+  // 隔离只靠这一个目录名：TMPDIR 被人指到仓库里时，这条 e2e 写的就是他真实的 data/（原片与明文 key）
+  if (data === path.resolve(ROOT) || data.startsWith(path.resolve(ROOT) + path.sep)) {
+    throw new Error(`临时 DATA 落在仓库里了：${data}（TMPDIR=${os.tmpdir()}）`);
+  }
   fs.mkdirSync(data, { recursive: true });
   const mock = await startMock();
   let srv = await boot(data);

@@ -2,7 +2,7 @@
 
 use super::common::{bad, body_of, ok};
 use crate::service::workflow as cfg;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::repo;
 use crate::repo::{results as rres, settings as rset};
 use crate::service::backend;
@@ -119,9 +119,11 @@ pub(crate) fn probe_export_dir(dir: &str) -> (bool, String, Option<PathBuf>) {
     }
 }
 
+/// 只读地把当前配置说一下：这条是 GET，不建目录也不写探针——
+/// 可写性由 `export_dir_set` 与 `export_run` 那两次真写去验，网页用一个 `<img>` 不该替用户建目录
 pub async fn export_get(State(ctx): State<Shared>) -> Response {
     let dir = get_export_dir(&ctx);
-    let ready = if dir.is_empty() { false } else { probe_export_dir(&dir).0 };
+    let ready = !dir.is_empty() && Path::new(dir.trim()).is_dir();
     ok(serde_json::json!({ "dir": dir, "ready": ready }))
 }
 
@@ -192,28 +194,37 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
             util::clip(&if cleaned.is_empty() { "photo".to_string() } else { cleaned }, 60)
         };
         /* 名字用 create_new 原子占，不再"先看存在不存在再复制"：两个导出请求同时看到没这个名字，
-           就会都挑第一个，后落的那个把前一个覆盖掉 */
-        let mut file = format!("{stem}_#{id}.png");
-        let mut n = 2;
-        let dst: std::result::Result<std::path::PathBuf, String> = loop {
-            let cand = p.join(&file);
-            match std::fs::OpenOptions::new().create_new(true).write(true).open(&cand) {
-                Ok(_) => break Ok(cand),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if n >= 1000 {
-                        break Err(format!("{file} 之后连续重名到第 {n} 次，让不开了"));
+           就会都挑第一个，后落的那个把前一个覆盖掉。
+           挑名与复制都是同步磁盘活（一张成图 20–33MB，一次最多 500 张），整段过阻塞池 */
+        let copied = {
+            let p = p.clone();
+            util::blocking(move || -> Result<String> {
+                let mut file = format!("{stem}_#{id}.png");
+                let mut n = 2;
+                loop {
+                    let cand = p.join(&file);
+                    match std::fs::OpenOptions::new().create_new(true).write(true).open(&cand) {
+                        Ok(_) => break,
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            if n >= 1000 {
+                                return Err(AppError::Fail(format!("{file} 之后连续重名到第 {n} 次，让不开了")));
+                            }
+                            file = format!("{stem}_#{id}({n}).png");
+                            n += 1;
+                        }
+                        Err(e) => return Err(AppError::Fail(e.to_string())),
                     }
-                    file = format!("{stem}_#{id}({n}).png");
-                    n += 1;
                 }
-                Err(e) => break Err(e.to_string()),
-            }
+                std::fs::copy(&final_src, &p.join(&file)).map_err(|e| AppError::Fail(e.to_string()))?;
+                Ok(file)
+            })
+            .await
         };
-        match dst.and_then(|d| std::fs::copy(final_src, d).map(|_| ()).map_err(|e| e.to_string())) {
-            Ok(_) => out.push(serde_json::json!({ "id": id, "file": file })),
+        match copied {
+            Ok(file) => out.push(serde_json::json!({ "id": id, "file": file })),
             Err(e) => out.push(serde_json::json!({
                 "id": id, "skipped": true,
-                "reason": e.chars().take(120).collect::<String>()
+                "reason": e.to_string().chars().take(120).collect::<String>()
             })),
         }
     }

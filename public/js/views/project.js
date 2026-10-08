@@ -115,7 +115,7 @@ function listHd(images) {
   return el('div.list-hd', {},
     ...tabs.map(([k, label]) => el('button.tab', {
       type: 'button', class: `tab${filter === k ? ' is-on' : ''}`,
-      html: `${label} <i style="font-style:normal;color:var(--spot-txt);font-family:var(--f-mono);font-size:11px">${n[k]}</i>`,
+      html: `${label} <i class="tab-count">${n[k]}</i>`,
       onclick: () => { filter = k; paint(); },
     })),
     el('div.list-hd__tools', {},

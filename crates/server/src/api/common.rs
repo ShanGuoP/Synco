@@ -90,12 +90,20 @@ pub(crate) fn batch_limit(files: &[Value]) -> Option<String> {
     (files.len() > BATCH_MAX).then(|| format!("一次最多导 {BATCH_MAX} 张（这次 {} 张），分几批导进来", files.len()))
 }
 
-/// 一批文件逐个落盘建行
-pub(crate) fn save_batch(ctx: &Shared, pid: i64, files: &[Value]) -> Result<Vec<i64>> {
+/// 一批文件逐个落盘建行。磁盘那段走阻塞池：一批 8 张 24MP 就是几十 MB 的顺序写，
+/// 压在 handler 所在的 worker 上时整个窗口都会跟着僵住。
+/// 逐张 `take` 而不是把整批 clone 一份——base64 载荷在这里已经是几十 MB，复制一次等于翻倍。
+pub(crate) async fn save_batch(ctx: &Shared, pid: i64, files: &mut [Value]) -> Result<Vec<i64>> {
     if let Some(msg) = batch_limit(files) {
         return Err(AppError::bad(msg));
     }
-    files.iter().map(|f| save_image_file(ctx, pid, f)).collect()
+    let mut ids = Vec::with_capacity(files.len());
+    for f in files.iter_mut() {
+        let one = std::mem::take(f);
+        let ctx2 = ctx.clone();
+        ids.push(util::blocking(move || save_image_file(&ctx2, pid, &one)).await?);
+    }
+    Ok(ids)
 }
 
 /// 导入一张图：落盘 + 建行，返回新 id

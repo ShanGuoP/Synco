@@ -10,6 +10,7 @@ use crate::state::Shared;
 use crate::util;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// 云端行的判定。本进程没有这份在飞的记录（重启前留下的、或 worker 崩在半路），
 /// 或者起表超过宽限期还没落盘，就判掉；还在飞的原样返回，让前端继续轮询。
@@ -136,6 +137,54 @@ async fn download_mapped(ctx: &Shared, id: i64, pid: i64, images: &[comfy::Tagge
         });
     }
     Ok(())
+}
+
+/// 推进器隔多久看一眼在飞的行
+const ADVANCE_EVERY_MS: u64 = 2_000;
+/// 没有行在飞时歇久一点：那条 `SELECT status='running'` 很便宜，但也不必填着 2 秒一轮
+const ADVANCE_IDLE_MS: u64 = 5_000;
+/// 本机一行的总时限。ComfyUI 一直答"还在跑"却永不落地（队列卡死、显存爆了不返回）时，
+/// 到点判死并把原因给用户——`Check::Queued/Running` 那两条分支没有尽头，挂着就是永远挂着。
+/// 60 分钟是"2K 60 步外加整套工作流"也够的量，判早了会把真在跑的那张掐掉。
+const LOCAL_LIMIT_MS: u128 = 60 * 60 * 1000;
+
+/// 服务端自己推进在飞的行。
+/// 以前状态只靠浏览器轮询 `GET /api/results/{id}` 来推：页面一关，已经出图的那张就永远停在
+/// "生成中"，卡死的 ComfyUI 也永远不会被判掉；而那条 GET 有副作用，本身就是跨站网页的抓手。
+pub fn spawn_advancer(ctx: &Shared) {
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        // 这一行第一次被推进器看见的时刻：只用它算总时限，重启后重新起算
+        let mut seen: HashMap<i64, u128> = HashMap::new();
+        loop {
+            let rows = match rres::list_running(&ctx) {
+                Ok(v) => v,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(ADVANCE_IDLE_MS)).await;
+                    continue;
+                }
+            };
+            let idle = rows.is_empty();
+            seen.retain(|id, _| rows.iter().any(|(r, _)| r == id));
+            for (id, prompt_id) in &rows {
+                match prompt_id {
+                    // 云端行：本进程没有在飞的记录、或已过宽限期，就判掉；还在飞的原样不动
+                    None => {
+                        judge_cloud(&ctx, *id);
+                    }
+                    Some(_) => {
+                        let t0 = *seen.entry(*id).or_insert_with(util::now_ms);
+                        if util::now_ms().saturating_sub(t0) > LOCAL_LIMIT_MS {
+                            ctx.mark_error(*id, "本机这一张超过 60 分钟没落定（ComfyUI 那边多半卡住了），重新提交一张");
+                            continue;
+                        }
+                        let _ = settle(&ctx, *id).await;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(if idle { ADVANCE_IDLE_MS } else { ADVANCE_EVERY_MS })).await;
+        }
+    });
 }
 
 /// 服务重启后内存里的轮询队列就没了，库里挂着的 running 行得有人收：

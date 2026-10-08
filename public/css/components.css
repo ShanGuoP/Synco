@@ -157,6 +157,8 @@
 .tab:hover { color: var(--txt); }
 .tab.is-on { color: var(--txt); font-weight: 700; }
 .tab.is-on::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--spot); }
+/* 页签上的计数：正体、等宽、比标签小一档。原来写在内联 style 里，CSP 收到 style-src 'self' 后挪到这里 */
+.tab .tab-count { font-style: normal; color: var(--spot-txt); font-family: var(--f-mono); font-size: 11px; }
 
 /* ---------- 状态标记 ---------- */
 .badge {

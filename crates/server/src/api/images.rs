@@ -4,7 +4,6 @@ use super::common::{body_of, err, ok, path_id};
 use crate::error::{AppError, Result};
 use crate::models::dto;
 use crate::repo::{images as rimg, results as rres};
-use crate::service::reclaim;
 use crate::state::Shared;
 use crate::{service::imagesvc, service::refs, util};
 use axum::body::Bytes;
@@ -15,10 +14,8 @@ use serde_json::Value;
 pub async fn image_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
     let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "no image")) };
-    // 有人读到这张图 = 顺手把它的云端僵尸判掉，再把它欠的派生档补上（存量库第一次进编辑器也靠这条）
-    for z in rres::cloud_zombies(&ctx, iid)? {
-        reclaim::judge_cloud(&ctx, z);
-    }
+    // 纯读：状态推进在服务端那条推进器上（service::reclaim::spawn_advancer），
+    // 不再让一次 GET 顺带把云端僵尸判死——跨站页面用一个 <img> 就能驱动写库
     if img.thumb_path.is_none() {
         imagesvc::spawn_derive(&ctx, img.clone());
     }
@@ -111,15 +108,22 @@ pub async fn mask_post(State(ctx): State<Shared>, APath(id): APath<String>, raw:
     let mut mask_rel: Option<String> = None;
     if !b64.is_empty() {
         let stem = util::stem_of(&i.orig_path);
+        let pid = i.project_id;
         let bytes = util::decode_b64(b64);
+        let data = ctx.data.clone();
         // 覆写前先解码一次：前端兜底路径曾产出过 0×0 画布的 `"data:,"`，那种东西解出来
         // 是三字节垃圾，直接写就会把用户已有的笔迹盖掉且不可恢复。解不出图就拒。
-        if crate::img::codec::decode(&bytes).is_err() {
-            return Err(AppError::bad("遮罩不是能解码的 PNG，这次没有覆盖已有遮罩"));
-        }
-        let rel = util::rel_path(&["projects".into(), i.project_id.to_string(), format!("{stem}_mask.png")]);
-        // 原地覆写会让并发读者拿到半张 PNG，与派生档同一套 .part→rename 纪律
-        imagesvc::write_bytes(&ctx.data.join(&rel), &bytes).map_err(AppError::Fail)?;
+        // 解码与覆写都是同步重活，整段过阻塞池；原地覆写会让并发读者拿到半张 PNG，
+        // 所以仍走 write_bytes 那套 .part→rename 纪律
+        let rel = util::blocking(move || -> Result<String> {
+            if crate::img::codec::decode(&bytes).is_err() {
+                return Err(AppError::bad("遮罩不是能解码的 PNG，这次没有覆盖已有遮罩"));
+            }
+            let rel = util::rel_path(&["projects".into(), pid.to_string(), format!("{stem}_mask.png")]);
+            imagesvc::write_bytes(&data.join(&rel), &bytes).map_err(AppError::Fail)?;
+            Ok(rel)
+        })
+        .await?;
         mask_rel = Some(rel);
     } else if let Some(old) = i.mask_path.filter(|s| !s.is_empty()) {
         // 清空遮罩：文件跟着走，否则换掉笔迹后旧 PNG 一直躺在目录里

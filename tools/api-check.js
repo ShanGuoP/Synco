@@ -16,7 +16,11 @@ const ROOT = path.join(__dirname, '..');
 const BIN = path.join(ROOT, 'target', 'debug', 'synco.exe');
 
 function tmpData() {
-  const d = path.join(os.tmpdir(), `synco-check-${Date.now()}`);
+  const d = path.resolve(os.tmpdir(), `synco-check-${Date.now()}`);
+  /* 隔离只靠这一个目录名：TMPDIR 被人指到仓库里时，自检写的就是他真实的 data/（几百 MB 的原片与
+     明文 key）。起手断言一次，比在注释里提醒"别忘了 SYNCO_DATA"可靠。 */
+  const root = path.resolve(ROOT);
+  if (d === root || d.startsWith(root + path.sep)) throw new Error(`临时 DATA 落在仓库里了：${d}（TMPDIR=${os.tmpdir()}）`);
   fs.mkdirSync(d, { recursive: true });
   return d;
 }
@@ -59,70 +63,107 @@ async function req(base, method, p, body, extra = {}) {
   const r = await fetch(base + p, opt);
   const ct = r.headers.get('content-type') || '';
   let val = null;
+  let text = null;
   if (ct.includes('json')) { try { val = await r.json(); } catch { val = '<坏 JSON>'; } }
+  else if (ct.includes('html')) { text = await r.text(); val = { __bytes: Buffer.byteLength(text) }; }
   else { const buf = Buffer.from(await r.arrayBuffer()); val = { __bytes: buf.length, __head: buf.subarray(0, 16).toString('hex') }; }
-  return { status: r.status, ct, cache: r.headers.get('cache-control'), etag: r.headers.get('etag'), body: val };
+  return {
+    status: r.status, ct, cache: r.headers.get('cache-control'), etag: r.headers.get('etag'),
+    csp: r.headers.get('content-security-policy'), text, body: val, __base: base,
+  };
 }
 
 // 1x1 PNG：只测流程与响应形状，像素级对拍在 stitch-core 的回归里
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
-// 按顺序跑：建项目/建图是后面一堆用例的前置
+// 按顺序跑：建项目/建图是后面一堆用例的前置。
+// 每行是 [名字, 方法, 路径, body, 期望状态码, 附加断言, 额外请求头]。
+// 状态码必须逐条写死：以前这 49 条只判"没到 5xx"，白名单那条真把 app.db 端出去也是绿的，
+// 而两条 403（POST 不带 body 被守卫拦在鉴权前）里有一条根本没进过 handler。
 const SWEEP = [
-  ['项目列表初始为空', 'GET', '/api/projects'],
-  ['建项目', 'POST', '/api/projects', { name: '中文 项目 名', files: [{ name: 'a#1 b%.png', b64: PNG, w: 1, h: 1 }] }],
-  ['项目详情', 'GET', '/api/projects/1'],
-  ['项目详情 404', 'GET', '/api/projects/999'],
-  ['存遮罩', 'POST', '/api/images/1/mask', { b64: PNG }],
-  ['单图', 'GET', '/api/images/1'],
-  ['单图 404', 'GET', '/api/images/999'],
-  ['清遮罩', 'POST', '/api/images/1/mask', {}],
-  ['派生列表（没有子图也回 200）', 'GET', '/api/images/1/derived'],
-  ['取回画稿缺 result_id 被拒', 'POST', '/api/canvas/1/use-sketch', {}],
-  ['项目设置读写', 'POST', '/api/projects/1/settings', { loras: [{ name: 'x', strength: 1, enabled: true }] }],
-  ['参数 cfg', 'GET', '/api/cfg'],
-  ['版本信息', 'GET', '/api/version'],
+  ['项目列表初始为空', 'GET', '/api/projects', undefined, [200], r => (Array.isArray(r.body) && r.body.length === 0 ? '' : '不是空列表')],
+  ['建项目', 'POST', '/api/projects', { name: '中文 项目 名', files: [{ name: 'a#1 b%.png', b64: PNG, w: 1, h: 1 }] }, [200],
+    r => (r.body?.id > 0 && r.body?.image_ids?.length === 1 ? '' : `没建成：${JSON.stringify(r.body).slice(0, 80)}`)],
+  ['项目详情', 'GET', '/api/projects/1', undefined, [200]],
+  ['项目详情 404', 'GET', '/api/projects/999', undefined, [404]],
+  ['存遮罩', 'POST', '/api/images/1/mask', { b64: PNG }, [200]],
+  ['单图', 'GET', '/api/images/1', undefined, [200], r => (r.body?.id === 1 ? '' : '回的不是这张')],
+  ['单图 404', 'GET', '/api/images/999', undefined, [404]],
+  ['清遮罩', 'POST', '/api/images/1/mask', {}, [200]],
+  ['派生列表（没有子图也回 200）', 'GET', '/api/images/1/derived', undefined, [200], r => (Array.isArray(r.body?.images) ? '' : '没有 images 数组')],
+  ['取回画稿缺 result_id 被拒', 'POST', '/api/canvas/1/use-sketch', {}, [400]],
+  ['项目设置读写', 'POST', '/api/projects/1/settings', { loras: [{ name: 'x', strength: 1, enabled: true }] }, [200]],
+  ['参数 cfg', 'GET', '/api/cfg', undefined, [200]],
+  ['版本信息', 'GET', '/api/version', undefined, [200], r => (typeof r.body?.version === 'string' ? '' : '没有版本号')],
   /* 更新日志读的是 GitHub：断网/没发布过都只能回 200 + 空列表或 error，不能把面板打成 5xx */
-  ['更新日志（GitHub Releases）', 'GET', '/api/releases'],
-  ['工坊设置', 'GET', '/api/settings'],
-  ['工作流路径写入', 'POST', '/api/settings/workflow', { path: 'D:/不存在的目录/wf.json' }],
-  ['角色表读得到', 'GET', '/api/workflow/roles'],
-  ['云端保存', 'POST', '/api/cloud', { kind: 'cloud', base: 'http://127.0.0.1:1/v1', model: 'm-check', key: 'sk-local-check', timeout: '5000', concurrency: 9, stitch_expand: 64, stitch_feather: 200, stitch_edge: 1024 }],
-  ['云端读回', 'GET', '/api/cloud'],
-  ['云端 edit 缺图', 'POST', '/api/cloud/edit', { image_id: 999, mask_b64: PNG, settings: {} }],
-  ['预设 建', 'POST', '/api/presets', { name: '默认预设', prompt: 'p', negative: 'n', steps: 25, cfg: 3, loras: [{ name: 'L', strength: 0.8 }] }],
-  ['预设 重名', 'POST', '/api/presets', { name: '默认预设' }],
-  ['预设 无名字', 'POST', '/api/presets', { name: '   ' }],
-  ['预设 列表', 'GET', '/api/presets'],
+  ['更新日志（GitHub Releases）', 'GET', '/api/releases', undefined, [200],
+    r => (Array.isArray(r.body?.releases) && (typeof r.body?.error === 'string' || r.body?.error == null) ? '' : '形状不对')],
+  ['工坊设置', 'GET', '/api/settings', undefined, [200]],
+  ['工作流路径写入', 'POST', '/api/settings/workflow', { path: 'D:/不存在的目录/wf.json' }, [200]],
+  ['角色表读得到', 'GET', '/api/workflow/roles', undefined, [200]],
+  ['云端保存', 'POST', '/api/cloud', { kind: 'cloud', base: 'http://127.0.0.1:1/v1', model: 'm-check', key: 'sk-local-check', timeout: '5000', concurrency: 9, stitch_expand: 64, stitch_feather: 200, stitch_edge: 1024 }, [200]],
+  ['云端读回', 'GET', '/api/cloud', undefined, [200],
+    // key 不往前端发：整个响应体里不能出现那串明文（设置页要显示也得是打码的）
+    r => (JSON.stringify(r.body).includes('sk-local-check') ? '把明文 key 发回前端了' : '')],
+  ['云端 edit 缺图', 'POST', '/api/cloud/edit', { image_id: 999, mask_b64: PNG, settings: {} }, [404]],
+  ['预设 建', 'POST', '/api/presets', { name: '默认预设', prompt: 'p', negative: 'n', steps: 25, cfg: 3, loras: [{ name: 'L', strength: 0.8 }] }, [200]],
+  ['预设 重名', 'POST', '/api/presets', { name: '默认预设' }, [400]],
+  ['预设 无名字', 'POST', '/api/presets', { name: '   ' }, [400]],
+  ['预设 列表', 'GET', '/api/presets', undefined, [200]],
   // 更新与删除的真实行为在「提示词短语 / 预设查重自检」里逐条断言，这里只探"不存在的那一条"
-  ['预设 更新 不存在', 'POST', '/api/presets/999999/update', { name: '改名', steps: 30, scope: 'global' }],
-  ['预设 删除 不存在', 'POST', '/api/presets/999999/delete', {}],
-  ['后端列表', 'GET', '/api/backends'],
-  ['后端 登记', 'POST', '/api/backends', { url: '127.0.0.1:9999', label: '冒烟' }],
-  ['后端 移除', 'POST', '/api/backends/remove', { url: 'http://127.0.0.1:9999' }],
-  ['后端 非法地址', 'POST', '/api/backends', { url: 'ftp://x' }],
-  ['导出 未设置', 'GET', '/api/export'],
-  ['导出 相对路径拒绝', 'POST', '/api/export/dir', { dir: 'relative/out' }],
-  ['导出 缺 ids', 'POST', '/api/export/run', { result_ids: [] }],
-  ['体检', 'GET', '/api/setup'],
-  ['体检进度', 'GET', '/api/setup/progress'],
-  ['设根目录', 'POST', '/api/setup/root', { path: 'D:/不存在的便携包' }],
-  ['提交无遮罩', 'POST', '/api/run', { image_ids: [1], settings: { prompt: 'x', steps: 20, cfg: 3 } }],
-  ['提交不存在的图', 'POST', '/api/run', { image_ids: [999], settings: {} }],
-  ['结果 404', 'GET', '/api/results/999'],
-  ['中断 404', 'POST', '/api/results/999/interrupt'],
-  ['删结果 404', 'DELETE', '/api/results/999'],
-  ['fork 404', 'POST', '/api/results/999/fork'],
-  ['文件白名单', 'GET', '/file/app.db'],
-  ['静态首页', 'GET', '/'],
-  ['静态脚本', 'GET', '/public/js/app.js'],
-  ['静态字体', 'GET', '/public/fonts/NotoSerifSC-VF.woff2'],
-  ['未知路由', 'GET', '/api/nonsense'],
-  ['未知页面', 'GET', '/nope'],
-];
+  ['预设 更新 不存在', 'POST', '/api/presets/999999/update', { name: '改名', steps: 30, scope: 'global' }, [404]],
+  ['预设 删除 不存在', 'POST', '/api/presets/999999/delete', {}, [404]],
+  ['后端列表', 'GET', '/api/backends', undefined, [200]],
+  ['后端 登记', 'POST', '/api/backends', { url: '127.0.0.1:9999', label: '冒烟' }, [200]],
+  ['后端 移除', 'POST', '/api/backends/remove', { url: 'http://127.0.0.1:9999' }, [200]],
+  ['后端 非法地址', 'POST', '/api/backends', { url: 'ftp://x' }, [400]],
+  ['导出 未设置', 'GET', '/api/export', undefined, [200], r => (r.body?.ready === false ? '' : '没设置却报可用')],
+  ['导出 相对路径拒绝', 'POST', '/api/export/dir', { dir: 'relative/out' }, [400]],
+  ['导出 缺 ids', 'POST', '/api/export/run', { result_ids: [] }, [400]],
+  ['体检', 'GET', '/api/setup', undefined, [200]],
+  ['体检进度', 'GET', '/api/setup/progress', undefined, [200]],
+  ['设根目录', 'POST', '/api/setup/root', { path: 'D:/不存在的便携包' }, [200]],
+  ['提交无遮罩', 'POST', '/api/run', { image_ids: [1], settings: { prompt: 'x', steps: 20, cfg: 3 } }, [200],
+    r => (r.body?.results?.[0]?.skipped === true ? '' : '没遮罩却没跳过')],
+  ['提交不存在的图', 'POST', '/api/run', { image_ids: [999], settings: {} }, [200]],
+  ['结果 404', 'GET', '/api/results/999', undefined, [404]],
+  // 这两条以前带不上 body，被守卫的"json only"挡成 403 就当过了 —— 现在真打到 handler
+  ['中断 404', 'POST', '/api/results/999/interrupt', {}, [404]],
+  ['删结果 404', 'DELETE', '/api/results/999', undefined, [404]],
+  ['fork 404', 'POST', '/api/results/999/fork', {}, [404]],
+  ['文件白名单', 'GET', '/file/app.db', undefined, [403],
+    // 光看 403 不够：响应体必须是一条错误 JSON，不是那 4KB 的库头
+    r => (r.body && typeof r.body.error === 'string' ? '' : `端出去了：${JSON.stringify(r.body).slice(0, 80)}`)],
+  ['静态首页', 'GET', '/', undefined, [200], r => (/text\/html/.test(r.ct) ? '' : '不是 HTML')],
+  ['静态脚本', 'GET', '/public/js/app.js', undefined, [200]],
+  ['静态字体', 'GET', '/public/fonts/NotoSerifSC-VF.woff2', undefined, [200]],
+  ['未知路由', 'GET', '/api/nonsense', undefined, [404]],
+  ['未知页面', 'GET', '/nope', undefined, [404]],
 
-// 这些端点按设计就要回 5xx（上游真的连不上），不算回归
-const EXPECTED_5XX = new Set(['云端探活（无网络也要有结构）']);
+  /* ===== 回环守卫：GET 这一侧挡的是网页 =====
+     写操作已经从 GET 上摘干净（推进在 reclaim::spawn_advancer），剩下的磁盘活靠这两条钉住：
+     跨站网页带 Sec-Fetch-Site，本机 harness 与 curl 什么都不带。 */
+  ['同源的 GET 照常读', 'GET', '/api/projects/1', undefined, [200], undefined, { 'sec-fetch-site': 'same-origin' }],
+  ['跨站网页的 GET 被挡', 'GET', '/api/projects/1', undefined, [403], undefined, { 'sec-fetch-site': 'cross-site' }],
+  ['跨站网页驱动的轮询 GET 被挡（曾经会写库）', 'GET', '/api/results/1', undefined, [403], undefined, { 'sec-fetch-site': 'cross-site' }],
+  ['不带 Sec-Fetch-Site 的客户端照旧放行', 'GET', '/api/projects/1', undefined, [200]],
+  ['跨源的写请求本来就挡', 'POST', '/api/projects/1/rename', { name: 'x' }, [403], undefined, { origin: 'http://evil.example' }],
+
+  /* ===== CSP：桌面壳把四条命令授给了 127.0.0.1 这个远程域，注入进来的脚本得什么都干不成 ===== */
+  ['首页带 CSP 且不开 unsafe-inline', 'GET', '/', undefined, [200], r => {
+    const p = r.csp || '';
+    if (!p) return '没有 CSP 头';
+    if (/unsafe-inline|unsafe-eval/.test(p)) return '还留着 unsafe 档：' + p.slice(0, 90);
+    return /default-src 'self'/.test(p) && /frame-ancestors 'none'/.test(p) ? '' : '档位不全：' + p.slice(0, 120);
+  }],
+  ['首帧上色脚本已经在外链里（内联会被 CSP 打死）', 'GET', '/', undefined, [200], async r => {
+    // 页面里不能有内联 <script>，且 theme-boot.js 自己取得到
+    const html = r.text ?? '';
+    if (/<script(?![^>]*\bsrc=)[^>]*>[\s\S]*?<\/script>/.test(html)) return '还有内联脚本';
+    const t = await fetch(r.__base + '/public/js/core/theme-boot.js');
+    return t.ok ? '' : `theme-boot.js 取不到（${t.status}）`;
+  }],
+];
 
 // 路径穿越回归。判据分两档：
 //   403 = 这一形态能原样送到服务端（被 rel_ok 逐段挡下）
@@ -440,12 +481,24 @@ async function main() {
   console.log(`Rust ${base.replace(/^http:\/\/127\.0\.0\.1:/, '')} @ ${dataDir}\n`);
 
   let bad = 0;
-  for (const [title, method, url, body] of SWEEP) {
+  const record = process.argv.includes('--record');
+  console.log(record ? '接口扫查（--record：只报回来的状态码）' : '接口扫查（每条认状态码，不是"没崩就算过"）');
+  for (const [title, method, url, body, expect, check, extra] of SWEEP) {
     let r;
-    try { r = await req(base, method, url, body); } catch (e) { bad++; console.log(`✗ ${title}  抛了 ${e.message}`); continue; }
-    const boom = r.status >= 500 && !EXPECTED_5XX.has(title);
-    if (boom) bad++;
-    console.log(`${boom ? '✗' : '✓'} ${title}  (${r.status})${boom ? ' ' + JSON.stringify(r.body).slice(0, 160) : ''}`);
+    try { r = await req(base, method, url, body, extra); } catch (e) { bad++; console.log(`✗ ${title}  抛了 ${e.message}`); continue; }
+    if (record) { console.log(`  ${r.status}  ${title}`); continue; }
+    let why = '';
+    if (!Array.isArray(expect) || !expect.includes(r.status)) why = `期望 ${(expect || []).join('/') || '?'}，回来 ${r.status}`;
+    if (!why && check) why = (await check(r)) || '';
+    if (why) bad++;
+    console.log(`${why ? '✗' : '✓'} ${title}  (${r.status})${why ? ' ' + why + '｜' + JSON.stringify(r.body).slice(0, 150) : ''}`);
+  }
+  if (record) {
+    proc.kill();
+    await new Promise(r => setTimeout(r, 400));
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+    console.log('\n（--record 只跑扫查这一遍，行为断言没跑）');
+    return;
   }
 
   console.log('\n路径穿越（回归：这几条曾经能读到 app.db）');

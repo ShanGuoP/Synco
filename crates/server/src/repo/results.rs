@@ -48,19 +48,6 @@ pub fn list_running(ctx: &Ctx) -> Result<Vec<(i64, Option<String>)>> {
         })
         .collect())
 }
-
-/// 云端僵尸行：挂着 running 又没有 prompt_id，本机轮询接不回来
-pub fn cloud_zombies(ctx: &Ctx, image_id: i64) -> Result<Vec<i64>> {
-    Ok(repo::all(
-        ctx,
-        "SELECT id FROM results WHERE image_id=? AND status='running' AND (prompt_id IS NULL OR prompt_id='')",
-        &[repo::i(image_id)],
-    )?
-    .iter()
-    .filter_map(|r| r.get("id").and_then(|v| v.as_i64()))
-    .collect())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn insert_local(
     ctx: &Ctx,

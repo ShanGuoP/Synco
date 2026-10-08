@@ -134,6 +134,7 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
         // 超限由 extractor 兜住（状态码 413），不让超大 body 把内存打爆
         .layer(DefaultBodyLimit::max(api::BODY_LIMIT))
         .layer(axum::middleware::from_fn(guard::loopback_only))
+        .layer(axum::middleware::from_fn(web::csp::apply))
         .with_state(ctx.clone());
 
     println!("Synco（Rust {}）  SYNCO_URL=http://127.0.0.1:{real}", version::VERSION);
@@ -167,6 +168,8 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     });
     // 存量库的派生档（升级前导入的照片没有 320/3072 两档）在后台补，不挡首屏
     imagesvc::spawn_backfill(&ctx);
+    // 在飞行的状态由服务端推进（前端只读），关页面不该让已经出图的那张永远挂着
+    service::reclaim::spawn_advancer(&ctx);
 
     let server = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {

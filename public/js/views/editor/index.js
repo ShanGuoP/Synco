@@ -752,7 +752,8 @@ async function onJobSettled(r) {
   /* 后台任务完成时你可能已经在看另一张：别把它的成图弹到你当前这张上 */
   if (r?.image_id && r.image_id !== ctx.imgId) return;
   ctx.params.setBusy(false);
-  if (r.status !== 'done') { ctx.params.line('生成失败，原因见右下角通知'); return; }
+  // 带得上原因就直接说原因：轮询放弃那两条出口（记录没了、连续读不到）并没有右下角通知可看
+  if (r.status !== 'done') { ctx.params.line(r.error ? String(r.error).slice(0, 120) : '生成失败，原因见右下角通知'); return; }
   ctx.params.stages.finish(true);
   ctx.params.line('完成，拖动中缝可对比原图');
   try {

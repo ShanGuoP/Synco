@@ -332,8 +332,15 @@ async fn run_sketch(ctx: &Shared, row: &entity::ResultRow, img: Image) -> std::r
             .await
             .map_err(|e| format!("画布线程崩了：{e}"))??
     };
-    // 参考图读的是**这一行**的快照（不是此刻的槽位），与画稿快照同一条纪律
-    let refs_bytes = refs::row_payloads(ctx, row)?;
+    // 参考图读的是**这一行**的快照（不是此刻的槽位），与画稿快照同一条纪律。
+    // 一次最多四张全分辨率 PNG，读盘这段也不该按在 worker 上
+    let refs_bytes = {
+        let ctx2 = ctx.clone();
+        let row2 = row.clone();
+        tokio::task::spawn_blocking(move || refs::row_payloads(&ctx2, &row2))
+            .await
+            .map_err(|e| format!("读参考图的那次没跑完：{e}"))??
+    };
     // 一笔没涂又挂了参考图：那张全白的纸不必发出去，这一枪就是"按参考图与提示词生成"。
     // 没参考图时维持老行为（发空白画稿），免得动了既有语义。
     let image = if inked || refs_bytes.is_empty() { Some(png) } else { None };

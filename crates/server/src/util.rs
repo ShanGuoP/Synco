@@ -264,3 +264,35 @@ pub fn stem_of(p: &str) -> String {
         Some(i) => base[..i].to_string(),
     }
 }
+
+/// 同步重活（整文件读写、全分辨率解码与重编码）一律走这里，别压在 async handler 上：
+/// 桌面壳与服务同进程，一个 tokio worker 被占住的表现是整个窗口卡住，不是某个请求慢。
+///
+/// 闭包里还能 `tokio::spawn`——阻塞池线程建起来时就 `rt.enter()` 过，runtime 上下文在。
+pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> crate::error::Result<T> + Send + 'static) -> crate::error::Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or_else(|_| Err(crate::error::AppError::Fail("线程池上那次磁盘活没跑完（线程崩了或被取消）".into())))
+}
+
+#[cfg(test)]
+mod blocking_tests {
+    use super::blocking;
+    use crate::error::{AppError, Result};
+
+    /// 这条锁住上面那句"闭包里还能 tokio::spawn"：真把 spawn 放进阻塞闭包跑一次，
+    /// 上下文丢了它就是 panic，而 panic 会以 JoinError 形式变成一条错，不会静默。
+    #[tokio::test]
+    async fn 阻塞闭包里能起后台任务也能透传错误() {
+        let n = blocking(|| {
+            tokio::spawn(async {});
+            Ok::<_, AppError>(7u8)
+        })
+        .await
+        .unwrap();
+        assert_eq!(n, 7);
+
+        let e: Result<u8> = blocking(|| Err(AppError::bad("磁盘满了"))).await;
+        assert!(matches!(e, Err(AppError::Bad(_))));
+    }
+}

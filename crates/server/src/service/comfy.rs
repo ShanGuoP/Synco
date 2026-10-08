@@ -105,7 +105,15 @@ pub async fn download_to(ctx: &Ctx, url: &str, dest: &std::path::Path) -> Result
         return Err(format!("回传成图失败 HTTP {}", r.status().as_u16()));
     }
     let bytes = r.bytes().await.map_err(|e| e.strip())?;
-    std::fs::write(dest, bytes).map_err(|e| format!("写入 {} 失败：{e}", dest.display()))
+    // 一张 20–33MB 的成图落盘是几百毫秒的同步写，按在 worker 上整个窗口会跟着一顿
+    let dest = dest.to_path_buf();
+    crate::util::blocking(move || {
+        std::fs::write(&dest, &bytes)
+            .map_err(|e| crate::error::AppError::Fail(format!("写入 {} 失败：{e}", dest.display())))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// 队列里还活着的 prompt_id：服务重启时用它认哪些 running 记录已经是僵尸

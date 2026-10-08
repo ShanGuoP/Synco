@@ -24,7 +24,8 @@ export async function pickFolder(title) {
 
 /**
  * 外链一律交给系统浏览器：这个窗口跳去 GitHub 就等于把工坊关掉了。
- * 桌面版走壳里的 `open_url`（它只接不含空格的 http/https），浏览器版退回 `window.open`。
+ * 桌面版走壳里的 `open_url`（它只接逐字符过白名单的 http/https，且不经 `cmd`），
+ * 浏览器版退回 `window.open`。
  * 返回 false = 没打开成，调用方要把地址本身说给用户，别静默失败。
  */
 export async function openExternal(url) {

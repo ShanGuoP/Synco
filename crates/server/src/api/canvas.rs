@@ -44,17 +44,28 @@ pub async fn canvas_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Resp
         }
         None => rproj::create(&ctx, &format!("画布 · {name}"))?,
     };
-    let dir = ctx.data.join("projects").join(pid.to_string());
-    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败：{e}"))?;
     let safe = util::safe_name(&name);
+    // 空白画布 = 全透明的 RGBA；发出去时才拍到白底上（prepare_sketch 那一步在队列里）
     let rel = util::rel_path(&[
         "projects".into(),
         pid.to_string(),
         format!("{}_{r4}_{safe}_sketch.png", util::now_ms(), r4 = util::r4()),
     ]);
-    // 空白画布 = 全透明的 RGBA；发出去时才拍到白底上（prepare_sketch 那一步在队列里）
-    let blank = Rgba::new(w, h);
-    imagesvc::write_bytes(&ctx.data.join(&rel), &crate::img::codec::encode_png(&blank)).map_err(AppError::Fail)?;
+    // 建目录、光栅化与 PNG 编码都是同步活（8192 一档的光栅就是几百 MB），整段过阻塞池
+    {
+        let data = ctx.data.clone();
+        let rel2 = rel.clone();
+        util::blocking(move || -> Result<()> {
+            std::fs::create_dir_all(data.join("projects").join(pid.to_string()))
+                .map_err(|e| AppError::Fail(format!("建目录失败：{e}")))?;
+            let blank = Rgba::new(w, h);
+            // rel 本身已经带 projects/{pid}/ 前缀，只能接在 data 下面：接在项目目录上会写深一层，
+            // 而 write_bytes 自己会补父目录，于是库里那行指的地址上根本没有文件
+            imagesvc::write_bytes(&data.join(&rel2), &crate::img::codec::encode_png(&blank)).map_err(AppError::Fail)?;
+            Ok(())
+        })
+        .await?;
+    }
     let id = rimg::insert_kind(&ctx, pid, &safe, &rel, w as i64, h as i64, "sketch")?;
     rproj::touch(&ctx, pid)?;
     Ok(ok(serde_json::json!({ "project_id": pid, "image_id": id, "name": safe, "w": w, "h": h })))
@@ -91,18 +102,24 @@ pub async fn sketch_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
     let body = body_of(raw).await?;
     let b64 = body.get("b64").and_then(|v| v.as_str()).unwrap_or("");
     let bytes = util::decode_b64(b64);
-    // 解不出来就不覆盖：画稿是用户唯一的手感来源，写坏一次等于抹掉他的草稿
-    let decoded = crate::img::codec::decode(&bytes)
-        .map_err(|_| AppError::bad("画稿不是能解码的 PNG，这次没有覆盖已有画稿"))?;
-    if decoded.w == 0 || decoded.h == 0 {
-        return Ok(bad("画稿是空的，这次没有覆盖"));
-    }
     sketch_relate(&img)?;
-    imagesvc::write_bytes(&ctx.data.join(&img.orig_path), &bytes).map_err(AppError::Fail)?;
-    if decoded.w as i64 != img.w || decoded.h as i64 != img.h {
-        rimg::set_dims(&ctx, iid, decoded.w as i64, decoded.h as i64)?;
+    // 解码与覆写都是同步重活（涂抹层能到 3072 一档），整段过阻塞池。
+    // 解不出来就不覆盖：画稿是用户唯一的手感来源，写坏一次等于抹掉他的草稿
+    let dest = ctx.data.join(&img.orig_path);
+    let (dw, dh) = util::blocking(move || -> Result<(usize, usize)> {
+        let decoded = crate::img::codec::decode(&bytes)
+            .map_err(|_| AppError::bad("画稿不是能解码的 PNG，这次没有覆盖已有画稿"))?;
+        if decoded.w == 0 || decoded.h == 0 {
+            return Err(AppError::bad("画稿是空的，这次没有覆盖"));
+        }
+        imagesvc::write_bytes(&dest, &bytes).map_err(AppError::Fail)?;
+        Ok((decoded.w, decoded.h))
+    })
+    .await?;
+    if dw as i64 != img.w || dh as i64 != img.h {
+        rimg::set_dims(&ctx, iid, dw as i64, dh as i64)?;
     }
-    Ok(ok(serde_json::json!({ "ok": true, "w": decoded.w, "h": decoded.h })))
+    Ok(ok(serde_json::json!({ "ok": true, "w": dw, "h": dh })))
 }
 
 /// 提交一次生成：进同一条云端队列，进度就是这条 results 行。
@@ -138,14 +155,20 @@ pub async fn canvas_generate(State(ctx): State<Shared>, APath(id): APath<String>
     let rid = rres::insert_cloud(&ctx, img.id, img.project_id, &prompt, &payload.to_string(), &s.model, rerun_of)?;
     // 先把这一版的线稿原样复制一份再排队：画稿是原地覆写的，用户接着画两笔，
     // "出这张图时我画的是什么"就只剩这一份能证明。复制而不重编码——转一档会把笔迹变糊
-    if let Err(e) = snapshot_sketch(&ctx, &img, rid) {
+    if let Err(e) = snapshot_sketch(&ctx, &img, rid).await {
         eprintln!("  画稿快照没存下（#{rid}）：{e}");
     }
     // 参考图同理复制成这一行自己的快照：排着队的时候换槽位，不该改"这一版参考了哪几张"
     if !slots.is_empty() {
         // 行已经建起来了，这两步再往上传 Err 就是留一条永远"生成中"又没人跑它的僵尸：
         // 判死这一行、把原因还给用户。也不能退化成"少发几张照跑"——界面上写着带 N 张参考图
-        let snapped = match refs::snapshot(&ctx, &img, rid, &slots) {
+        let snap_try = {
+            let (ctx2, im, sl) = (ctx.clone(), img.clone(), slots.clone());
+            util::blocking(move || refs::snapshot(&ctx2, &im, rid, &sl).map_err(AppError::Fail))
+                .await
+                .map_err(|e| e.to_string())
+        };
+        let snapped = match snap_try {
             Ok(v) => v,
             Err(e) => {
                 ctx.mark_error(rid, &format!("参考图快照没存下：{e}"));
@@ -175,28 +198,49 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
         return Ok(bad("这不是画稿"));
     }
     let body = body_of(raw).await?;
-    let mut added: Vec<String> = Vec::new();
-    let mut from_empty = false;
-    if let Some(rid) = body.get("from_result").and_then(|v| v.as_i64()) {
-        let Some(row) = rres::by_id(&ctx, rid)? else { return Ok(bad("没有这条记录")) };
-        if row.image_id != iid {
-            return Ok(bad("这条记录不是这张画布的"));
+    // 三条来源的校验留在 handler 里（拒绝的理由要说准），解码/折档/重编码/落盘整段过阻塞池：
+    // 一张参考图是全分辨率的 PNG，四张就是四次"解码 + 缩放 + 重编码"
+    let row_opt = match body.get("from_result").and_then(|v| v.as_i64()) {
+        Some(rid) => {
+            let Some(row) = rres::by_id(&ctx, rid)? else { return Ok(bad("没有这条记录")) };
+            if row.image_id != iid {
+                return Ok(bad("这条记录不是这张画布的"));
+            }
+            Some(row)
         }
-        added = refs::add_from_result(&ctx, &img, &row).map_err(AppError::bad)?;
-        from_empty = added.is_empty();
-    }
-    if let Some(list) = body.get("files").and_then(|v| v.as_array()) {
-        for f in list {
-            let bytes = util::decode_b64(f.get("b64").and_then(|v| v.as_str()).unwrap_or(""));
-            added.push(refs::add_bytes(&ctx, &img, &bytes).map_err(AppError::bad)?);
-        }
-    }
+        None => None,
+    };
+    let files: Vec<Vec<u8>> = body
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|list| list.iter().map(|f| util::decode_b64(f.get("b64").and_then(|v| v.as_str()).unwrap_or(""))).collect())
+        .unwrap_or_default();
+    let mut src_ids: Vec<i64> = Vec::new();
     if let Some(ids) = body.get("image_ids").and_then(|v| v.as_array()) {
         for v in ids {
             let Some(src) = v.as_i64() else { return Ok(bad("image_ids 里要放数字 id")) };
-            added.push(refs::add_from_image(&ctx, &img, src).map_err(AppError::bad)?);
+            src_ids.push(src);
         }
     }
+    let (added, from_empty) = {
+        let (ctx2, im) = (ctx.clone(), img.clone());
+        util::blocking(move || -> Result<(Vec<String>, bool)> {
+            let mut added: Vec<String> = Vec::new();
+            let mut from_empty = false;
+            if let Some(row) = &row_opt {
+                added = refs::add_from_result(&ctx2, &im, row).map_err(AppError::bad)?;
+                from_empty = added.is_empty();
+            }
+            for bytes in &files {
+                added.push(refs::add_bytes(&ctx2, &im, bytes).map_err(AppError::bad)?);
+            }
+            for src in &src_ids {
+                added.push(refs::add_from_image(&ctx2, &im, *src).map_err(AppError::bad)?);
+            }
+            Ok((added, from_empty))
+        })
+        .await?
+    };
     if added.is_empty() {
         // 那一版根本没带参考图 ≠ 请求写坏了：两种理由分开说，不然用户不知道点错了哪一条
         return Ok(bad(if from_empty { "这一版没带参考图" } else { "没说要加哪几张参考图" }));
@@ -261,11 +305,20 @@ fn sketch_relate(img: &Image) -> std::result::Result<(), AppError> {
     }
 }
 
-fn snapshot_sketch(ctx: &Shared, img: &Image, rid: i64) -> std::result::Result<(), String> {
+/// 先把这一版的线稿原样复制一份再排队：复制而不重编码——转一档会把笔迹变糊。
+/// 一张画稿是几十 MB 的同步拷贝，所以整段走阻塞池。
+async fn snapshot_sketch(ctx: &Shared, img: &Image, rid: i64) -> std::result::Result<(), String> {
     let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), format!("k{}_{rid}_sketch.png", img.id)]);
     let src = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| "画稿文件不在磁盘上".to_string())?;
-    std::fs::copy(&src, ctx.data.join(&rel)).map_err(|e| format!("复制失败：{e}"))?;
-    rres::set_sketch(ctx, rid, &rel).map_err(|e| e.to_string())
+    let ctx2 = ctx.clone();
+    let dst = ctx.data.join(&rel);
+    util::blocking(move || -> Result<()> {
+        std::fs::copy(&src, &dst).map_err(|e| AppError::Fail(format!("复制失败：{e}")))?;
+        rres::set_sketch(&ctx2, rid, &rel)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 取回某一版当时的画稿：把那份快照写回画稿本体。
@@ -286,18 +339,24 @@ pub async fn canvas_use_sketch(State(ctx): State<Shared>, APath(id): APath<Strin
     let Some(snap) = row.sketch_path.clone() else {
         return Ok(bad("这一版没留画稿快照（快照功能上线之前生成的那些版本没有）"));
     };
-    let snap_abs = util::data_file(&ctx.data, &snap).ok_or_else(|| AppError::bad("快照文件已经不在盘上了"))?;
-    let bytes = std::fs::read(&snap_abs).map_err(|_| AppError::bad("快照文件已经不在盘上了"))?;
-    // 与存画稿同一条纪律：先确认解得开，再 .part→rename，别把用户的草稿写成半张图
-    let decoded = crate::img::codec::decode(&bytes).map_err(|_| AppError::bad("快照不是能解码的 PNG，没有覆盖当前画稿"))?;
-    if decoded.w == 0 || decoded.h == 0 {
-        return Ok(bad("快照是空的，没有覆盖当前画稿"));
-    }
     sketch_relate(&img)?;
-    imagesvc::write_bytes(&ctx.data.join(&img.orig_path), &bytes).map_err(AppError::Fail)?;
-    if decoded.w as i64 != img.w || decoded.h as i64 != img.h {
-        rimg::set_dims(&ctx, iid, decoded.w as i64, decoded.h as i64)?;
+    // 与存画稿同一条纪律：先确认解得开，再 .part→rename，别把用户的草稿写成半张图。
+    // 读快照、解码、覆写都是同步重活，整段过阻塞池
+    let snap_abs = util::data_file(&ctx.data, &snap).ok_or_else(|| AppError::bad("快照文件已经不在盘上了"))?;
+    let dest = ctx.data.join(&img.orig_path);
+    let (dw, dh) = util::blocking(move || -> Result<(usize, usize)> {
+        let bytes = std::fs::read(&snap_abs).map_err(|_| AppError::bad("快照文件已经不在盘上了"))?;
+        let decoded = crate::img::codec::decode(&bytes).map_err(|_| AppError::bad("快照不是能解码的 PNG，没有覆盖当前画稿"))?;
+        if decoded.w == 0 || decoded.h == 0 {
+            return Err(AppError::bad("快照是空的，没有覆盖当前画稿"));
+        }
+        imagesvc::write_bytes(&dest, &bytes).map_err(AppError::Fail)?;
+        Ok((decoded.w, decoded.h))
+    })
+    .await?;
+    if dw as i64 != img.w || dh as i64 != img.h {
+        rimg::set_dims(&ctx, iid, dw as i64, dh as i64)?;
     }
     rproj::touch(&ctx, img.project_id)?;
-    Ok(ok(serde_json::json!({ "ok": true, "from_result": rid, "w": decoded.w, "h": decoded.h })))
+    Ok(ok(serde_json::json!({ "ok": true, "from_result": rid, "w": dw, "h": dh })))
 }

@@ -1,6 +1,6 @@
 // 主题：纸白 / 墨黑 / 跟随系统。
 // 选择记在 localStorage 而不是库里——它是这台机器的显示偏好，换台机器不该被带走，
-// 也不该为了上色多等一次接口：首帧之前由 index.html 里的内联脚本先定好 data-theme。
+// 也不该为了上色多等一次接口：首帧之前由 core/theme-boot.js 先定好 data-theme。
 'use strict';
 import { call, isDesktop } from './desktop.js';
 

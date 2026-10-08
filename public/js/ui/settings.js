@@ -414,8 +414,8 @@ function createExportPane() {
       const d = await api.exportGet();
       inp.value = d.dir || '';
       fill(state, okRow(!!d.ready,
-        d.ready ? '目录可用，点「导出」直接落盘'
-          : d.dir ? '目录当前不可写，导出会报错'
+        d.ready ? '目录在，点「导出」直接落盘'
+          : d.dir ? '这个目录当前不存在（U 盘没插？），导出时会再验一次并建好'
             : '还没设置：精修页点「导出」会提醒你来这里填'));
     } catch (e) { fill(state, okRow(false, '读不到导出设置', e.message)); }
   }

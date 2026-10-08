@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 /// 结果集合：项目页「派生查看」的数据源。`?project_id=` 列整项目，`&image_id=` 收窄到一张。
-/// 与 `/api/images/{id}` 的差别是这条没有副作用（不判云端僵尸、不补派生档），也不锁在 8 条。
+/// 与 `/api/images/{id}` 的差别是这条不补派生档，也不把范围锁在 8 条。
 pub async fn results_list(State(ctx): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Result<Response> {
     let num = |k: &str| q.get(k).and_then(|s| s.parse::<i64>().ok());
     let limit = num("limit").unwrap_or(400).clamp(1, 2000);
@@ -88,10 +88,20 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     if let cfg::Plan::Refused { errors } = &plan {
         return Ok(skipped(&format!("你的工作流不能接管提交：{}", errors.join("；"))));
     }
-    let photo_bytes = std::fs::read(util::data_file(&ctx.data, &i.orig_path).ok_or_else(|| AppError::bad("原图文件已不在磁盘上"))?)
-        .map_err(|e| format!("读原图失败：{e}"))?;
-    // 涂抹层现在存的是 proxy 分辨率，而工作流里 DrawMaskOnImage 要和原图同尺寸，先上采样
-    let mask_bytes = imagesvc::mask_to_orig(ctx, &mask_path, i.w as usize, i.h as usize).map_err(|e| AppError::bad(e))?;
+    // 涂抹层存的是 proxy 分辨率，而工作流里 DrawMaskOnImage 要和原图同尺寸，先上采样。
+    // 读原图与这次上采样都是全分辨率的活，整段过阻塞池：压在 worker 上时桌面壳的窗口会一起卡住
+    let photo_abs = util::data_file(&ctx.data, &i.orig_path).ok_or_else(|| AppError::bad("原图文件已不在磁盘上"))?;
+    let mask_rel = mask_path.clone();
+    let (mw, mh) = (i.w as usize, i.h as usize);
+    let (photo_bytes, mask_bytes) = {
+        let ctx2 = ctx.clone();
+        util::blocking(move || -> Result<(Vec<u8>, Vec<u8>)> {
+            let p = std::fs::read(&photo_abs).map_err(|e| AppError::Fail(format!("读原图失败：{e}")))?;
+            let m = imagesvc::mask_to_orig(&ctx2, &mask_rel, mw, mh).map_err(AppError::bad)?;
+            Ok((p, m))
+        })
+        .await?
+    };
     let stamp = util::now_ms();
     let photo = comfy::upload(ctx, photo_bytes, &format!("p{}_{}.png", i.id, stamp)).await.map_err(msg)?;
     let mask = comfy::upload(ctx, mask_bytes, &format!("p{}_m_{}.png", i.id, stamp)).await.map_err(msg)?;
@@ -142,9 +152,12 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     Ok(serde_json::json!({ "result_id": id, "image_id": i.id }))
 }
 
+/// 轮询读的是**当前状态**，推进由服务端那条推进器做（`service::reclaim::spawn_advancer`）。
+/// 以前这条 GET 会顺带问 ComfyUI、下载成图、写库：网页上一个 `<img src="…/api/results/1">`
+/// 就能驱动本机干这些活，所以现在读就是读。
 pub async fn result_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
-    Ok(match reclaim::settle(&ctx, path_id(&id)?).await? {
-        Some(v) => ok(v),
+    Ok(match rres::value_by_id(&ctx, path_id(&id)?)? {
+        Some(v) => ok(dto::result_json(&ctx, &v)),
         None => err(404, "no result"),
     })
 }
@@ -207,7 +220,13 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
     // 文件名里不能出现 # —— 它会直接把 /file/ 的 URL 截断
     let label = format!("{stem} 派生{rid}.png");
     let rel = util::rel_path(&["projects".into(), r.project_id.to_string(), format!("{}_{r4}_{label}", util::now_ms(), r4 = util::r4())]);
-    std::fs::copy(&src, ctx.data.join(&rel)).map_err(|e| format!("复制失败：{e}"))?;
+    // 成图是 20–33MB 的 PNG，复制一次是百毫秒级的同步磁盘活
+    let dst = ctx.data.join(&rel);
+    util::blocking(move || -> Result<()> {
+        std::fs::copy(&src, &dst).map_err(|e| AppError::Fail(format!("复制失败：{e}")))?;
+        Ok(())
+    })
+    .await?;
     // 谱系落库：名字里那个 `派生{rid}` 是给人看的，父子关系靠这两列（改名也不断）
     let new_id = rimg::insert_derived(&ctx, r.project_id, &label, &rel, w, h, r.image_id, rid)?;
     rproj::touch(&ctx, r.project_id)?;

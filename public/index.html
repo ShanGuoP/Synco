@@ -9,15 +9,9 @@
 <link rel="apple-touch-icon" href="/public/icons/synco-180.png">
 <meta name="theme-color" content="#14181d">
 <title>Synco</title>
-<script>
-  /* 首帧之前就把底色定下来：等 JS 模块跑起来再上色，深色档下会先闪一下纸白 */
-  try {
-    var m = localStorage.getItem('synco.theme') || 'system';
-    document.documentElement.dataset.theme =
-      m === 'light' || m === 'dark' ? m
-        : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  } catch (e) { /* 读不到就按纸白走，:root 本身就是亮色 */ }
-</script>
+<!-- 上色那段原来是内联脚本：CSP 收到 script-src 'self' 之后内联脚本一律不执行，所以挪成一条
+     普通（非 module、非 defer）外链，仍在首帧之前跑 -->
+<script src="/public/js/core/theme-boot.js"></script>
 <link rel="stylesheet" href="/public/css/tokens.css">
 <link rel="stylesheet" href="/public/css/base.css">
 <link rel="stylesheet" href="/public/css/components.css">

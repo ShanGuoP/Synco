@@ -19,6 +19,15 @@ function notify() {
   emit();
 }
 
+/**
+ * 交终态。onDone 是调用方唯一的收闸口——画布靠它删 inFlight、编辑器靠它清 busy，
+ * 所以**每一个**从 pending 里摘出去的出口都要走到这里，漏一个就是永久锁住。
+ * 它自己抛了不能把这一轮其余任务一起带倒，因此包一层。
+ */
+function callDone(job, r) {
+  try { job.onDone?.(r); } catch (e) { console.error('[gen] onDone', e); }
+}
+
 async function tick() {
   if (!pending.size) return notify();
   for (const [rid, job] of [...pending]) {
@@ -30,13 +39,16 @@ async function tick() {
       if (e instanceof ApiError && e.status === 404) {
         pending.delete(rid);
         setJob(job.imgId, { state: 'idle', resultId: null });
+        callDone(job, { id: rid, image_id: job.imgId, status: 'error', error: '这条记录已经不在了（被删掉或服务重启过）' });
         continue;
       }
       // 其余错误按网络抖动处理，但也要有尽头：服务换了端口、后端整个不在时失败是永远不会成功的
       if (++job.fails >= 8) {
         pending.delete(rid);
-        setJob(job.imgId, { state: 'err', resultId: rid, error: '读不到这条任务的状态，已停止轮询' });
-        toastErr('轮询已停止', `#${rid}：连续 8 次读不到状态（服务可能已经重启）`);
+        const why = '读不到这条任务的状态，已停止轮询（服务可能已经重启）';
+        setJob(job.imgId, { state: 'err', resultId: rid, error: why });
+        toastErr('轮询已停止', `#${rid}：连续 8 次读不到状态`);
+        callDone(job, { id: rid, image_id: job.imgId, status: 'error', error: why });
       }
       continue;
     }
@@ -60,7 +72,7 @@ async function tick() {
       setJob(job.imgId, { state: 'err', resultId: rid, error: r.error || 'ComfyUI 未返回原因' });
       toastErr('生成失败', String(r.error || '').slice(0, 120));
     }
-    job.onDone?.(r);
+    callDone(job, r);
   }
   notify();
 }
