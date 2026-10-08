@@ -19,6 +19,7 @@
     "allow-copy-data-to",
     "allow-set-window-theme",
     "allow-restart-app",
+    "allow-open-url",
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-message",

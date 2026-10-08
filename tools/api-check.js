@@ -81,6 +81,9 @@ const SWEEP = [
   ['取回画稿缺 result_id 被拒', 'POST', '/api/canvas/1/use-sketch', {}],
   ['项目设置读写', 'POST', '/api/projects/1/settings', { loras: [{ name: 'x', strength: 1, enabled: true }] }],
   ['参数 cfg', 'GET', '/api/cfg'],
+  ['版本信息', 'GET', '/api/version'],
+  /* 更新日志读的是 GitHub：断网/没发布过都只能回 200 + 空列表或 error，不能把面板打成 5xx */
+  ['更新日志（GitHub Releases）', 'GET', '/api/releases'],
   ['工坊设置', 'GET', '/api/settings'],
   ['工作流路径写入', 'POST', '/api/settings/workflow', { path: 'D:/不存在的目录/wf.json' }],
   ['角色表读得到', 'GET', '/api/workflow/roles'],

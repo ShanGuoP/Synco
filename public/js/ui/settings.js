@@ -3,7 +3,7 @@
 import { el, fill } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { api } from '../core/api.js';
-import { isDesktop, call, pickFolder, human } from '../core/desktop.js';
+import { isDesktop, call, pickFolder, human, openExternal } from '../core/desktop.js';
 import { MODES, apply, mode, resolved, watch } from '../core/theme.js';
 import { store } from '../state.js';
 import { modal } from './modal.js';
@@ -590,28 +590,64 @@ function createThemePane() {
 }
 
 /** 关于：版本号 + 这次构建的 commit + 最近提交当日志；没有发布渠道就不装「自动更新」 */
+/* 作者页是写死的：这一栏不读库、不读配置，装了安装包也照样在 */
+const AUTHOR = { name: '@杉果派', url: 'https://v.douyin.com/VoXx5-pqL9c/' };
+
+/**
+ * 关于：版本、GitHub Releases 的更新日志、仓库与作者。
+ *
+ * 这一页以前读的是本机 `.git` 的提交历史，装了安装包的人看到的只有"这里就是空的"，
+ * 外加三段解释为什么读不到。更新日志改成从仓库的 Releases 拉（`/api/releases`），
+ * 那几段自述一律去掉——下载用户要的是"这一版改了什么、去哪下、谁做的"。
+ */
 function createAboutPane() {
   const state = el('div.set__state');
   const log = el('div.set__state');
 
+  /** 真 `<a>` 而不是"看起来能点的文字"：右键复制链接、键盘 Tab 都还在，只是点击改走系统浏览器 */
+  const link = (label, url) => el('a', {
+    href: url, rel: 'noopener noreferrer', 'data-tip': url,
+    onclick: async e => { e.preventDefault(); if (!(await openExternal(url))) toastErr('叫不动系统浏览器', url); },
+    text: label,
+  });
+  const linkRow = (label, ...kids) => el('div.set__row', {}, el('span.dot'), el('b', { text: label }), ...kids);
+
   async function load() {
-    try {
-      const v = await api.get('/api/version');
-      fill(state,
-        okRow(true, `版本 ${v.version}`, v.git_available ? `构建 ${v.commit} · ${String(v.date).slice(0, 10)}` : 'git 读不到，版本是内置常量'),
-        okRow(null, '服务端', 'Rust（axum + rusqlite）· 界面由本机回环 HTTP 提供'));
-      const cs = v.changelog || [];
-      fill(log, cs.length
-        ? cs.map(c => el('div.set__row', {}, el('span.muted', { text: `${String(c.date).slice(0, 10)} · ${c.hash}` }), el('span.set__extra', { text: c.subject })))
-        : [okRow(null, '没有可读的提交历史', '打包态不带 .git，这里就是空的')]);
-    } catch (e) { fill(state, okRow(false, '读不到版本', e.message)); }
+    let v, r;
+    try { v = await api.get('/api/version'); } catch (e) { fill(state, okRow(false, '读不到版本', e.message)); return; }
+    try { r = await api.get('/api/releases'); } catch (e) { r = { releases: [], error: e.message }; }
+
+    const repo = r.repo || 'https://github.com/ShanGuoP/Synco';
+    const built = v.commit && v.commit !== 'unknown' ? `构建 ${v.commit} · ${String(v.date).slice(0, 10)}` : '';
+    const latest = (r.latest || {}).tag ? String(r.latest.tag).replace(/^v/, '') : '';
+    const rows = [
+      okRow(true, `版本 ${v.version}`, built),
+      // 只在真的不是最新时多说一句；一致的时候不写"已是最新版"这种废话
+      (latest && latest !== v.version) ? okRow(null, `GitHub 上有 ${latest}`, '') : null,
+      linkRow('仓库', link(repo.replace(/^https:\/\//, ''), repo)),
+      linkRow('作者', link(AUTHOR.name, AUTHOR.url)),
+    ];
+    if (latest && latest !== v.version && (r.latest || {}).download) rows.push(linkRow('下载', link(`${latest} 安装包`, r.latest.download)));
+    fill(state, ...rows);
+
+    const cs = r.releases || [];
+    fill(log,
+      el('h4.dlg-h4', { text: '更新日志' }),
+      // 三种状态分开说：拉失败、拉到了但仓库没发布过、拉到了有内容。
+      // 把"还没有 Release"报成"网络不通"会让人白查半天
+      r.error
+        ? [okRow(false, '更新日志没拉到', r.error)]
+        : cs.length
+          ? cs.map(c => el('div.set__row', {},
+              el('span.muted', { text: `${c.date} · ${c.tag}` }),
+              link(c.name && c.name !== c.tag ? c.name : '这一版', c.url),
+              c.download ? link('下载', c.download) : null))
+          : [okRow(null, '仓库还没有发布 Release', '在 GitHub 上发布版本后，这里会列出每一版并给出安装包链接')]);
   }
 
   const node = el('div.dlg-flow', {},
-    el('div', {}, el('h4.dlg-h4', { text: '这台机器上的工坊' }),
-      el('p.muted', { text: '这台机器的 git 没有远端仓库，所以不接自动更新：升级方式是覆盖 exe（资料目录不动）。下面的提交记录就是更新日志。' }),
-      el('div', { style: { display: 'flex', gap: '8px', marginTop: '10px' } },
-        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '重新读取', onclick: load }))),
+    el('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '重新读取', onclick: load })),
     state, log);
   load();
   return { node };

@@ -22,6 +22,18 @@ export async function pickFolder(title) {
   return p || null;
 }
 
+/**
+ * 外链一律交给系统浏览器：这个窗口跳去 GitHub 就等于把工坊关掉了。
+ * 桌面版走壳里的 `open_url`（它只接不含空格的 http/https），浏览器版退回 `window.open`。
+ * 返回 false = 没打开成，调用方要把地址本身说给用户，别静默失败。
+ */
+export async function openExternal(url) {
+  if (isDesktop()) {
+    try { await call('open_url', { url }); return true; } catch { return false; }
+  }
+  return !!window.open(url, '_blank', 'noopener');
+}
+
 /** 字节数说人话：设置页要说清"要搬走多大一坨" */
 export function human(n) {
   if (!(n > 0)) return '—';

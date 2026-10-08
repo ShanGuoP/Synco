@@ -29,3 +29,8 @@ commands.allow = ["set_window_theme"]
 identifier = "allow-restart-app"
 description = "允许重启桌面壳（换址与搬家之后要重启才生效）"
 commands.allow = ["restart_app"]
+
+[[permission]]
+identifier = "allow-open-url"
+description = "允许页面把一条 http/https 链接交给系统浏览器打开（工坊窗口自己不该跳去网站）"
+commands.allow = ["open_url"]

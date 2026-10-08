@@ -32,6 +32,11 @@ async fn version_get(State(ctx): State<Shared>) -> Response {
     axum::Json(serde_json::Value::Object(o)).into_response()
 }
 
+/// 更新日志：从 GitHub Releases 拉，打包态也看得到
+async fn releases_get() -> Response {
+    axum::Json(crate::service::releases::list().await).into_response()
+}
+
 pub fn router() -> Router<Shared> {
     Router::new()
         .route("/api/projects", get(projects::projects_list).post(projects::projects_create))
@@ -81,5 +86,6 @@ pub fn router() -> Router<Shared> {
         .route("/api/export/run", post(settings::export_run))
         .route("/api/cfg", get(settings::cfg_get))
         .route("/api/version", get(version_get))
+        .route("/api/releases", get(releases_get))
         .fallback(files::fallback)
 }

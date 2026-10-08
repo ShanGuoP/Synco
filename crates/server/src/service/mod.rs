@@ -8,5 +8,6 @@ pub mod imagesvc;
 pub mod queue;
 pub mod refs;
 pub mod reclaim;
+pub mod releases;
 pub mod setup;
 pub mod workflow;
