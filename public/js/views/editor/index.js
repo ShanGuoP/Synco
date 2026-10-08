@@ -167,6 +167,8 @@ function buildShell() {
     infoOf: () => ctx?.info,
     onForked: id => forkAdjusted(id),
     brushLocked: msg => { if (msg) toastErr('现在不能涂遮罩', msg); },
+    // 画幅尺寸交给左下角那枚读数：带着裁切/旋转时，屏幕上那张已与源图不同
+    onFrame: (w, h) => { if (ctx) { ctx.hudFrame = { w, h }; paintHud(); } },
   });
   params.setAdjust(adjust.node, k => { if (k !== 'adjust') adjust.exit(); });
 
@@ -265,6 +267,7 @@ async function showImage(imgId) {
   if (stale()) return;
 
   ctx.info = info;
+  ctx.hudFrame = null;      // 上一张的画幅读数不能跟着换图留下（adjust.onImage 会按这一张重新报）
   ctx.fname.textContent = fmtFile(info.name, 30);
   ctx.fname.title = info.name;
   ctx.fdims.textContent = fmtDims(info.w, info.h);
@@ -364,12 +367,14 @@ const showHint = on => {
 function paintHud() {
   const info = ctx?.info;
   if (!info) return;
+  // 摆的是哪一版就说哪一版的尺寸：带着裁切或旋转时，画幅已与源图不同
+  const d = ctx.hudFrame || info;
   const inv = isCloud() && !!store.peek('settings')?.invert;
   ctx.hudSize.textContent = inv
-    ? `${info.w}×${info.h} · 云端整幅重绘 · 涂住的区域保持原图`
+    ? `${d.w}×${d.h} · 云端整幅重绘 · 涂住的区域保持原图`
     : isCloud()
-      ? `${info.w}×${info.h} · 云端裁切缝合 · 未涂区域保持原图`
-      : `${info.w}×${info.h} · 提交时按长边裁到 1024`;
+      ? `${d.w}×${d.h} · 云端裁切缝合 · 未涂区域保持原图`
+      : `${d.w}×${d.h} · 提交时按长边裁到 1024`;
 }
 
 /* ---------------- 反向涂抹（只在这条路上开） ---------------- */

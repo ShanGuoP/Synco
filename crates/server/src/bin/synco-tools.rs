@@ -168,23 +168,26 @@ fn start(open: bool) -> Result<()> {
     let port = if port_taken(want()) { free_port() } else { want() };
     let data = data_dir();
     fs::create_dir_all(&data).map_err(AppError::Io)?;
-    let log = fs::File::create(data.join("server.log")).map_err(AppError::Io)?;
+    // 日志与锁同住 runtime/：数据根目录只留 projects/ 与 app.db 那一堆正经东西
+    let log_path = synco_server::runtime_dir(&data).join("server.log");
+    fs::create_dir_all(log_path.parent().unwrap()).map_err(AppError::Io)?;
+    let log = fs::File::create(&log_path).map_err(AppError::Io)?;
     let mut cmd = Command::new(&exe);
     cmd.stdout(Stdio::from(log.try_clone().map_err(AppError::Io)?)).stderr(Stdio::from(log)).env("SYNCO_DATA", &data).env("SYNCO_PORT", port.to_string());
     // 给服务一个"不显示的控制台"：菜单那个窗口关了不顺手把它带走——"关窗任务继续跑"靠这个
     let child = quiet(cmd).spawn().map_err(|e| AppError::Fail(format!("起进程失败：{e}")))?;
-    println!("  已交给 PID {} 在后台跑，日志：{}", child.id(), data.join("server.log").display());
-    let mut url_port = port;
-    for _ in 0..40 {
+    println!("  已交给 PID {} 在后台跑，日志：{}", child.id(), log_path.display());
+    // 端口是这里挑好传进去的，不用再从盘上读一份回来：等这个端口开始听，就是起来了
+    let mut up = false;
+    for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(200));
-        if let Ok(s) = fs::read_to_string(data.join("port.txt")) {
-            if let Ok(p) = s.trim().parse::<u16>() {
-                url_port = p;
-                break;
-            }
-        }
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() { up = true; break; }
     }
-    let url = format!("http://127.0.0.1:{url_port}/");
+    if !up {
+        println!("  等 {port} 端口起来超时——多半是这个数据目录已经被另一个 Synco 占着，去看日志");
+        return Err(AppError::Fail(format!("服务没起来：{}", log_path.display())));
+    }
+    let url = format!("http://127.0.0.1:{port}/");
     println!("  SYNCO_URL={url}");
     if open {
         let _ = quiet(Command::new("cmd")).args(["/C", "start", "", &url]).stdout(Stdio::null()).spawn();

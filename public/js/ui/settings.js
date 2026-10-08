@@ -658,6 +658,8 @@ function createAboutPane() {
     const built = v.commit && v.commit !== 'unknown' ? `构建 ${v.commit} · ${String(v.date).slice(0, 10)}` : '';
     const latest = (r.latest || {}).tag ? String(r.latest.tag).replace(/^v/, '') : '';
     const rows = [
+      // 中文名暂定「新刻」：这一栏是名字的权威出处，界面别处只跟着它走
+      okRow(true, 'Synco 新刻', '本机 ComfyUI / 云端两用的局部重绘工作台'),
       okRow(true, `版本 ${v.version}`, built),
       // 只在真的不是最新时多说一句；一致的时候不写"已是最新版"这种废话
       (latest && latest !== v.version) ? okRow(null, `GitHub 上有 ${latest}`, '') : null,

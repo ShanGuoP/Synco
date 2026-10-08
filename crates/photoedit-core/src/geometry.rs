@@ -7,7 +7,7 @@
 
 use crate::ops::{Fill, Geometry};
 use crate::px::{corner_avg, sample, Pad};
-use stitch_core::{par::par_chunks_mut, Rgba};
+use stitch_core::{par::par_chunks_mut, Alpha, Rgba};
 
 /// 按 `Geometry` 走一遍：翻转 → 旋转（90° 步进无损，余下小角度双线性）→ 裁切
 pub fn apply(img: &Rgba, g: &Geometry) -> Rgba {
@@ -28,6 +28,28 @@ pub fn apply(img: &Rgba, g: &Geometry) -> Rgba {
         cur = crop_norm(&cur, rect);
     }
     cur
+}
+
+/// 把单通道遮罩也过一遍几何段：笔迹活在 alpha 里，RGB 留 0，转完再取回 alpha。
+///
+/// 为什么要有这一步：库里的笔迹**永远画在源图坐标系**（带着裁切/旋转时编辑器锁住画笔），
+/// 而下游吃的都是几何段之后那张。中间没人转，`k = 图宽 / 遮罩宽` 就会把"左上角"按横宽的比例
+/// 硬贴到转过的竖幅上——发出去的重绘区在错的位置，且一路落到 done，一声不响。
+/// 补边那几格跟着 `g.fill` 的同一套规则走：那一块既然进了画面，遮罩就不该当它不存在。
+pub fn apply_alpha(a: &Alpha, g: &Geometry) -> Alpha {
+    if !needs_pass(g) {
+        return a.clone();
+    }
+    let mut img = Rgba::new(a.w, a.h);
+    for (i, v) in a.v.iter().enumerate() {
+        img.px[i * 4 + 3] = *v;
+    }
+    apply(&img, g).alpha()
+}
+
+/// 几何段这一趟到底动没动坐标系：全默认时上游原样退回，一个字节都不必重算
+pub fn needs_pass(g: &Geometry) -> bool {
+    g.flip_h || g.flip_v || g.crop.is_some() || g.rotate_deg.abs() > 1e-4
 }
 
 /// 归一化框换成像素框：与 [`crop_norm`] 同一套取整，两处共用才不会算出两个尺寸。
@@ -316,5 +338,25 @@ mod tests {
         let b = apply(&apply(&img, &g(None, 90.0, false, false)), &g(None, 90.0, false, false));
         assert_eq!(a, b);
         assert_eq!(a.get(0, 0), img.get(8, 5));
+    }
+
+    #[test]
+    fn 遮罩跟着几何段一起换坐标系() {
+        // 一张 8×4 的遮罩，笔迹在**左上角**（源图域）
+        let mut a = Alpha::new(8, 4);
+        for y in 0..2 {
+            for x in 0..4 {
+                a.v[y * 8 + x] = 255;
+            }
+        }
+        // 没几何段就该原样退回，一次都不重算
+        assert_eq!(apply_alpha(&a, &g(None, 0.0, false, false)), a, "默认几何也把遮罩动过了");
+        // 右转 90°：8×4 → 4×8，源图左上角那一坨落到**右上角**（src(x,y) → dst(h-1-y, x)）
+        let r = apply_alpha(&a, &g(None, 90.0, false, false));
+        assert_eq!((r.w, r.h), (4, 8), "遮罩没跟着换边长，下游那个比例就算定了");
+        assert_eq!(&r.v[0..4], &[0, 0, 255, 255], "第一行该是右侧两格有笔迹：{:?}", &r.v[0..4]);
+        assert!(r.v[4 * r.w..].iter().all(|&v| v == 0), "下面四行不该有笔迹");
+        let ink: usize = r.v.iter().filter(|&&v| v > 0).count();
+        assert_eq!(ink, 8, "笔迹面积在转的时候被吃掉了：{ink} 格");
     }
 }

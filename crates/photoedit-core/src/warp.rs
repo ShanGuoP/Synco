@@ -121,59 +121,74 @@ fn apply_stroke(base: &Rgba, cur: &mut Rgba, s: &Stroke) {
     }
 }
 
-/// 盘内某点的位移与衰减权重。`w = (1 − (‖p−c‖/r)²)²` 是抛物线衰减，
-/// 边界处导数为 0，所以盘缘不会有可见接缝。
+/// 盘内某点的位移与衰减权重。两条纪律，都是早先那版漏掉的：
+///
+/// - **连续**：方向取各段单位向量的加权平均，盘心取各投影点的加权平均——两者都是像素位置的连续函数。
+///   早先按"最近的那一段"硬选一段：相邻两段一切换，方向与盘心就跳一档，而切换线正好沿笔画走，
+///   拖一道笔就留下一串裂缝（液化"把图片弄断裂"就是它）。
+/// - **有界**：位移上限 = 半径 × `STROKE_MAX_SHIFT` × 权重，与线段被抽稀成多长无关。
+///   早先推挤用的是整段向量，而直线轨迹入库前会被 Douglas–Peucker 压成一两个点——
+///   一段几百像素的位移直接超出盘外，采样咬到自己刚写的那一圈像素。
 fn field_at(pts: &[[f32; 2]], r: f32, x: f32, y: f32, tool: Tool, shift: f32) -> ((f32, f32), f32) {
-    let (mut best_d2, mut seg) = (f32::INFINITY, 0usize);
-    // 找最近的线段：推挤要用它自己的方向，收缩/膨胀要用它的中点当盘心
-    for j in 0..pts.len().saturating_sub(1) {
-        let (a, b) = (pts[j], pts[j + 1]);
-        let d2 = dist_seg_sq(x, y, a, b);
-        if d2 < best_d2 {
-            best_d2 = d2;
-            seg = j;
+    let r2 = r * r;
+    let (mut wmax, mut acc, mut qsum, mut wsum) = (0f32, (0f32, 0f32), (0f32, 0f32), 0f32);
+    if pts.len() == 1 {
+        let (dx, dy) = (x - pts[0][0], y - pts[0][1]);
+        let d2 = dx * dx + dy * dy;
+        if d2 >= r2 {
+            return ((0.0, 0.0), 0.0);
+        }
+        wmax = falloff(d2, r2);
+        (qsum, wsum) = ((pts[0][0] * wmax, pts[0][1] * wmax), wmax);
+    } else {
+        for j in 0..pts.len() - 1 {
+            let (a, b) = (pts[j], pts[j + 1]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 < 1e-9 { 0.0 } else { (((x - a[0]) * dx + (y - a[1]) * dy) / l2).clamp(0.0, 1.0) };
+            let (px, py) = (a[0] + t * dx, a[1] + t * dy);
+            let d2 = (x - px).powi(2) + (y - py).powi(2);
+            if d2 >= r2 {
+                continue;
+            }
+            let w = falloff(d2, r2);
+            wmax = wmax.max(w);
+            wsum += w;
+            qsum = (qsum.0 + px * w, qsum.1 + py * w);
+            let len = l2.sqrt();
+            if len > 1e-6 {
+                acc = (acc.0 + dx / len * w, acc.1 + dy / len * w);
+            }
         }
     }
-    if pts.len() == 1 {
-        best_d2 = (x - pts[0][0]).powi(2) + (y - pts[0][1]).powi(2);
-    }
-    let dist = best_d2.sqrt();
-    if dist >= r {
+    if wmax <= 0.0 || wsum <= 0.0 {
         return ((0.0, 0.0), 0.0);
     }
-    let t = 1.0 - (dist / r).powi(2);
-    let w = t * t;
-    let (a, b) = if pts.len() == 1 { (pts[0], pts[0]) } else { (pts[seg], pts[seg + 1]) };
+    let (qx, qy) = (qsum.0 / wsum, qsum.1 / wsum);
+    let reach = r * shift * wmax;
     match tool {
-        // 推挤：位移 = 该线段的推进向量
+        // 推挤：沿加权切向，长度只由半径与压力说了算
         Tool::Push => {
-            let v = ((b[0] - a[0]) * shift, (b[1] - a[1]) * shift);
-            (v, w)
+            let n = (acc.0 * acc.0 + acc.1 * acc.1).sqrt();
+            if n < 1e-6 {
+                return ((0.0, 0.0), wmax);
+            }
+            ((acc.0 / n * reach, acc.1 / n * reach), wmax)
         }
-        // 收缩/恢复/膨胀：相对盘心（本段中点）的径向
+        // 收缩 / 膨胀 / 恢复：位移 = (p − 盘心) × 系数。盘心是折线上各投影点的加权平均（连续），
+        // 所以盘心那一点不动、盘缘由衰减收回 0，最大量落在 0.29r 那一圈，全程没有奇点。
         t => {
-            let c = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5);
-            let dir = match t {
-                Tool::Pucker | Tool::Restore => -1.0,
-                _ => 1.0,
-            };
-            let reach = r * 0.5;
-            let (ux, uy) = if dist > 1e-3 { ((x - c.0) / dist, (y - c.1) / dist) } else { (0.0, 0.0) };
-            let step = reach * shift * dir * w;
-            ((ux * step, uy * step), w)
+            let k = if matches!(t, Tool::Pucker | Tool::Restore) { -2.0 } else { 2.0 };
+            let s = k * shift * wmax;
+            (((x - qx) * s, (y - qy) * s), wmax)
         }
     }
 }
 
-fn dist_seg_sq(px: f32, py: f32, a: [f32; 2], b: [f32; 2]) -> f32 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = dx * dx + dy * dy;
-    let t = if l2 < 1e-9 {
-        0.0
-    } else {
-        (((px - a[0]) * dx + (py - a[1]) * dy) / l2).clamp(0.0, 1.0)
-    };
-    (px - (a[0] + t * dx)).powi(2) + (py - (a[1] + t * dy)).powi(2)
+/// 抛物线衰减 `w = (1 − (d/r)²)²`：盘缘处函数值与导数一起归零，边缘才接得上原图
+fn falloff(d2: f32, r2: f32) -> f32 {
+    let t = 1.0 - d2 / r2;
+    t * t
 }
 
 fn bbox(pts: &[[f32; 2]], r: f32, w: usize, h: usize) -> Span {
@@ -609,5 +624,58 @@ mod tests {
         let mut wp = Warp::default();
         wp.auto.face_slim.0 = 100;
         assert_eq!(apply(&img, &wp, None), img, "拿不到关键点就不该乱动");
+    }
+
+    /// 轨迹被抽稀成两端点之后的长直线：段长 380px。
+    /// 早先推挤直接拿整段向量当位移（0.45 × 380 ≈ 171px，远超盘半径），采样咬到自己刚写的像素，
+    /// 屏幕上就是一道沿路的裂缝。
+    #[test]
+    fn 推挤的位移以半径的比例为上限() {
+        let pts = vec![[20.0, 50.0], [400.0, 50.0]];
+        let (r, shift) = (60.0f32, STROKE_MAX_SHIFT);
+        let (d, w) = field_at(&pts, r, 200.0, 50.0, Tool::Push, shift);
+        let len = (d.0 * d.0 + d.1 * d.1).sqrt();
+        assert!(w > 0.99, "盘心权重该接近 1，实有 {w}");
+        assert!(len <= r * shift + 1e-3, "位移 {len} 越过了半径 {r} 的 45%");
+        assert!(d.0 > 1.0 && d.1.abs() < 1e-6, "该沿轨迹方向推，实有 {d:?}");
+        // 盘外一格都不动
+        let (out, wo) = field_at(&pts, r, 200.0, 50.0 + r + 1.0, Tool::Push, shift);
+        assert_eq!((wo, out), (0.0, (0.0, 0.0)), "盘缘外还在推");
+    }
+
+    /// 拐角两侧的场必须连续：三种刷子都扫一条穿过顶点的横线，逐像素比邻两格的差。
+    /// 早先"取最近那一段"在这里跳档，一跳就是几十像素——那就是用户看到的"液化把图弄断裂"。
+    #[test]
+    fn 拐角两侧的场连续() {
+        let pts = vec![[40.0, 60.0], [200.0, 60.0], [200.0, 220.0]];
+        let (r, shift) = (60.0f32, 0.7f32);
+        for tool in [Tool::Push, Tool::Pucker, Tool::Bloat] {
+            let mut worst = 0f32;
+            let mut prev: Option<(f32, f32)> = None;
+            for k in 0..=160 {
+                let x = 120.0 + k as f32;
+                let (d, _) = field_at(&pts, r, x, 60.0, tool, shift);
+                if let Some(p) = prev {
+                    worst = worst.max((d.0 - p.0).abs().max((d.1 - p.1).abs()));
+                }
+                prev = Some(d);
+            }
+            assert!(worst < 2.0, "{tool:?} 在拐角处一格跳 {worst} 像素：场不连续，沿路会裂");
+        }
+    }
+
+    /// 盘心那一点不该被甩飞（收缩的奇点）：越靠盘心位移越小，且方向指向盘心
+    #[test]
+    fn 收缩在盘心不甩像素() {
+        let pts = vec![[100.0, 100.0], [180.0, 100.0]];
+        let (r, shift) = (60.0f32, STROKE_MAX_SHIFT);
+        let (c, wc) = field_at(&pts, r, 140.0, 100.0, Tool::Pucker, shift);
+        assert!(wc > 0.99);
+        assert!(c.0.abs() < 1.0 && c.1.abs() < 1.0, "盘心位移该趋 0，实有 {c:?}");
+        // 盘心正上方一格：位移应朝盘心（y 分量向下）
+        let (u, _) = field_at(&pts, r, 140.0, 70.0, Tool::Pucker, shift);
+        assert!(u.1 > 0.5, "收缩没把像素往盘心拉：{u:?}");
+        let (v, _) = field_at(&pts, r, 140.0, 70.0, Tool::Bloat, shift);
+        assert!(v.1 < -0.5, "膨胀方向反了：{v:?}");
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! 顺序是有理由的，不是随手排的：
 //! - 变形在调色之前，插值出来的像素才不会再被色彩算子二次改动；
-//! - 美颜在最后，它的蒙版坐标约定在"变形之后"的那个域里，前端涂在哪儿就磨在哪儿；
+//! - 美颜在最后，蒙版按源图域收、跟着几何段一起转，前端涂在哪儿就磨在哪儿（转过 90° 也一样）；
 //! - LUT 在滑杆之前，预设曲线打底、滑杆做微调，反过来会让滑杆失去锚点。
 //!
 //! 恒等参数原图直出，一个字节都不动——"没调过的图"与 0.2.1 逐字段一致这件事靠这里保证。
@@ -18,7 +18,8 @@ use stitch_core::{Alpha, Rgba};
 /// 链的可选输入。都是引用：内核不认领内存，也不去磁盘找东西。
 #[derive(Default)]
 pub struct Chain<'a> {
-    /// 美颜蒙版，尺寸必须等于**几何+变形之后**的图
+    /// 美颜蒙版，尺寸等于**传进来的那张图**（源图域）：几何段会带着它一起走，
+    /// 所以带裁切/旋转时它落在对的位置上
     pub mask: Option<&'a Alpha>,
     /// 一键塑形要的关键点组
     pub shape: Option<&'a FaceShape>,
@@ -31,17 +32,18 @@ pub fn apply_chain(img: &Rgba, ops: &EditOps, chain: &Chain) -> Rgba {
         return img.clone();
     }
     let mut cur = geometry::apply(img, &ops.geometry);
+    // 笔迹活在源图域，几何段换了坐标系就得跟着转一遍；转完还是对不上就是调用方给错了档，
+    // 宁可不加限定——静默挪位比"全图生效"更难解释
+    let mask = match chain.mask {
+        Some(m) if m.w == img.w && m.h == img.h => Some(geometry::apply_alpha(m, &ops.geometry)),
+        _ => None,
+    };
     cur = warp::apply(&cur, &ops.warp, chain.shape);
     if let (Some(l), Some(table)) = (ops.lut.as_ref(), chain.lut) {
         cur = lut::apply(&cur, table, l.strength.pos().min(1.0));
     }
     cur = color::apply(&cur, &ops.color);
-    let mut mask = chain.mask;
-    if mask.map(|m| m.w != cur.w || m.h != cur.h).unwrap_or(false) {
-        // 尺寸对不上宁可不加限定：蒙版是用户画的，静默挪位比"全图生效"更难解释
-        mask = None;
-    }
-    beauty::apply(&cur, &ops.beauty, mask)
+    beauty::apply(&cur, &ops.beauty, mask.as_ref())
 }
 
 #[cfg(test)]
@@ -82,17 +84,42 @@ mod tests {
 
     #[test]
     fn 几何在前美颜在后() {
-        // 转 90° 之后画幅换了边长，蒙版必须按换过边长的图给
+        // 转 90° 之后画幅换了边长，但蒙版按**源图**那对尺寸给（链子带着它一起转）
         let img = ramp(48, 24);
         let mut o = EditOps::default();
         o.geometry = Geometry { crop: None, rotate_deg: 90.0, flip_h: false, flip_v: false, fill: ops::Fill::Edge };
         o.beauty.smooth = Slider(80);
         let out = apply_chain(&img, &o, &Chain::default());
         assert_eq!((out.w, out.h), (24, 48), "链把几何顺序丢了");
-        // 给错尺寸的蒙版：不该 panic，也不该把效果歪着贴
-        let wrong = Alpha::new(48, 24);
+        // 尺寸对不上的蒙版（比如拿转过的档来给）：不该 panic，也不该把效果歪着贴
+        let wrong = Alpha::new(24, 48);
         let out2 = apply_chain(&img, &o, &Chain { mask: Some(&wrong), ..Default::default() });
         assert_eq!(out2.w, 24);
+        assert_eq!(out2.px, out.px, "对不上尺寸的蒙版被将就着用了，效果应该整段不加");
+    }
+
+    #[test]
+    fn 旋转之后美颜仍然落在涂过的那一块() {
+        // 源图 48×24，笔迹只涂左半边；右转 90° 之后是 24×48，那半边的笔迹落在**上半**
+        let img = ramp(48, 24);
+        let mut o = EditOps::default();
+        o.geometry = Geometry { crop: None, rotate_deg: 90.0, flip_h: false, flip_v: false, fill: ops::Fill::Edge };
+        o.beauty.smooth = Slider(100);
+        let mut m = Alpha::new(48, 24);
+        for y in 0..24 {
+            for x in 0..48 {
+                m.set(x, y, if x < 24 { 255 } else { 0 });
+            }
+        }
+        let base = apply_chain(&img, &EditOps { geometry: o.geometry.clone(), ..Default::default() }, &Chain::default());
+        let out = apply_chain(&img, &o, &Chain { mask: Some(&m), ..Default::default() });
+        assert_eq!((out.w, out.h), (24, 48));
+        fn row(img: &Rgba, y: usize) -> &[u8] {
+            let s = y * img.w * 4;
+            &img.px[s..s + img.w * 4]
+        }
+        assert_ne!(row(&out, 0), row(&base, 0), "笔迹转过去的那半边没吃到美颜");
+        assert_eq!(row(&out, 40), row(&base, 40), "没涂的下半边被一起磨了：遮罩没跟着几何段走");
     }
 
     #[test]

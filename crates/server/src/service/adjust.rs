@@ -173,11 +173,14 @@ pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> std::resul
 }
 
 /// 预览：算 → 落 `_adjprev<指纹>.jpg` → 回 URL。同参数已有文件直接复用。
+/// 报出去的宽高是**成图那一档**（`out_size`），不是这张 proxy 档自己的：
+/// 前端拿它当画幅尺寸，报了预览档的尺寸就等于把画布缩到 proxy 那么大——图会当场小一圈，
+/// 1:1 与放大看到的也只是那张糊图。两条分支（新建与复用）必须同一口径，否则拖两下滑杆画幅会跳。
 pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Result<Built, String> {
     let h = ops_hash(&ops.to_json());
     let (rel, abs) = slot(ctx, img, "adjprev", &h);
+    let (w, hh) = out_size(img, ops);
     if abs.is_file() {
-        let (w, hh) = out_size(img, ops);
         return Ok(Built { rel, abs, ms: 0, reused: true, w, h: hh });
     }
     let t0 = util::now_ms();
@@ -185,7 +188,7 @@ pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Resu
     imagesvc::write_bytes(&abs, &codec::encode_jpeg(&out, PREV_Q))?;
     // 旧参数的预览档没人再引用了，扫同一张图的前缀清掉，别让目录越堆越厚
     purge_old(ctx, img, "adjprev", &h);
-    Ok(Built { rel, abs, ms: util::now_ms().saturating_sub(t0), reused: false, w: out.w, h: out.h })
+    Ok(Built { rel, abs, ms: util::now_ms().saturating_sub(t0), reused: false, w, h: hh })
 }
 
 /// 成图：原分辨率落 `_adjusted<指纹>.jpg`，并配一张 320 小档给列表用。
@@ -204,6 +207,62 @@ pub fn build_render(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Resul
     let small = codec::scale_to_long_edge(&out, imagesvc::THUMB_EDGE);
     let thumb = imagesvc::write_bytes(&th_abs, &codec::encode_jpeg(&small, ADJ_THUMB_Q)).map(|_| th_rel.clone()).ok();
     Ok((Built { rel, abs, ms: util::now_ms().saturating_sub(t0), reused: false, w: out.w, h: out.h }, thumb))
+}
+
+/// 提交给工作流的那张遮罩：与 `submit_artifact` 同一个域。
+///
+/// 涂抹层存的是 proxy 分辨率，先上采样到**源图**尺寸（工作流里 DrawMaskOnImage 要和照片同幅），
+/// 再跟照片一样过一遍几何段。少了后半段，转 90° 的照片配一张没转的遮罩，
+/// `InpaintCropImproved` 圈到的就是另一块地方——而且工作流不会抱怨，它只会照单画。
+/// 遮罩的笔迹同时活在 R 与 A 两条通道里（ComfyUI 读 red、内核读 alpha），所以整幅 RGBA 一起转。
+pub fn submit_mask(ctx: &Ctx, img: &Image) -> std::result::Result<Vec<u8>, String> {
+    let ops = load_ops(ctx, img.id);
+    let rel = img.mask_path.clone().unwrap_or_default();
+    let mut png = imagesvc::mask_to_orig(ctx, &rel, img.w.max(1) as usize, img.h.max(1) as usize)?;
+    if photoedit_core::geometry::needs_pass(&ops.geometry) {
+        let m = codec::decode(&png)?;
+        png = codec::encode_png(&photoedit_core::geometry::apply(&m, &ops.geometry));
+    }
+    Ok(png)
+}
+
+/// 调整视图的瓦片：切的是**成图**（原分辨率）那一张。
+/// 预览档只有 proxy 那么粗，而 1:1 与放大要看的正是真实像素——与源图那套同一个口径，
+/// 差别只在目录多一层参数指纹：换参数就换 URL，既不会命中旧内容的 immutable 缓存，
+/// 也不会把没渲过的档位算第二遍。
+pub fn tiles(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Result<Value, String> {
+    let (b, _) = build_render(ctx, img, ops)?;
+    let h = ops_hash(&ops.to_json());
+    let abs = b.abs.clone();
+    let url = format!("/file/{}", b.rel);
+    let out = imagesvc::pyramid(&adj_tile_dir(ctx, img, &h), &adj_tile_rel(img, &h), || {
+        let bytes = std::fs::read(&abs).map_err(|e| format!("读成图失败：{e}"))?;
+        codec::decode(&bytes)
+    }, &url)?;
+    purge_adj_tiles(ctx, img, &h);
+    Ok(out)
+}
+
+fn adj_tile_dir(ctx: &Ctx, img: &Image, hash: &str) -> PathBuf {
+    imagesvc::tiles_dir(ctx, img).join(format!("adj{hash}"))
+}
+
+fn adj_tile_rel(img: &Image, hash: &str) -> String {
+    util::rel_path(&["projects".into(), img.project_id.to_string(), "tiles".into(), img.id.to_string(), format!("adj{hash}")])
+}
+
+/// 只留当前这套参数的瓦片：一次要出上百张，换一根滑杆就再长一整目录，旧的没人引用
+fn purge_adj_tiles(ctx: &Ctx, img: &Image, keep_hash: &str) {
+    let parent = imagesvc::tiles_dir(ctx, img);
+    let keep = format!("adj{keep_hash}");
+    if let Ok(rd) = std::fs::read_dir(&parent) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_lowercase();
+            if n.starts_with("adj") && n != keep && e.path().is_dir() {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
 }
 
 /// 清掉同一张图其它参数的预览档（只留当前这一份）
@@ -589,6 +648,36 @@ mod tests {
     }
 
     #[test]
+    fn 提交用的遮罩跟着照片一起换坐标系() {
+        let (dir, ctx, img) = fixture("submask");
+        // 遮罩按 proxy 分辨率存；这张 40×20 没有单独的 proxy 档，就按源图尺寸给
+        let mut m = Rgba::new(40, 20);
+        for y in 0..20usize {
+            for x in 0..40usize {
+                let v = if x < 20 { 255u8 } else { 0u8 };
+                m.set(x, y, [v, v, v, v]);
+            }
+        }
+        let mrel = util::rel_path(&["projects".into(), "1".into(), "p_mask.png".into()]);
+        std::fs::write(dir.join(&mrel), codec::encode_png(&m)).unwrap();
+        rimg::set_mask(&ctx, img.id, Some(&mrel)).unwrap();
+        let row = rimg::by_id(&ctx, img.id).unwrap().unwrap();
+        let file = std::fs::read(dir.join(&mrel)).unwrap();
+        // 1) 没有几何段：一个字节都不该动（与 0.2.1 那条上传逐位一致）
+        radj::put(&ctx, row.id, &EditOps::default().to_json()).unwrap();
+        assert_eq!(submit_mask(&ctx, &row).unwrap(), file, "没转没裁的时候遮罩被重编码了");
+        // 2) 右转 90°：照片会换成 20×40，遮罩必须一起换，笔迹从"左半"变成"上半"
+        let mut ops = EditOps::default();
+        ops.geometry.rotate_deg = 90.0;
+        radj::put(&ctx, row.id, &ops.to_json()).unwrap();
+        let d = codec::decode(&submit_mask(&ctx, &row).unwrap()).unwrap();
+        assert_eq!((d.w, d.h), (20, 40), "遮罩没跟着照片换边长，工作流圈到的就是另一块");
+        assert_eq!(d.get(0, 0)[0], 255, "源图左半的笔迹转过去应当落在上半");
+        assert_eq!(d.get(0, 30)[0], 0, "下半原本没涂，转过去也不该有笔迹");
+        cleanup(ctx, &dir);
+    }
+
+    #[test]
     fn 关键点是空的时候一键塑形不改动图() {
         let (dir, ctx, img) = fixture("noshape");
         let mut ops = EditOps::default();
@@ -597,6 +686,80 @@ mod tests {
         let src = codec::decode(&std::fs::read(ctx.data.join(&img.orig_path)).unwrap()).unwrap();
         let out = pixels(&ctx, &img, &ops, Grade::Full).unwrap();
         assert_eq!(out.px, src.px, "没有关键点却动了像素");
+        cleanup(ctx, &dir);
+    }
+
+    /// 一张明显大于 proxy 档的图：源 1600×1200，proxy 只有 400×300。
+    /// 0.3.0 那版「本地调整只剩一张小图、放大看不到真像素」就出在这种尺寸差的组合上，
+    /// 40×20 的小图测不出来——它的 proxy 档与源图同尺寸，两个口径报出来的数一样。
+    fn big_fixture(name: &str) -> (std::path::PathBuf, std::sync::Arc<Ctx>, Image) {
+        let dir = std::env::temp_dir().join(format!("synco-adj-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("projects").join("1")).unwrap();
+        let ctx = Ctx::new(dir.clone(), dir.clone(), db::open(&dir).unwrap());
+        crate::repo::projects::create(&ctx, "测试项目").unwrap();
+        let mut src = Rgba::new(1600, 1200);
+        for y in 0..1200usize {
+            for x in 0..1600usize {
+                src.set(x, y, [(x / 7) as u8, (y / 5) as u8, 90, 255]);
+            }
+        }
+        let rel = util::rel_path(&["projects".into(), "1".into(), "big.png".into()]);
+        std::fs::write(dir.join(&rel), codec::encode_png(&src)).unwrap();
+        let prel = util::rel_path(&["projects".into(), "1".into(), "big_proxy400.jpg".into()]);
+        std::fs::write(dir.join(&prel), codec::encode_jpeg(&codec::scale_to_long_edge(&src, 400), 88)).unwrap();
+        let id = rimg::insert(&ctx, 1, "big.png", &rel, 1600, 1200).unwrap();
+        rimg::set_derived(&ctx, id, None, Some(&prel)).unwrap();
+        let row = rimg::by_id(&ctx, id).unwrap().unwrap();
+        (dir, ctx, row)
+    }
+
+    #[test]
+    fn 预览报的是成图那一档的尺寸而不是proxy档() {
+        let (dir, ctx, img) = big_fixture("prevdims");
+        assert!(img.proxy_path.is_some(), "fixture 没接上 proxy 档");
+        let mut ops = EditOps::default();
+        ops.color.exposure = photoedit_core::Slider(40);
+        let b = build_preview(&ctx, &img, &ops).unwrap();
+        // 关键一条：预览档只有 400×300，报出去的必须是 1600×1200。
+        // 报了档自己的尺寸，前端就把它当画幅用——图当场小一圈，1:1 也只是那张糊图
+        assert_eq!((b.w, b.h), (1600, 1200));
+        let again = build_preview(&ctx, &img, &ops).unwrap();
+        assert!(again.reused && (again.w, again.h) == (1600, 1200), "复用那条分支与新建口径不一致");
+        // 转过 90° 长宽换边的还是成图那一档，不是 proxy 那一档
+        let mut rot = ops.clone();
+        rot.geometry.rotate_deg = 90.0;
+        let t = build_preview(&ctx, &img, &rot).unwrap();
+        assert_eq!((t.w, t.h), (1200, 1600));
+        cleanup(ctx, &dir);
+    }
+
+    #[test]
+    fn 调整视图的瓦片切的是成图那一档() {
+        let (dir, ctx, img) = big_fixture("adjtiles");
+        let mut ops = EditOps::default();
+        ops.beauty.smooth = photoedit_core::Slider(50);
+        let m = tiles(&ctx, &img, &ops).unwrap();
+        assert_eq!(m["w"].as_i64(), Some(1600));
+        assert_eq!(m["h"].as_i64(), Some(1200));
+        assert_eq!(m["tile"].as_i64(), Some(imagesvc::TILE as i64));
+        let url = m["url"].as_str().unwrap_or_default().to_string();
+        assert!(url.contains(&format!("tiles/{}/adj", img.id)), "瓦片路径没带参数指纹：{url}");
+        let levels = m["levels"].as_array().cloned().unwrap_or_default();
+        assert!(!levels.is_empty(), "长边 1600 该切出一套金字塔");
+        // 末元素是最细一层（build_tiles_at 把顺序反转过）
+        let z = levels[levels.len() - 1]["z"].as_i64().unwrap_or(-1);
+        let hash = ops_hash(&ops.to_json());
+        let finest = dir.join("projects").join("1").join("tiles").join(img.id.to_string())
+            .join(format!("adj{hash}")).join(z.to_string()).join("0_0.jpg");
+        assert!(finest.is_file(), "最细一层的第一格没落盘：{}", finest.display());
+        // 换一套参数：新目录建起来，旧的那套要被请走——一次就是上百张，留着等于白堆
+        let mut other = ops.clone();
+        other.color.contrast = photoedit_core::Slider(30);
+        let m2 = tiles(&ctx, &img, &other).unwrap();
+        assert_ne!(m2["url"].as_str().unwrap_or_default(), url.as_str());
+        let root = dir.join("projects").join("1").join("tiles").join(img.id.to_string());
+        assert!(root.join(format!("adj{}", ops_hash(&other.to_json()))).is_dir());
+        assert!(!root.join(format!("adj{hash}")).exists(), "旧参数的瓦片目录没清掉");
         cleanup(ctx, &dir);
     }
 }

@@ -61,11 +61,16 @@ pub fn want_port() -> u16 {
     env::var("SYNCO_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(7861)
 }
 
-/// 一个数据目录只许一个进程动。锁就是 `<data>/instance.lock` 的独占句柄，必须在开库之前拿到。
+/// 运行时文件的家：锁、日志这些进程活着才有意义的东西全收在这里，
+/// 别摊在数据根目录上跟 `projects/`、`app.db` 混成一堆。
+pub fn runtime_dir(data: &Path) -> PathBuf {
+    data.join("runtime")
+}
+
+/// 一个数据目录只许一个进程动。锁是 `<data>/runtime/instance.lock` 的独占句柄，必须在开库之前拿到。
 ///
-/// 第二份进程若照常启动，它会：把 port.txt 改成自己那个随机端口（运维菜单从此指向死端口）、
-/// 并按**自己进程**的在飞表收尸——第一份真正在飞的那一张在它眼里是僵尸，判成 error 之后，
-/// 第一份回来落盘时状态守卫不认，刚生成的成图和缩略档被当成没人认领的孤儿删掉。
+/// 第二份进程若照常启动，它会按**自己进程**的在飞表收尸——第一份真正在飞的那一张在它眼里是僵尸，
+/// 判成 error 之后，第一份回来落盘时状态守卫不认，刚生成的成图和缩略档被当成没人认领的孤儿删掉。
 /// 钱花了、图没了、库里写着 error。
 ///
 /// 句柄故意不关：进程活着锁就在，进程被 kill 时由系统回收，盘上不留脏状态。
@@ -73,27 +78,39 @@ pub fn want_port() -> u16 {
 fn lock_data_dir(data: &Path) -> Result<()> {
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .share_mode(0)
-            .open(data.join("instance.lock"))
-        {
-            Ok(f) => std::mem::forget(f),
-            // 32 = ERROR_SHARING_VIOLATION：另一个进程正持有这个目录
-            Err(e) if e.raw_os_error() == Some(32) => {
-                return Err(AppError::Fail(
-                    "这个数据目录已经有另一个 Synco 在用了：回到已经开着的那个窗口即可（再双击图标会把它叫到前面）".into(),
-                ))
+        let dir = runtime_dir(data);
+        fs::create_dir_all(&dir).map_err(AppError::Io)?;
+        // 这一版起锁挪进 runtime/，但根目录那份**也要拿**：还开着的老版本只认根目录那把，
+        // 我们若只锁新位置，两版就会同时开库、互相把对方的在飞任务判成僵尸收尸——正是要挡的那场事故。
+        for p in [dir.join("instance.lock"), data.join("instance.lock")] {
+            match hold_exclusive(&p) {
+                Ok(f) => std::mem::forget(f),
+                // 32 = ERROR_SHARING_VIOLATION：另一个进程正持有这个目录
+                Err(e) if e.raw_os_error() == Some(32) => {
+                    return Err(AppError::Fail(
+                        "这个数据目录已经有另一个 Synco 在用了：回到已经开着的那个窗口即可（再双击图标会把它叫到前面）".into(),
+                    ))
+                }
+                Err(e) => return Err(AppError::Io(e)),
             }
-            Err(e) => return Err(AppError::Io(e)),
         }
     }
     #[cfg(not(windows))]
     let _ = data;
     Ok(())
+}
+
+/// 独占打开一个文件：`share_mode(0)` 让别人连开都开不了，锁的凭据就是这个还握着的句柄。
+#[cfg(windows)]
+fn hold_exclusive(p: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).write(true).create(true).share_mode(0).open(p)
+}
+
+/// 清掉不再生成的老文件。只碰确定没人再写的：`port.txt` 已经从"落盘给人猜端口"改成"起服务的人自己知道端口"。
+/// 老的 `instance.lock` 要留着当第二把锁，老的 `server.log` 可能还被谁开着——都不动。
+fn sweep_legacy_runtime_files(data: &Path) {
+    let _ = std::fs::remove_file(data.join("port.txt"));
 }
 
 pub struct Boot {
@@ -107,15 +124,17 @@ pub struct Boot {
 /// 「关于」分区要据此说清界面是从盘上还是从 exe 里取的。
 pub static DESKTOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// 起服务：先独占数据目录（同目录的第二份进程在这里就被挡下），再建库、绑端口（占用就退随机）、写 port.txt、收尸、补派生档。
+/// 起服务：先独占数据目录（同目录的第二份进程在这里就被挡下），再建库、绑端口（占用就退随机）、收尸、补派生档。
+/// 实际端口只从 `Boot.port` 走：谁起服务谁就知道端口，不再往盘上落一个 port.txt 让别人来猜。
 /// 返回的 server 一旦完成，端口与队列就已经在跑了。
 pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     fs::create_dir_all(&data).map_err(AppError::Io)?;
     lock_data_dir(&data)?;
+    sweep_legacy_runtime_files(&data);
     let ctx = Ctx::new(data.clone(), public, db::open(&data)?);
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), want);
-    // 端口被占就退随机，并把实际端口写进 port.txt 给运维菜单读
+    // 端口被占就退随机：桌面壳拿的是 Boot.port，跟着走就行
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) if want != 0 => {
@@ -125,7 +144,6 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
         Err(e) => return Err(AppError::Io(e)),
     };
     let real = listener.local_addr()?.port();
-    let _ = fs::write(data.join("port.txt"), real.to_string());
 
     let app = Router::new()
         .merge(api::router())
@@ -137,7 +155,7 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
         .layer(axum::middleware::from_fn(web::csp::apply))
         .with_state(ctx.clone());
 
-    println!("Synco（Rust {}）  SYNCO_URL=http://127.0.0.1:{real}", version::VERSION);
+    println!("Synco 新刻（Rust {}）  SYNCO_URL=http://127.0.0.1:{real}", version::VERSION);
     println!("  数据目录 {}", data.display());
     let c = service::workflow::get_cfg(&ctx);
     println!(

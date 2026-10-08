@@ -49,6 +49,7 @@ pub fn router() -> Router<Shared> {
         .route("/api/images/{id}/mask", post(images::mask_post))
         .route("/api/images/{id}/adjust", get(adjust::adjust_get).post(adjust::adjust_post))
         .route("/api/images/{id}/adjust/preview", post(adjust::preview_post))
+        .route("/api/images/{id}/adjust/tiles", get(adjust::tiles_get))
         .route("/api/images/{id}/adjust/render", post(adjust::render_post))
         .route("/api/images/{id}/adjust/fork", post(adjust::fork_post))
         .route("/api/images/{id}/derived", get(images::derived_get))

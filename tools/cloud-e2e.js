@@ -125,8 +125,8 @@ function startMock() {
 }
 
 // ---- 起一个隔离实例：临时 DATA + 随机端口，绝不碰 7861 --------------------------
+// 端口不再落盘：服务起来会打 `SYNCO_URL=http://127.0.0.1:<port>`，从自己的输出里读就是它绑成的那个
 function boot(dataDir) {
-  try { fs.unlinkSync(path.join(dataDir, 'port.txt')); } catch { /* 首轮没有 */ }
   const proc = spawn(RUST_BIN, [], { cwd: ROOT, env: { ...process.env, SYNCO_DATA: dataDir, SYNCO_PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   const log = [];
   proc.stdout.on('data', b => log.push(b.toString()));
@@ -134,11 +134,10 @@ function boot(dataDir) {
   const t0 = Date.now();
   return new Promise((res, rej) => {
     const tick = () => {
-      let p = null;
-      try { p = fs.readFileSync(path.join(dataDir, 'port.txt'), 'utf8').trim(); } catch { /* 还没写 */ }
-      if (p && /^\d+$/.test(p)) return res({ proc, log, base: `http://127.0.0.1:${p}` });
+      const m = /SYNCO_URL=http:\/\/127\.0\.0\.1:(\d+)/.exec(log.join(''));
+      if (m) return res({ proc, log, base: `http://127.0.0.1:${m[1]}` });
       if (proc.exitCode !== null) return rej(new Error('工坊启动就退了：\n' + log.join('')));
-      if (Date.now() - t0 > 20000) return rej(new Error('等 port.txt 超时'));
+      if (Date.now() - t0 > 20000) return rej(new Error('等 SYNCO_URL 超时'));
       setTimeout(tick, 120);
     };
     tick();
@@ -446,6 +445,30 @@ async function main() {
   await req(srv.base, 'DELETE', `/api/results/${rid2}`);
   check('删这条记录连带删掉它的快照', !fs.existsSync(path.join(data, snapRel)), '快照还留在盘上');
   check('删一行不影响另一行的快照', fs.existsSync(path.join(data, String(row1.sketch_url).replace(/^\/file\//, ''))), row1.sketch_url);
+
+  /* ---- 遮罩与几何段必须同一个域 ----
+     源图上涂一块横长 3.2:1 的笔迹：没旋转时发出去的裁切区是横的，转 90° 之后必须换成竖的。
+     这条钉的是 queue::prepare 里那次 apply_alpha——少了它，云端按横宽比例把笔迹硬贴到竖幅上，
+     重绘落在别处，而这一行照样落 done、什么都不说（0.3.0 实测发出去的是横长那一格）。 */
+  const bandFrac = [0.30, 0.4583, 0.70, 0.5417];      // 源图 px 里约 1600×500
+  const band = png(pd.w, pd.h, (x, y) => (
+    x > pd.w * bandFrac[0] && x < pd.w * bandFrac[2] && y > pd.h * bandFrac[1] && y < pd.h * bandFrac[3]
+      ? [255, 255, 255, 255] : [0, 0, 0, 0]));
+  await req(srv.base, 'POST', `/api/images/${iid}/mask`, { b64: band.toString('base64') });
+  const hb = mock.hits.length;
+  const qb = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid], settings: { prompt: '把这块改亮' } });
+  const stb = await waitRows(srv.base, [(qb.body.results || [])[0]?.result_id], ['done', 'error']);
+  const bs = String(mock.hits[hb]?.size || '0x0').split('x').map(Number);
+  await req(srv.base, 'POST', `/api/images/${iid}/adjust`, { ops: { geometry: { rotate_deg: 90, crop: null, flip_h: false, flip_v: false, fill: 'edge' } } });
+  const hr = mock.hits.length;
+  const qr = await req(srv.base, 'POST', '/api/cloud/queue', { image_ids: [iid], settings: { prompt: '转过去再改这块' } });
+  const str2 = await waitRows(srv.base, [(qr.body.results || [])[0]?.result_id], ['done', 'error']);
+  const rs = String(mock.hits[hr]?.size || '0x0').split('x').map(Number);
+  check('没旋转时发出去的是横长那一格', stb[0] === 'done' && bs[0] > bs[1], `${stb[0]} size=${bs.join('x')}`);
+  check('旋转 90° 后裁切区跟着换成竖长', str2[0] === 'done' && rs[1] > rs[0], `${str2[0]} size=${rs.join('x')}`);
+  // 后面的谱系段还要用这张图原来那一圈笔迹与"没调整"的参数
+  await req(srv.base, 'POST', `/api/images/${iid}/adjust`, { ops: {} });
+  await req(srv.base, 'POST', `/api/images/${iid}/mask`, { b64: mask.toString('base64') });
 
   // ---- 派生谱系：fork 写父子；老库那种"只有名字里有派生号"的行靠重启回填 ----
   const fork = await req(srv.base, 'POST', `/api/results/${rows[0]}/fork`, {});

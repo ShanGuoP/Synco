@@ -62,6 +62,8 @@ export const api = {
   adjustPreviewWith: (id, ops) => request(`/api/images/${id}/adjust/preview`, { method: 'POST', body: { ops } }),
   adjustRender: id => request(`/api/images/${id}/adjust/render`, { method: 'POST', body: {} }),
   adjustFork:   id => request(`/api/images/${id}/adjust/fork`, { method: 'POST', body: {} }),
+  /** 调整视图的真像素档：成图（原分辨率）切的一套瓦片。参数为空时服务端直接回源图那一套 */
+  adjustTiles:  id => request(`/api/images/${id}/adjust/tiles`),
 
   run:      (imageIds, settings, rerunOf) => request('/api/run', { method: 'POST', body: { image_ids: imageIds, settings, rerun_of: rerunOf || null } }),
   result:   id => request(`/api/results/${id}`),

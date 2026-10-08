@@ -12,6 +12,7 @@ import { openCanvas, closeCanvas } from './views/canvas/index.js';
 import { helpModal, shortcutsModal, flowModal } from './ui/dialogs.js';
 import { settingsModal } from './ui/settings.js';
 import { toastErr } from './ui/toast.js';
+import { mountTooltip } from './ui/tooltip.js';
 import { apply, watch } from './core/theme.js';
 import { apply as applyMotion, watch as watchMotion } from './core/motion.js';
 
@@ -99,6 +100,8 @@ async function boot() {
      这里补上 <body> 那一份，并盯着系统那一档——它变了应用侧的判定要跟着重算 */
   applyMotion();
   watchMotion();
+  /* 悬停提示走 body 上一层浮标：面板/抽屉/对话框都在滚动容器里，画在元素身上的提示会被裁掉 */
+  mountTooltip();
   /* 底色已由 index.html 那条外链脚本定过；这里再走一次是为了把生效档位递给了桌面壳，
      并且让"跟随系统"这一档在设置页没打开时也跟着变 */
   apply();

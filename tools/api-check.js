@@ -26,21 +26,23 @@ function tmpData() {
 }
 
 async function boot(dataDir) {
-  try { fs.unlinkSync(path.join(dataDir, 'port.txt')); } catch {}
   const proc = spawn(BIN, [], { cwd: ROOT, env: { ...process.env, SYNCO_DATA: dataDir, SYNCO_PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   const log = [];
   proc.stdout.on('data', b => log.push(b.toString()));
   proc.stderr.on('data', b => log.push(b.toString()));
+  // 端口不再往盘上落一份：服务起来会打 `SYNCO_URL=http://127.0.0.1:<port>`，从输出里读就是它自己绑成的那个
+  const portOf = () => { const m = /SYNCO_URL=http:\/\/127\.0\.0\.1:(\d+)/.exec(log.join('')); return m ? Number(m[1]) : 0; };
   const t0 = Date.now();
   let port = 0;
   // 数据目录已经被人占着（桌面壳开着）时，服务不重试随机端口，直接带原因退出——
   // 这条从 boot 里冒出来是"已经有另一个在用了"，不是"起不来"
   const held = () => /已经有另一个 Synco/.test(log.join(''));
   while (!port) {
-    try { const p = fs.readFileSync(path.join(dataDir, 'port.txt'), 'utf8').trim(); if (/^\d+$/.test(p)) port = Number(p); } catch {}
+    port = portOf();
+    if (port) break;
     if (proc.exitCode !== null && held()) throw new Error('这个数据目录已经有另一个 Synco 在用了（自检要的是隔离实例：先设 SYNCO_DATA）');
     if (proc.exitCode !== null) throw new Error(`服务提前退出 code=${proc.exitCode}：\n${log.join('')}`);
-    if (Date.now() - t0 > 20000) throw new Error(`等 port.txt 超时：\n${log.join('')}`);
+    if (Date.now() - t0 > 20000) throw new Error(`等 SYNCO_URL 超时：\n${log.join('')}`);
     await new Promise(r => setTimeout(r, 120));
   }
   const base = `http://127.0.0.1:${port}`;
@@ -92,7 +94,7 @@ const SWEEP = [
   ['清遮罩', 'POST', '/api/images/1/mask', {}, [200]],
   ['派生列表（没有子图也回 200）', 'GET', '/api/images/1/derived', undefined, [200], r => (Array.isArray(r.body?.images) ? '' : '没有 images 数组')],
   /* ---------------- 0.3 本地调整：形状、域与"参数不是覆盖"这几件事 ----------------
-     像素级的正确性与真实渲染由 tools/adjust-check.js 在隔离实例上跑一张 900×600 的图去验，
+     像素级的正确性与真实渲染由 tools/adjust-check.js 在隔离实例上跑一张 1600×1200（长边超出 proxy 档）的图去验，
      这一批只钉契约：状态码、字段形状、越界夹逼、坏输入被拒——回归里最容易被改坏的就是这些。 */
   ['读调整参数（没存过=全默认）', 'GET', '/api/images/1/adjust', undefined, [200],
     r => (r.body?.ops?.v === 1 && r.body?.ops?.color?.exposure === 0 && Array.isArray(r.body?.presets) && r.body.presets.length >= 8 && Array.isArray(r.body?.luts) ? '' : `形状不对：${JSON.stringify(r.body).slice(0, 120)}`)],
@@ -108,6 +110,8 @@ const SWEEP = [
      所以这里要重新存一组真参数再落盘——不然测到的是"没参数时拒绝落盘"那条守卫。 */
   ['再存一组真参数（整体替换）', 'POST', '/api/images/1/adjust', { ops: { color: { exposure: 30, clarity: 20 } } }, [200],
     r => (r.body?.ops?.color?.exposure === 30 && r.body?.ops?.color?.sharpen === 0 ? '' : `替换不干净：${JSON.stringify(r.body?.ops?.color).slice(0, 120)}`)],
+  ['调整视图的瓦片清单（放大要看真像素）', 'GET', '/api/images/1/adjust/tiles', undefined, [200],
+    r => (String(r.body?.url || '').startsWith('/') && r.body?.w > 0 && r.body?.h > 0 && Array.isArray(r.body?.levels) ? '' : `瓦片形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
   ['成图落盘并回报真实宽高', 'POST', '/api/images/1/adjust/render', {}, [200],
     r => (/_adjusted[0-9a-f]{8}\.jpg$/.test(r.body?.url || '') && r.body?.w > 0 ? '' : `成图形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
   ['另存为新图挂着父子关系', 'POST', '/api/images/1/adjust/fork', {}, [200],
@@ -471,8 +475,9 @@ async function refsSelfCheck(base, dataDir) {
 
 /**
  * 数据目录独占（回归：双开毁图那条链路）。
- * 第二份进程要是跑通了，它会覆写 port.txt（运维菜单从此指向死端口）并按自己那份空白的
- * 在飞表把第一份正在跑的成图判成僵尸——所以这里看的不是"退没退"，而是盘上什么都没变。
+ * 第二份进程要是跑通了，它会按自己那份空白的在飞表把第一份正在跑的成图判成僵尸——
+ * 所以这里看的不是"退没退"，而是盘上什么都没变。
+ * 顺带钉住"port.txt 已经取消"：起服务的人自己知道端口，谁都不再往数据根目录落这个文件。
  */
 async function lockSelfCheck(base, dataDir) {
   const fails = [];
@@ -480,8 +485,8 @@ async function lockSelfCheck(base, dataDir) {
     console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond ? '' : '：' + detail}`);
     if (!cond) fails.push(name);
   };
-  const portFile = path.join(dataDir, 'port.txt');
-  const before = fs.readFileSync(portFile, 'utf8');
+  ok('数据根目录不再有 port.txt', !fs.existsSync(path.join(dataDir, 'port.txt')), '还在：端口不该再往盘上落一份');
+  ok('锁在 runtime/ 里', fs.existsSync(path.join(dataDir, 'runtime', 'instance.lock')), path.join(dataDir, 'runtime', 'instance.lock'));
   const proc = spawn(BIN, [], { cwd: ROOT, env: { ...process.env, SYNCO_DATA: dataDir, SYNCO_PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', b => { out += b.toString(); });
@@ -492,7 +497,7 @@ async function lockSelfCheck(base, dataDir) {
   });
   ok('第二份进程被挡在开库之前（非 0 退出）', typeof code === 'number' && code !== 0, `退出码 ${code}｜${out.slice(0, 120)}`);
   ok('理由说的是这个目录已经在用', /已经有另一个 Synco/.test(out), out.slice(0, 160));
-  ok('port.txt 没被第二份改写', fs.readFileSync(portFile, 'utf8') === before, `${before.trim()} → ${fs.readFileSync(portFile, 'utf8').trim()}`);
+  ok('第二份没把 SYNCO_URL 打出来（没绑成端口）', !/SYNCO_URL=/.test(out), out.slice(0, 160));
   const alive = await req(base, 'GET', '/api/projects');
   ok('第一份照常服务', alive.status === 200, `${alive.status}`);
   return fails;

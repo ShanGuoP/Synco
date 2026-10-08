@@ -235,19 +235,30 @@ pub fn mask_to_orig(ctx: &Ctx, mask_rel: &str, w: usize, h: usize) -> std::resul
 /// 返回的 JSON 直接给前端：`{w,h,tile,levels:[{z,w,h,cols,rows}],url}`，
 /// `url` 是瓦片路径模板，前端把 `{z}_{x}_{y}` 换成实际编号。
 pub fn tiles(ctx: &Ctx, img: &Image) -> std::result::Result<serde_json::Value, String> {
-    let dir = tiles_dir(ctx, img);
+    pyramid(&tiles_dir(ctx, img), &tiles_rel_root(img), || read_orig(ctx, img), &format!("/file/{}", img.orig_path))
+}
+
+/// 通用的一套金字塔：`dir` 是瓦片目录，`root` 是它在库内的相对路径（进 URL 用），
+/// `decode` 只在清单缺失时才会被调（切一套要一整幅解码，命中清单就不该付那份钱）。
+/// 源图与「本地调整」的成图走这同一条，两者只差在目录多一层、源文件是渲染出来的那一张。
+pub fn pyramid(
+    dir: &Path,
+    root: &str,
+    decode: impl FnOnce() -> std::result::Result<Rgba, String>,
+    whole_url: &str,
+) -> std::result::Result<serde_json::Value, String> {
     let meta_path = dir.join("meta.json");
     let base = if meta_path.is_file() {
         std::fs::read(&meta_path).map_err(|e| format!("读瓦片清单失败：{e}"))?
     } else {
-        let full = read_orig(ctx, img)?;
+        let full = decode()?;
         if full.w.max(full.h) < TILE_MIN {
             // 这种图整张塞进显存都不心疼，不值得为它维护一套瓦片目录
-            let small = serde_json::json!({ "w": full.w, "h": full.h, "tile": 0, "levels": [], "url": format!("/file/{}", img.orig_path) });
+            let small = serde_json::json!({ "w": full.w, "h": full.h, "tile": 0, "levels": [], "url": whole_url });
             write_bytes(&meta_path, small.to_string().as_bytes())?;
             return Ok(small);
         }
-        build_tiles(ctx, img, &full)?;
+        build_tiles_at(dir, root, &full)?;
         std::fs::read(&meta_path).map_err(|e| format!("读瓦片清单失败：{e}"))?
     };
     serde_json::from_slice(&base).map_err(|e| format!("瓦片清单坏了：{e}"))
@@ -255,18 +266,23 @@ pub fn tiles(ctx: &Ctx, img: &Image) -> std::result::Result<serde_json::Value, S
 
 /// 瓦片清单的 tokio 入口：与派生档共用同一对槽。
 /// 首次访问那张图要切一套（一整幅解码 + 每层重采样），而编辑器进来可能一次打上好几个请求；
-/// 不限流就是 N 份全分辨率解码同时铺开。拿到槽之后 `tiles()` 自己会先看 meta.json，
+/// 不限流就是 N 份全分辨率解码同时铺开。拿到槽之后 `pyramid()` 自己会先看 meta.json，
 /// 已经被别人切完的那次就直接读清单回来。
 pub async fn tiles_async(ctx: &Shared, img: Image) -> std::result::Result<serde_json::Value, String> {
-    let Ok(_slot) = SLOTS.acquire().await else { return Err("瓦片的限流槽已经关了".into()) };
     let ctx2 = ctx.clone();
-    tokio::task::spawn_blocking(move || tiles(&ctx2, &img)).await.unwrap_or_else(|e| Err(format!("瓦片线程崩了：{e}")))
+    pyramid_async(move || tiles(&ctx2, &img)).await
 }
 
-fn build_tiles(ctx: &Ctx, img: &Image, full: &Rgba) -> std::result::Result<(), String> {
+/// 切一套瓦片的公共入口：源图与「本地调整」的成图共用这一对限流槽，
+/// 因为两者的开销是同一件事——一整幅解码 + 每层重采样 + 上百张编码。
+/// `work` 由调用方决定切哪张图（调整那条要先读库里的参数）。
+pub async fn pyramid_async(work: impl FnOnce() -> std::result::Result<serde_json::Value, String> + Send + 'static) -> std::result::Result<serde_json::Value, String> {
+    let Ok(_slot) = SLOTS.acquire().await else { return Err("瓦片的限流槽已经关了".into()) };
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|e| Err(format!("瓦片线程崩了：{e}")))
+}
+
+fn build_tiles_at(dir: &Path, root: &str, full: &Rgba) -> std::result::Result<(), String> {
     let sizes = level_sizes(full.w, full.h);
-    let root = tiles_rel_root(img);
-    let dir = tiles_dir(ctx, img);
     // 从最细一层开始，逐级减半往下走：每级只重采样上一级，比每级都从 24MP 原图重采便宜得多
     let mut cur = full.clone();
     let mut levels = Vec::with_capacity(sizes.len());

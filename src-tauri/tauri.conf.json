@@ -20,8 +20,8 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "shortDescription": "Synco",
-    "longDescription": "本机 ComfyUI / 云端局部重绘工作台",
+    "shortDescription": "Synco 新刻",
+    "longDescription": "Synco 新刻：本机 ComfyUI / 云端局部重绘工作台",
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",

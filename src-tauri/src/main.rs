@@ -223,13 +223,13 @@ fn copy_data_to(to: String, state: State<'_, Shell>, ctx: State<'_, synco_server
     Ok(serde_json::json!({ "dir": next.info(ctx.inner()), "copied": { "files": files, "bytes": bytes } }))
 }
 
-/// 逐条复制：跳过 port.txt 这类运行时文件，任何一步失败把错误原文带出去
+/// 逐条复制：跳过 runtime/（锁与日志）这类进程私有的东西，任何一步失败把错误原文带出去
 fn copy_tree(from: &Path, to: &Path) -> std::result::Result<(usize, u64), String> {
     let mut n = (0usize, 0u64);
     for e in fs::read_dir(from).map_err(|e| format!("读 {} 失败：{e}", from.display()))? {
         let e = e.map_err(|e| e.to_string())?;
         let name = e.file_name();
-        if ["port.txt", "desktop.json", "instance.lock"].contains(&name.to_string_lossy().as_ref()) {
+        if ["runtime", "port.txt", "desktop.json", "instance.lock", "server.log"].contains(&name.to_string_lossy().as_ref()) {
             continue;
         }
         let src = e.path();
@@ -393,8 +393,8 @@ fn main() {
         //
         // 所以服务不能在 main 顶部起：插件的初始化发生在 Builder::build()，而这里写的
         // setup 要等事件循环的 Ready 才跑——早先 serve() 排在 Builder 之前，第二份进程已经
-        // 覆写过 port.txt、已经按自己那份空白的在飞表把第一份正在跑的成图判成僵尸收掉了。
-        // 挪进 setup 之后，第二份在碰库和 port.txt 之前就 exit(0)。
+        // 开过库、按自己那份空白的在飞表把第一份正在跑的成图判成僵尸收掉了。
+        // 挪进 setup 之后，第二份在碰库之前（更碰不到 runtime/ 那把锁）就 exit(0)。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -414,7 +414,7 @@ fn main() {
             let url = format!("http://127.0.0.1:{port}/{}", if prompt { "?firstrun=1" } else { "" });
             let url: tauri::Url = url.parse()?;
             let _w = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
-                .title("Synco")
+                .title("Synco 新刻")
                 // 无边框：页面顶栏兼作标题区（data-tauri-drag-region），窗口三颗键由前端画。
                 // 留着 shadow 与 resizable，否则贴到屏幕边上会像一块没有厚度的纸
                 .decorations(false)

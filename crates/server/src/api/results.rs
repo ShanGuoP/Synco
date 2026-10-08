@@ -7,7 +7,7 @@ use crate::models::dto;
 use crate::repo::{images as rimg, projects as rproj, results as rres};
 use crate::service::{comfy, reclaim};
 use crate::state::Shared;
-use crate::{service::imagesvc, util};
+use crate::util;
 use axum::body::Bytes;
 use axum::extract::{Path as APath, Query, State};
 use axum::response::Response;
@@ -88,18 +88,17 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     if let cfg::Plan::Refused { errors } = &plan {
         return Ok(skipped(&format!("你的工作流不能接管提交：{}", errors.join("；"))));
     }
-    // 涂抹层存的是 proxy 分辨率，而工作流里 DrawMaskOnImage 要和原图同尺寸，先上采样。
-    // 读原图与这次上采样都是全分辨率的活，整段过阻塞池：压在 worker 上时桌面壳的窗口会一起卡住
-    let mask_rel = mask_path.clone();
-    let (mw, mh) = (i.w as usize, i.h as usize);
-    // 提交的是"调整后"的图（拍板 4）：本机这条与工作流看到的都是用户在屏幕上那张。
-    // 没动过滑杆时 submit_artifact 原样回文件字节与原路径，链路与 0.2.1 逐字节一致。
+    // 提交给本机工作流的是"调整后"那张（拍板 4）：遮罩与照片必须同一套参数算出来。
+    // 没动过滑杆时两条都原样回文件字节与原路径，链路与 0.2.1 逐字节一致。
+    // 涂抹层存的是 proxy 分辨率，工作流里 DrawMaskOnImage 又要和照片同幅：上采样与几何段都在服务侧做完
+    // （见 adjust::submit_mask——照片过了几何段而遮罩没过，圈到的就是另一块地方）。
+    // 读原图与这两步都是全分辨率的活，整段过阻塞池：压在 worker 上时桌面壳的窗口会一起卡住
     let (photo_bytes, mask_bytes, sent_rel) = {
         let ctx2 = ctx.clone();
         let img = i.clone();
         util::blocking(move || -> Result<(Vec<u8>, Vec<u8>, String)> {
             let (p, rel) = crate::service::adjust::submit_artifact(&ctx2, &img).map_err(AppError::Fail)?;
-            let m = imagesvc::mask_to_orig(&ctx2, &mask_rel, mw, mh).map_err(AppError::bad)?;
+            let m = crate::service::adjust::submit_mask(&ctx2, &img).map_err(AppError::bad)?;
             Ok((p, m, rel))
         })
         .await?

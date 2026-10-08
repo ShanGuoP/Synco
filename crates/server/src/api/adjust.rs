@@ -7,7 +7,7 @@ use super::common::{body_of, err, ok, path_id};
 use crate::error::{AppError, Result};
 use crate::models::entity::Image;
 use crate::repo::{adjust as radj, images as rimg};
-use crate::service::adjust;
+use crate::service::{adjust, imagesvc};
 use crate::state::Shared;
 use crate::util;
 use axum::body::Bytes;
@@ -166,5 +166,23 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
             });
         }
     }
+    Ok(ok(out))
+}
+
+/// 调整视图的瓦片：放大到 1:1 要看的是真实像素，preview 那张 proxy 档不够。
+/// 参数还是空的就直接回源图那一套，前端不必自己分辨屏幕上摆的是哪一张。
+pub async fn tiles_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
+    let iid = path_id(&id)?;
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "no image")) };
+    // 与源图瓦片同一对限流槽、同一条阻塞池：一次请求是一整幅解码 + 每层重采样 + 上百张编码
+    let out = imagesvc::pyramid_async(move || {
+        let ops = adjust::load_ops(&ctx, img.id);
+        if ops.is_identity() {
+            return imagesvc::tiles(&ctx, &img);
+        }
+        adjust::tiles(&ctx, &img, &ops)
+    })
+    .await
+    .map_err(AppError::Fail)?;
     Ok(ok(out))
 }

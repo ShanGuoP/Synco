@@ -66,6 +66,24 @@ function crc32(buf) {
   return ~c >>> 0;
 }
 
+/* JPEG 头里的真实宽高：SOF 段（FFC0–FFCF，跳过 DHT/CIP）后第 5–6 字节是高、7–8 是宽。
+   用来把"接口报的尺寸"与"盘上那张的分辨率"分开验——两者相等就等于没验到 proxy 档那一条。 */
+function jpegSize(file) {
+  if (!fs.existsSync(file)) return null;
+  const b = fs.readFileSync(file);
+  for (let i = 2; i + 9 < b.length; i++) {
+    if (b[i] !== 0xff) continue;
+    const m = b[i + 1];
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+      return { h: b.readUInt16BE(i + 5), w: b.readUInt16BE(i + 7) };
+    }
+    const len = b.readUInt16BE(i + 2);
+    if (!(len > 1)) continue;
+    i += len + 1;
+  }
+  return null;
+}
+
 /* ---------- 隔离实例 ---------- */
 function tmpData() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'synco-adj-e2e-'));
@@ -97,9 +115,14 @@ async function main() {
     }
     console.log(`隔离实例 :${port}  DATA ${data}\n`);
 
-    /* ---- 导一张 900×600 的图，等派生档补齐 ---- */
-    const pngBuf = png(900, 600);
-    const proj = await req(base, 'POST', '/api/projects', { name: '调整链路', files: [{ name: 'sample.png', b64: pngBuf.toString('base64'), w: 900, h: 600 }] });
+    /* proxy 档降到 1024：预览那条链只有在"proxy 比源图小"时才会露出尺寸口径的问题，
+       0.3.0 正是这么坏掉的——报的是 proxy 档自己的宽高，前端拿它当了画幅 */
+    const pe = await req(base, 'POST', '/api/settings/proxy-edge', { proxy_edge: 1024 });
+    ok('隔离实例把 proxy 档降到 1024', pe.body?.proxy_edge === 1024, JSON.stringify(pe.body));
+
+    /* ---- 导一张 1600×1200 的图（长边超出 proxy 档），等派生档补齐 ---- */
+    const pngBuf = png(1600, 1200);
+    const proj = await req(base, 'POST', '/api/projects', { name: '调整链路', files: [{ name: 'sample.png', b64: pngBuf.toString('base64'), w: 1600, h: 1200 }] });
     const imgId = proj.body?.image_ids?.[0];
     ok('导入一张图', !!imgId, JSON.stringify(proj.body));
     let info = null;
@@ -110,6 +133,12 @@ async function main() {
     }
     ok('派生档已就位', !!(info && (info.thumb_url || info.proxy_url)), JSON.stringify(info || {}).slice(0, 200));
     const dims = { w: info.w, h: info.h };
+    ok('源图比 proxy 档大（这条链路要的就是这种图）', Math.max(dims.w, dims.h) > 1024, JSON.stringify(dims));
+
+    /* ---- 0. 没参数时"调整瓦片"就等于源图那一套：前端不必分辨屏幕上摆的是哪一张 ---- */
+    const t0 = await req(base, 'GET', `/api/images/${imgId}/adjust/tiles`);
+    const src0 = await req(base, 'GET', `/api/images/${imgId}/tiles`);
+    ok('空参数时调整瓦片回的是源图那套', t0.status === 200 && t0.body?.url === src0.body?.url, `${JSON.stringify(t0.body).slice(0, 160)} vs ${src0.body?.url}`);
 
     /* ---- 1. GET adjust：无记录 = 全默认 ---- */
     const g0 = await req(base, 'GET', `/api/images/${imgId}/adjust`);
@@ -135,6 +164,10 @@ async function main() {
     ok('预览返回 URL 与宽高', p1.status === 200 && prevRel.includes('_adjprev') && p1.body.w === dims.w, JSON.stringify(p1.body).slice(0, 200));
     const prevFile = path.join(data, prevRel);
     ok('预览档真的在盘上', fs.existsSync(prevFile), prevFile);
+    // 分开验两件事：接口报的是**成图**尺寸，盘上那张确实还是 proxy 分辨率。
+    // 只验前一句的话，把 build_preview 改回报 out.w 也照样过（那就是 0.3.0 的原始缺陷）
+    const prevPx = jpegSize(prevFile);
+    ok('预览档本身是 proxy 分辨率（报出去的却是成图尺寸）', !!prevPx && prevPx.w === 1024 && p1.body.w === dims.w, `${JSON.stringify(prevPx)} vs ${p1.body.w}×${p1.body.h}`);
     const sz1 = fs.existsSync(prevFile) ? fs.statSync(prevFile).size : 0;
     const p2 = await req(base, 'POST', `/api/images/${imgId}/adjust/preview`, {});
     ok('同参数二次预览复用同一份（不重算）', p2.body.reused === true && p2.body.preview_url === p1.body.preview_url, JSON.stringify(p2.body).slice(0, 160));
@@ -145,6 +178,27 @@ async function main() {
     const prevRel3 = (p3.body?.preview_url || '').replace('/file/', '');
     ok('换参数就是另一个文件', prevRel3 !== prevRel && !fs.existsSync(prevFile), `${prevRel} → ${prevRel3}`);
     ok('旧预览档被请走（目录不堆版本）', !fs.existsSync(prevFile), prevFile);
+
+    /* ---- 4b. 放大要看真像素：调整视图的瓦片切的是成图那一档，不是 proxy ---- */
+    await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { color: { exposure: 60, clarity: 30 } } });
+    const t1 = await req(base, 'GET', `/api/images/${imgId}/adjust/tiles`);
+    const turl = t1.body?.url || '';
+    ok('调整瓦片报成图尺寸（与画幅同一个数）', t1.status === 200 && t1.body?.w === dims.w && t1.body?.h === dims.h, JSON.stringify(t1.body).slice(0, 200));
+    ok('瓦片目录按参数指纹归位', /\/tiles\/\d+\/adj[0-9a-f]{8}$/.test(turl.split('/{z}/')[0]), turl);
+    const lv = t1.body?.levels || [];
+    ok('成图切出了金字塔', t1.body?.tile === 512 && lv.length > 1, JSON.stringify(lv).slice(0, 160));
+    if (lv.length) {
+      const fine = lv[lv.length - 1];
+      const one = await req(base, 'GET', turl.replace('{z}', String(fine.z)).replace('{x}', '0').replace('{y}', '0'));
+      ok('最细一层的瓦片取得到且可长期缓存', one.status === 200 && /immutable/.test(one.cache || ''), `${one.status} ${one.cache}`);
+    }
+    // 换一套参数 = 换一套目录，旧的那套要被请走：一次上百张，留着就是白堆磁盘
+    await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { color: { exposure: -30, clarity: 30 } } });
+    const t2 = await req(base, 'GET', `/api/images/${imgId}/adjust/tiles`);
+    const adjDir = t1.body.url.replace('/file/', '').split('/{z}/')[0];
+    const rootRel = path.dirname(adjDir.split('/').join(path.sep));
+    const still = fs.existsSync(path.join(data, rootRel)) ? fs.readdirSync(path.join(data, rootRel)).filter(n => n.startsWith('adj')) : [];
+    ok('换参数后只留当前这一套瓦片', t2.body?.url !== turl && still.length === 1, `${path.join(data, rootRel)} → ${still.join(',') || '（没有 adj 目录）'}`);
 
     /* ---- 5. 几何：转 90° 之后成图换边长 ---- */
     await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { geometry: { rotate_deg: 90, crop: null, flip_h: false, flip_v: false, fill: 'edge' } } });

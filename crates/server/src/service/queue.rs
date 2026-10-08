@@ -265,12 +265,18 @@ fn prepare(ctx: &Shared, img: &Image, settings: &Value) -> std::result::Result<P
         levels: stitch_core::DEFAULT_LEVELS,
         invert: settings.get("invert").and_then(Value::as_bool).unwrap_or(false),
     };
-    // 云端吃的也是"调整后"的那一张（拍板 4）：用户涂的蒙版画在调整后预览上，坐标天然同域
+    // 云端吃的也是"调整后"的那一张（拍板 4）
     let ops = crate::service::adjust::load_ops(ctx, img.id);
     let photo = crate::service::adjust::photo_with(ctx, img, &ops)?;
     // 反向涂抹且没存过遮罩 = 一笔没保 = 整幅重绘，这时没有遮罩文件是合法输入；正向仍然要拦
     let mask_alpha = match img.mask_path.as_deref().and_then(|m| util::data_file(&ctx.data, m)) {
-        Some(p) => codec::decode(&std::fs::read(&p).map_err(|e| format!("读遮罩失败：{e}"))?)?.alpha(),
+        Some(p) => {
+            let a = codec::decode(&std::fs::read(&p).map_err(|e| format!("读遮罩失败：{e}"))?)?.alpha();
+            // 笔迹活在**源图域**（带着裁切/旋转时画笔是锁住的），而 photo 是几何段之后那张。
+            // 不带着遮罩一起过这一段，下游那个 `k = 图宽 / 遮罩宽` 就把源图的比例硬套到转过的画幅上：
+            // 0.3.0 实测转 90° 提交，发出去的裁切区还是横长的一格，重绘落在别处，而这一行照样落 done
+            photoedit_core::geometry::apply_alpha(&a, &ops.geometry)
+        }
         // 按**已解码的真实尺寸**开这张空笔迹缓冲：库里那对 w/h 是导入时客户端自报的（只夹到 3 万），
         // 跟着它开就是 30000×30000 = 900MB，dilate 再 clone 一份，ink_bbox 单线程扫 9 亿个点
         None if params.invert => stitch_core::Alpha::new(photo.w, photo.h),

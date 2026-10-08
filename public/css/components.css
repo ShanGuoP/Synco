@@ -182,23 +182,17 @@
 .dot--err     { background: var(--danger); }
 .dot--mask    { background: var(--spot); }
 
-/* ---------- 悬停提示 tooltip（纯 CSS，data-tip） ---------- */
-[data-tip] { position: relative; }
-[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute; left: 50%; bottom: calc(100% + 8px);
-  transform: translate(-50%, 4px);
+/* ---------- 悬停提示：body 上的一层浮标（逻辑在 ui/tooltip.js） ----------
+   以前是 [data-tip]::after，画在元素自己身上——于是凡在滚动容器里的提示都被容器裁掉半截。 */
+.tip {
+  position: fixed; left: 0; top: 0; z-index: 400;
+  width: max-content; max-width: 46vw;
   padding: 4px 8px; border-radius: var(--r-1);
   background: var(--bg-ink); box-shadow: var(--sh-2);
-  color: var(--txt-inv); font-size: var(--f-xs); font-weight: 400; letter-spacing: .3px;
-  white-space: nowrap; pointer-events: none; opacity: 0; z-index: 90;
-  transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease-out);
+  color: var(--txt-inv); font-size: var(--f-xs); font-weight: 400; letter-spacing: .3px; line-height: 1.45;
+  pointer-events: none; user-select: none;
 }
-[data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
-[data-tip-side="right"]::after { left: calc(100% + 8px); bottom: 50%; transform: translate(-4px, 50%); }
-[data-tip-side="right"]:hover::after { transform: translate(0, 50%); }
-[data-tip-side="top"]::after { bottom: auto; top: calc(100% + 8px); transform: translate(-50%, -4px); }
-[data-tip-side="top"]:hover::after { transform: translate(-50%, 0); }
+.tip[hidden] { display: none; }
 
 /* ---------- 阶段步骤 ---------- */
 .steps { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }

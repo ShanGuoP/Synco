@@ -102,17 +102,18 @@ function startMock() {
 }
 
 async function boot(dataDir) {
-  try { fs.unlinkSync(path.join(dataDir, 'port.txt')); } catch {}
   const proc = spawn(BIN, [], { cwd: ROOT, env: { ...process.env, SYNCO_DATA: dataDir, SYNCO_PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   const log = [];
   proc.stdout.on('data', b => log.push(b.toString()));
   proc.stderr.on('data', b => log.push(b.toString()));
   const t0 = Date.now();
   let port = 0;
+  // 端口不再往盘上落一份：从服务自己打的 SYNCO_URL 里读，就是它实际绑成的那个
   while (!port) {
-    try { const p = fs.readFileSync(path.join(dataDir, 'port.txt'), 'utf8').trim(); if (/^\d+$/.test(p)) port = Number(p); } catch {}
+    const m = /SYNCO_URL=http:\/\/127\.0\.0\.1:(\d+)/.exec(log.join(''));
+    if (m) port = Number(m[1]);
     if (proc.exitCode !== null) throw new Error(`服务提前退出 code=${proc.exitCode}：\n${log.join('')}`);
-    if (Date.now() - t0 > 20000) throw new Error(`等 port.txt 超时：\n${log.join('')}`);
+    if (Date.now() - t0 > 20000) throw new Error(`等 SYNCO_URL 超时：\n${log.join('')}`);
     await new Promise(r => setTimeout(r, 120));
   }
   const base = `http://127.0.0.1:${port}`;

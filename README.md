@@ -1,13 +1,14 @@
-# Synco
+# Synco 新刻
 
 **只重绘你涂到的地方，其余像素不动。**
 
 导入照片 → 涂出要修的区域 → 交给本机 ComfyUI 或云端图像接口重绘 → 自动缝回原图。
 
-和"整图重绘"的区别：整图重绘会顺手改掉你的背景、衣服纹理和没让你动的脸。Synco 只替换蒙版里的像素，
-羽化过渡带之外与原图**逐位相同**，接缝用多频段融合过渡，不留贴图边框。
+和"整图重绘"的区别：整图重绘会顺手改掉你的背景、衣服纹理和没让你动的脸。Synco 只替换蒙版里的像素，羽化过渡带之外与原图**逐位相同**，接缝用多频段融合过渡，不留贴图边框。
 
-Windows 桌面应用（64 位），不需要管理员权限，照片始终只待在你自己指定的目录里。
+这个Demo最初很小，小到不好意思称它为项目，只是一个 Node 写的工具，功能栏里只有一个按钮**GPT Image 重绘**，后来要接 ComfyUI，又发现原图处理有性能瓶颈，旧的那点代码撑不住了（图片滑动经常卡死），想改，改不动，毕竟现在我的代码水平，也就写一手 CRUD ，索性推倒重来，方案与大肥鱼DeepSeek-v4.1-Flash、GLM-5.3-Flash、GPT-6.1-Sol、Qwen-3.8-Flash来来回回讨论了几轮，最后定了 Rust重构的方案，其实本来打算用更为熟悉的Go，但是与AI对线的时候发现Rust在图像处理方面的性能似乎更好，行，那就 Rust。
+
+Rust 版的绝大多数代码是 Qwen-3.8-Flash 写的，最后GLM-5.3、DeepSeek-v4.1-Flash 和 GPT-6.1-Sol 负责交叉审计。
 
 ---
 
@@ -20,10 +21,13 @@ Windows 桌面应用（64 位），不需要管理员权限，照片始终只待
 - **原图分辨率出图**：界面里为了流畅只铺缩放档，重绘和缝合都在原始分辨率上做——24MP 的照片
   不会因为你涂得顺手就掉清晰度
 - **成图接着改**：任意一张结果都能「另存为新图」再涂一轮，或「用这组参数再改一次」把参数搬回右面板
-- **不连后端也能出活**（0.3 起）：裁切重构（宽高比、90° 步进与 ±15° 微调、翻转）、手动液化
-  （推挤/收缩/膨胀/恢复四把笔刷）、十根调色滑杆 + 内置预设 + `.cube` LUT（把 `.cube` 文件放进
-  数据目录下的 `luts/` 就会出现在下拉里）、磨皮/美白/锐化——
+- **不连后端也能出活**（0.3 起）：裁切重构（点一下宽高比就把框摆出来，拖完按「✔ 裁这一版」才生效；
+  90° 步进无损、±15° 微调带扩边、翻转）、手动液化（推挤/收缩/膨胀/恢复四把笔刷）、
+  十根调色滑杆 + 内置预设 + `.cube` LUT（把 `.cube` 文件放进数据目录下的 `luts/` 就会出现在下拉里）、
+  磨皮/美白/锐化（能只作用在你涂过遮罩的那一块）——
   像素全在你这台机器上算，不叫 ComfyUI、不经云端
+- **调整完也能 1:1 看**：拖滑杆时铺的是缩放档的快预览，放大到实际像素会自动换成按原始分辨率
+  渲染的那一版；不满意随时「清空全部调整」退回源图
 - **调整是一组参数，不是覆盖**：原图永不改写；预览按缩放档算，落成图才走原始分辨率，
   随时能退回，也能把调整结果「应用为新图」接着涂再交给重绘
 - **蒙版随时改**：以 PNG 原地存在项目目录里，橡皮可擦回，最多回退 8 笔
@@ -40,7 +44,7 @@ Windows 桌面应用（64 位），不需要管理员权限，照片始终只待
 
 ## 下载与安装
 
-从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco_0.3.0_x64-setup.exe`**，双击安装
+从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco_x.x.x_x64-setup.exe`**，双击安装
 （装到当前用户目录，不需要管理员权限；安装界面是简体中文）。装完从开始菜单启动 **Synco**。
 
 > Releases 里还没有东西时，见下面的[从源码构建](#从源码构建)。
@@ -59,6 +63,36 @@ Synco 自己不带模型，它是**调度台 + 缝合内核**。下面二选一�
 | ComfyUI | 一个能跑起来的本机实例，Synco 默认找 `http://127.0.0.1:8188` |
 | Qwen-Image 2.1 权重 | `qwen_image_2.1_bf16.safetensors`（unet，约 14.2 GB）<br>`qwen3vl_8b_int8_convrot.safetensors`（clip，约 9.4 GB）<br>`qwen_image_2.1_vae_bf16.safetensors`（vae，约 0.68 GB） |
 | 一个局部重绘工作流 | 在 ComfyUI 里用 **Save (API Format)** 导出的那份 JSON——**提交用的计算图就是它**。Synco 只往里填照片、遮罩、提示词、种子/步数/CFG 和 LoRA 开关，裁切参数、模型、连线一概照你文件里那样跑 |
+
+## 依赖与素材来源
+
+### ComfyUI
+
+- 仓库：<https://github.com/Comfy-Org/ComfyUI.git>
+
+### Qwen-Image 2.1 权重
+
+国内（hf-mirror 直链）：
+
+- unet：<https://hf-mirror.com/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_bf16.safetensors>
+- clip：<https://hf-mirror.com/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors>
+- vae：<https://hf-mirror.com/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors>
+
+海外（Hugging Face 直链）：
+
+- unet：<https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_bf16.safetensors>
+- clip：<https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors>
+- vae：<https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors>
+
+### 局部重绘工作流
+
+- B 站 [**黑鹤001**](https://space.bilibili.com/515231056/?spm_id_from=333.788.upinfo.detail.click)：<https://www.bilibili.com/video/BV1jmau6jexh/>
+
+### COS LoRA
+
+- B 站 [**AI-Matt**](https://space.bilibili.com/515050794/?spm_id_from=333.788.upinfo.detail.click)：<https://civitai.com/models/2975411/cosv2cos-auto-retouching-v2>
+
+  
 
 三件权重加起来约 24 GB 磁盘，放在 ComfyUI 的 `models/` 下、按类别分子目录即可。
 
@@ -131,6 +165,12 @@ Synco 自己不带模型，它是**调度台 + 缝合内核**。下面二选一�
 | `Esc` | 退出对比 / 关闭弹窗 |
 | `?` | 快捷键表 |
 
+**本地调整**（右栏「本地调整」那一页）：裁切、液化、调色、美颜四组参数，原图从头到尾没被改写过。
+裁切的入口就是那一排宽高比——点一颗，画面上就摆出框来（「自由」= 摆框不锁比例，再点当前那颗收起），
+拖手柄或整框调位置，**只有按「✔ 裁这一版」才真的落定**，不点就等于没裁。旋转/翻转是即时的，
+90° 那一档不重采样。液化先选笔刷再「开始画形」，一笔一笔记在参数里，「退一笔」「清掉笔画」随时反悔。
+调完想接着涂遮罩交给重绘：先「应用为新图」，它会带着这套参数变成项目里的另一张图，源图那份参数还在。
+
 **导出**：设置 → 导出目录填一个本机文件夹（不存在会自动建），然后在精修页顶栏点「导出」，
 这张当前的成图会以 `<原图名_#结果号>.png` 复制进去（重名自动加 (2)(3)）；对比视图里另有
 「下载成图 / 裁切图 / 遮罩叠加」三个直链。
@@ -143,7 +183,8 @@ Synco 自己不带模型，它是**调度台 + 缝合内核**。下面二选一�
 装在 `Program Files` 这种没写权限的地方时，会自动改存 `%LOCALAPPDATA%\Synco\data`。
 设置 → 数据目录可以指到任意盘，也能「把资料复制到新目录…」。
 
-里面 `app.db` 是数据库，`projects/<项目号>/` 是原图、蒙版、成图和各级缩略档——**要备份就得整个目录一起拿**。
+里面 `app.db` 是数据库，`projects/<项目号>/` 是原图、蒙版、成图和各级缩略档，`runtime/` 是锁与日志
+（进程私有的东西全收在这，不摊在根目录上）——**要备份就得整个目录一起拿**，只有 `runtime/` 可以不带。
 
 **别同步到网盘。** 库里存着明文的云端 API key，而且网盘的按需拉取/占位文件会让 SQLite 的 WAL 写坏。
 换电脑就用设置里的「把资料复制到新目录」（它会先把 WAL 合并干净再整棵复制，目标目录已有库时会拒绝覆盖），
@@ -247,3 +288,41 @@ Noto is a trademark of Google Inc.
 
 授权全文见 [`public/fonts/OFL.txt`](public/fonts/OFL.txt)。把 24 MB 的字体打进仓库是为了离线可用——
 界面不依赖任何 CDN。
+
+---
+
+## 感谢
+
+Synco 站在这些开源项目的肩膀上。下面这些是**这一版真正打进了成品**的，按它们各自出的力分一下；
+版本号与逐条许可证见 [NOTICE](NOTICE.md)。
+
+**桌面壳与界面**
+
+- [Tauri 2](https://tauri.app)（含 single-instance / dialog 插件）—— 把服务、窗口和 WebView2 收进一个 exe，
+  以及"双击第二次是把已经开着的窗口叫到前面"
+- [rust-embed](https://github.com/pyros2097/rust-embed) —— 整个前端打进 exe，装到哪儿都能离线打开
+- **思源宋体 / Noto Serif SC**（SIL OFL 1.1）—— 界面与标题的中文衬线，上游与授权见 [`public/fonts/OFL.txt`](public/fonts/OFL.txt)
+
+**服务与数据**
+
+- [axum](https://github.com/tokio-rs/axum) + [tokio](https://github.com/tokio-rs/tokio) —— 只监听 127.0.0.1 的本机接口，
+  以及"重活一律挪出异步 worker"那条纪律靠的阻塞线程池
+- [rusqlite](https://github.com/rusqlite/rusqlite)（内含 public domain 的 SQLite）—— 项目、提交历史与参数链都存在一个文件里
+- [serde](https://github.com/dtolnay/serde) / [serde_json](https://github.com/dtolnay/serde_json)、
+  [thiserror](https://github.com/dtolnay/thiserror)、[url](https://github.com/servo/rust-url)、
+  [pathdiff](https://github.com/manisheus/pathdiff)、[futures-util](https://github.com/rust-lang/futures-rs) —— 参数、错误与路径的底座
+
+**图像处理**
+
+- [image](https://github.com/image-rs/image) + [zune-jpeg](https://github.com/etemesi254/zune-image) —— 解码，
+  以及把 EXIF 方向烘焙进像素（不然"原图正着看、缩略图横着躺"）
+- [fast_image_resize](https://github.com/Cykooz/fast_image_resize) —— 缩放档、缩略图与调整预览的重采样
+- [imageproc](https://github.com/image-rs/imageproc) —— 蒙版膨胀（缝合前把笔迹外扩那一圈）
+- [moving-least-squares](https://github.com/mpizenberg/rust_mls)（MPL-2.0）—— 一键塑形要用的 MLS 形变数学。
+  它以原样 crate 依赖，没有被改动、也没有把源码复制进本仓库，所以只要求它自己那几个文件继续留在 MPL-2.0 下
+
+**收发与杂项**
+
+- [reqwest](https://github.com/seanmonstar/reqwest)（含 rustls / ring）—— 调本机 ComfyUI 与云端图像接口，带进度与中断
+- [base64](https://github.com/marshallpierce/rust-base64)、[sha2](https://github.com/RustCrypto/hashes)、
+  [rand](https://github.com/rust-random/rand) —— 图片进出、资源指纹、随机种子
