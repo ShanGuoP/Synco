@@ -226,6 +226,30 @@ async function main() {
     const w2 = await req(base, 'POST', `/api/images/${imgId}/adjust/preview`, {});
     ok('同参数预览指向同一档（可重放）', w1.body.preview_url === w2.body.preview_url, `${w1.body.preview_url} vs ${w2.body.preview_url}`);
 
+    /* ---- 7b. 美颜那四根新杆（0.3.x 追加）：夹逼、缺省补 0、质感不算改过。
+       算子本身的作用范围与阈值由 photoedit-core 的单测钉（样张跨阈值两侧），
+       这里只钉接口这条线：字段名、量程、默认值、以及"要不要白渲染一张"。 ---- */
+    const sNew = await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { beauty: { smooth: 30, texture: 300, blemish: -20, even_tone: 88, de_shine: 140, sharpen: 10 } } });
+    ok('新字段越界逐个夹逼并记账',
+      ['beauty.texture', 'beauty.blemish', 'beauty.de_shine'].every(k => (sNew.body?.clamped || []).includes(k)) && sNew.body.ops.beauty.texture === 100 && sNew.body.ops.beauty.blemish === 0,
+      JSON.stringify(sNew.body).slice(0, 260));
+    const gNew = await req(base, 'GET', `/api/images/${imgId}/adjust`);
+    ok('新字段存得回、读得到', gNew.body.ops.beauty.even_tone === 88 && gNew.body.ops.beauty.de_shine === 100 && gNew.body.ops.beauty.smooth === 30, JSON.stringify(gNew.body.ops.beauty));
+    const gOld = await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { color: { exposure: 20 } } });
+    ok('不带新字段的老参数按默认补 0（老库不用迁）',
+      [gOld.body.ops.beauty.texture, gOld.body.ops.beauty.blemish, gOld.body.ops.beauty.even_tone, gOld.body.ops.beauty.de_shine].every(v => v === 0),
+      JSON.stringify(gOld.body.ops.beauty));
+    await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { beauty: { texture: 70 } } });
+    const pTex = await req(base, 'POST', `/api/images/${imgId}/adjust/preview`, {});
+    ok('只拖质感不算改过：预览走恒等直出', pTex.body?.identity === true, JSON.stringify(pTex.body).slice(0, 200));
+    await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { beauty: { smooth: 40, texture: 30, blemish: 60, even_tone: 50, de_shine: 45, by_mask: true } } });
+    const pMask = await req(base, 'POST', `/api/images/${imgId}/adjust/preview`, {});
+    const rNew = await req(base, 'POST', `/api/images/${imgId}/adjust/render`, {});
+    ok('四根新杆一起开也出得了预览与成图', pMask.status === 200 && rNew.status === 200 && (rNew.body?.url || '').includes('_adjusted'), `${pMask.status}/${JSON.stringify(rNew.body).slice(0, 140)}`);
+    const tiled = await req(base, 'GET', `/api/images/${imgId}/adjust/tiles`);
+    ok('新算子那版也能切真像素瓦片', tiled.status === 200 && tiled.body?.w === dims.w, JSON.stringify(tiled.body).slice(0, 160));
+
+
     /* ---- 8. 接口形状与"画稿不走这条链路" ---- */
     const none = await req(base, 'GET', `/api/images/${imgId}`);
     ok('图片详情没被调整层改动形状', ['id', 'w', 'h', 'orig_url', 'mask_url', 'thumb_url', 'proxy_url', 'tiles_url'].every(k => k in none.body), Object.keys(none.body).join(','));

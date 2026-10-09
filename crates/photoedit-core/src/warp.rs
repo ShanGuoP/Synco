@@ -7,7 +7,7 @@
 use crate::ops::{Auto, Stroke, Tool, Warp};
 use crate::px::{sample, Pad};
 use moving_least_squares::deform_similarity;
-use stitch_core::Rgba;
+use stitch_core::{par::par_chunks_mut, Rgba};
 
 /// 滑杆满档时，一个笔画步长最多搬掉半径的多少比例。
 /// 超过这个量就会把采样点推出盘外，等于自己咬自己的输出。
@@ -79,6 +79,15 @@ pub fn strokes(img: &Rgba, warp: &Warp) -> Rgba {
     cur
 }
 
+/// 一笔的位移场每像素存四个累加量：`[最大权重, 平面 X, 平面 Y, 权重和]`。
+/// 平面 X/Y 按笔种装不同东西——推挤装加权单位切向，其余装加权投影点。
+/// 逐段累加的下标顺序与"逐像素扫完全部线段"的标量版一致，浮点求和因此逐位相同。
+const FIELD: usize = 4;
+
+/// 行带高度：带内自带一份位移场，带与带之间不共享写入，所以能并行。
+/// 一笔盖不满两个带时 `par_chunks_mut` 自己退回串行，小笔不为起线程付钱。
+const BAND_ROWS: usize = 8;
+
 fn apply_stroke(base: &Rgba, cur: &mut Rgba, s: &Stroke) {
     if s.points.is_empty() {
         return;
@@ -89,39 +98,126 @@ fn apply_stroke(base: &Rgba, cur: &mut Rgba, s: &Stroke) {
     let r = (s.radius * unit).clamp(1.0, unit);
     let pts: Vec<[f32; 2]> = s.points.iter().map(|p| [p[0] * w as f32, p[1] * h as f32]).collect();
     let span = bbox(&pts, r, w, h);
+    let (sw, sh) = (span.x1.saturating_sub(span.x0), span.y1.saturating_sub(span.y0));
+    if sw == 0 || sh == 0 {
+        return;
+    }
     let k = s.strength.norm().clamp(-1.0, 1.0); // 负压力 = 反方向，前端不给但参数域允许
     let shift = STROKE_MAX_SHIFT * k;
+    // 单点笔当一条零长线段：投影恒落在该点上，与标量版的单点分支同一个算式
+    let segs: Vec<([f32; 2], [f32; 2])> = if pts.len() == 1 {
+        vec![(pts[0], pts[0])]
+    } else {
+        pts.windows(2).map(|d| (d[0], d[1])).collect()
+    };
+    // 快照照旧留整幅：位移上限 0.45r 落在带 r 外扩的 span 内，取样范围用不到全图，
+    // 但 Pad::Edge 的夹边是按整幅算的——按 span 裁会让靠边那一圈取到不同的值
     let src = cur.px.clone();
     let base_px = &base.px;
-    for y in span.y0..span.y1 {
-        for x in span.x0..span.x1 {
-            let (d, wgt) = field_at(&pts, r, x as f32, y as f32, s.tool, shift);
-            if wgt <= 0.0 && s.tool != Tool::Restore {
-                continue;
-            }
-            let i = (y * w + x) * 4;
-            match s.tool {
-                Tool::Restore => {
-                    // 恢复 = 朝链起点插值，权重就是衰减盘；越靠盘心回得越多
-                    let t = wgt.min(1.0);
-                    for c in 0..4 {
-                        cur.px[i + c] = (src[i + c] as f32 * (1.0 - t) + base_px[i + c] as f32 * t).round().clamp(0.0, 255.0) as u8;
+    let (tool, r2) = (s.tool, r * r);
+    par_chunks_mut(
+        &mut cur.px[span.y0 * w * 4..span.y1 * w * 4],
+        BAND_ROWS * w * 4,
+        |blk, bi| {
+            let gy0 = span.y0 + bi * BAND_ROWS;
+            let rows = blk.len() / (w * 4);
+            let mut field = vec![0f32; sw * rows * FIELD];
+            // 1) 场：每条线段只走自己的外接胶囊，且只落在本带那几行
+            for &(a, b) in &segs {
+                let cx0 = (a[0].min(b[0]) - r).max(span.x0 as f32).floor() as usize;
+                let cx1 = (a[0].max(b[0]) + r)
+                    .max(span.x0 as f32)
+                    .ceil()
+                    .clamp(span.x0 as f32, span.x1 as f32) as usize;
+                if cx0 >= cx1 {
+                    continue;
+                }
+                let ry0 = (a[1].min(b[1]) - r).max(gy0 as f32).floor() as usize;
+                let ry1 = (a[1].max(b[1]) + r)
+                    .max(gy0 as f32)
+                    .ceil()
+                    .clamp(gy0 as f32, (gy0 + rows) as f32) as usize;
+                if ry0 >= ry1 {
+                    continue;
+                }
+                for y in ry0..ry1 {
+                    let row_off = (y - gy0) * sw;
+                    for x in cx0..cx1 {
+                        let o = (row_off + x - span.x0) * FIELD;
+                        contribute(&mut field[o..o + FIELD], &a, &b, r2, x as f32, y as f32, tool);
                     }
                 }
-                _ => {
-                    let v = sample(&src, w, h, x as f32 - d.0, y as f32 - d.1, Pad::Edge);
-                    cur.px[i] = v[0].round().clamp(0.0, 255.0) as u8;
-                    cur.px[i + 1] = v[1].round().clamp(0.0, 255.0) as u8;
-                    cur.px[i + 2] = v[2].round().clamp(0.0, 255.0) as u8;
-                    // alpha 不参与位移（照片这里是满值），但仍按取样结果写回，保证同一条路径
-                    cur.px[i + 3] = v[3].round().clamp(0.0, 255.0) as u8;
+            }
+            // 2) 反向映射：目标像素按场去源图取色
+            for dy in 0..rows {
+                let y = gy0 + dy;
+                let row = &mut blk[dy * w * 4..(dy + 1) * w * 4];
+                for fx in 0..sw {
+                    let o = (dy * sw + fx) * FIELD;
+                    let (x, yy) = ((span.x0 + fx) as f32, y as f32);
+                    let (d, wgt) = disp(&field[o..o + FIELD], x, yy, r, tool, shift);
+                    if wgt <= 0.0 && tool != Tool::Restore {
+                        continue;
+                    }
+                    let i = (span.x0 + fx) * 4;
+                    match tool {
+                        Tool::Restore => {
+                            // 恢复 = 朝链起点插值，权重就是衰减盘；越靠盘心回得越多
+                            let t = wgt.min(1.0);
+                            let g = (y * w + span.x0 + fx) * 4;
+                            for c in 0..4 {
+                                row[i + c] = (src[g + c] as f32 * (1.0 - t) + base_px[g + c] as f32 * t)
+                                    .round()
+                                    .clamp(0.0, 255.0) as u8;
+                            }
+                        }
+                        _ => {
+                            let v = sample(&src, w, h, x - d.0, yy - d.1, Pad::Edge);
+                            row[i] = v[0].round().clamp(0.0, 255.0) as u8;
+                            row[i + 1] = v[1].round().clamp(0.0, 255.0) as u8;
+                            row[i + 2] = v[2].round().clamp(0.0, 255.0) as u8;
+                            // alpha 不参与位移（照片这里是满值），但仍按取样结果写回，保证同一条路径
+                            row[i + 3] = v[3].round().clamp(0.0, 255.0) as u8;
+                        }
+                    }
                 }
             }
+        },
+    );
+}
+
+/// 一条线段对一格像素的贡献。`acc = [最大权重, 平面 X, 平面 Y, 权重和]`。
+fn contribute(acc: &mut [f32], a: &[f32; 2], b: &[f32; 2], r2: f32, x: f32, y: f32, tool: Tool) {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 < 1e-9 {
+        0.0
+    } else {
+        (((x - a[0]) * dx + (y - a[1]) * dy) / l2).clamp(0.0, 1.0)
+    };
+    let (px, py) = (a[0] + t * dx, a[1] + t * dy);
+    let d2 = (x - px).powi(2) + (y - py).powi(2);
+    if d2 >= r2 {
+        return;
+    }
+    let w = falloff(d2, r2);
+    if w > acc[0] {
+        acc[0] = w;
+    }
+    acc[3] += w;
+    if tool == Tool::Push {
+        let len = l2.sqrt();
+        if len > 1e-6 {
+            acc[1] += dx / len * w;
+            acc[2] += dy / len * w;
         }
+    } else {
+        acc[1] += px * w;
+        acc[2] += py * w;
     }
 }
 
-/// 盘内某点的位移与衰减权重。两条纪律，都是早先那版漏掉的：
+/// 盘内一格的位移与衰减权重。两条纪律，都是早先那版漏掉的：
 ///
 /// - **连续**：方向取各段单位向量的加权平均，盘心取各投影点的加权平均——两者都是像素位置的连续函数。
 ///   早先按"最近的那一段"硬选一段：相邻两段一切换，方向与盘心就跳一档，而切换线正好沿笔画走，
@@ -129,60 +225,45 @@ fn apply_stroke(base: &Rgba, cur: &mut Rgba, s: &Stroke) {
 /// - **有界**：位移上限 = 半径 × `STROKE_MAX_SHIFT` × 权重，与线段被抽稀成多长无关。
 ///   早先推挤用的是整段向量，而直线轨迹入库前会被 Douglas–Peucker 压成一两个点——
 ///   一段几百像素的位移直接超出盘外，采样咬到自己刚写的那一圈像素。
-fn field_at(pts: &[[f32; 2]], r: f32, x: f32, y: f32, tool: Tool, shift: f32) -> ((f32, f32), f32) {
-    let r2 = r * r;
-    let (mut wmax, mut acc, mut qsum, mut wsum) = (0f32, (0f32, 0f32), (0f32, 0f32), 0f32);
-    if pts.len() == 1 {
-        let (dx, dy) = (x - pts[0][0], y - pts[0][1]);
-        let d2 = dx * dx + dy * dy;
-        if d2 >= r2 {
-            return ((0.0, 0.0), 0.0);
-        }
-        wmax = falloff(d2, r2);
-        (qsum, wsum) = ((pts[0][0] * wmax, pts[0][1] * wmax), wmax);
-    } else {
-        for j in 0..pts.len() - 1 {
-            let (a, b) = (pts[j], pts[j + 1]);
-            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-            let l2 = dx * dx + dy * dy;
-            let t = if l2 < 1e-9 { 0.0 } else { (((x - a[0]) * dx + (y - a[1]) * dy) / l2).clamp(0.0, 1.0) };
-            let (px, py) = (a[0] + t * dx, a[1] + t * dy);
-            let d2 = (x - px).powi(2) + (y - py).powi(2);
-            if d2 >= r2 {
-                continue;
-            }
-            let w = falloff(d2, r2);
-            wmax = wmax.max(w);
-            wsum += w;
-            qsum = (qsum.0 + px * w, qsum.1 + py * w);
-            let len = l2.sqrt();
-            if len > 1e-6 {
-                acc = (acc.0 + dx / len * w, acc.1 + dy / len * w);
-            }
-        }
-    }
+fn disp(acc: &[f32], x: f32, y: f32, r: f32, tool: Tool, shift: f32) -> ((f32, f32), f32) {
+    let (wmax, wsum) = (acc[0], acc[3]);
     if wmax <= 0.0 || wsum <= 0.0 {
         return ((0.0, 0.0), 0.0);
     }
-    let (qx, qy) = (qsum.0 / wsum, qsum.1 / wsum);
     let reach = r * shift * wmax;
     match tool {
         // 推挤：沿加权切向，长度只由半径与压力说了算
         Tool::Push => {
-            let n = (acc.0 * acc.0 + acc.1 * acc.1).sqrt();
+            let n = (acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
             if n < 1e-6 {
                 return ((0.0, 0.0), wmax);
             }
-            ((acc.0 / n * reach, acc.1 / n * reach), wmax)
+            ((acc[1] / n * reach, acc[2] / n * reach), wmax)
         }
         // 收缩 / 膨胀 / 恢复：位移 = (p − 盘心) × 系数。盘心是折线上各投影点的加权平均（连续），
         // 所以盘心那一点不动、盘缘由衰减收回 0，最大量落在 0.29r 那一圈，全程没有奇点。
         t => {
+            let (qx, qy) = (acc[1] / wsum, acc[2] / wsum);
             let k = if matches!(t, Tool::Pucker | Tool::Restore) { -2.0 } else { 2.0 };
             let s = k * shift * wmax;
             (((x - qx) * s, (y - qy) * s), wmax)
         }
     }
+}
+
+/// 标量参考实现：单像素扫完全部线段。生产路径走 `apply_stroke` 的按段累积，
+/// 两边共用 `contribute` 与 `disp`，所以这里同时是那套场的定义。
+#[cfg(test)]
+fn field_at(pts: &[[f32; 2]], r: f32, x: f32, y: f32, tool: Tool, shift: f32) -> ((f32, f32), f32) {
+    let (mut acc, r2) = ([0f32; FIELD], r * r);
+    if pts.len() == 1 {
+        contribute(&mut acc, &pts[0], &pts[0], r2, x, y, tool);
+    } else {
+        for j in 0..pts.len() - 1 {
+            contribute(&mut acc, &pts[j], &pts[j + 1], r2, x, y, tool);
+        }
+    }
+    disp(&acc, x, y, r, tool, shift)
 }
 
 /// 抛物线衰减 `w = (1 − (d/r)²)²`：盘缘处函数值与导数一起归零，边缘才接得上原图
@@ -677,5 +758,88 @@ mod tests {
         assert!(u.1 > 0.5, "收缩没把像素往盘心拉：{u:?}");
         let (v, _) = field_at(&pts, r, 140.0, 70.0, Tool::Bloat, shift);
         assert!(v.1 < -0.5, "膨胀方向反了：{v:?}");
+    }
+
+    /// 位移场从"逐像素扫全线段"改成"逐线段累积到场"之后，输出必须**逐位**不变：
+    /// 累加顺序同为线段下标递增，浮点求和才落得一样。指纹取自改写前那一版实现。
+    #[test]
+    fn 位移场改写前后逐位一致() {
+        // (名称, 图, 笔画…, 改写前的输出指纹)
+        let sine = |n: usize, y: f32| -> Vec<[f32; 2]> {
+            (0..n)
+                .map(|i| {
+                    let t = i as f32 / (n - 1) as f32;
+                    [0.04 + 0.92 * t, y + 0.012 * (t * 7.0).sin()]
+                })
+                .collect()
+        };
+        let striped = striped(320, 240);
+        let banded = banded(240, 160);
+        let cases: Vec<(&str, &Rgba, Vec<Stroke>, u64)> = vec![
+            ("push_sine40", &striped, vec![stroke(Tool::Push, &sine(40, 0.5), 0.08, 60)], 12843966619434218842),
+            ("push_sine40_r20", &striped, vec![stroke(Tool::Push, &sine(40, 0.5), 0.20, 100)], 14399672597629467676),
+            ("pucker", &striped, vec![stroke(Tool::Pucker, &sine(12, 0.42), 0.05, 100)], 17018847604517427215),
+            ("bloat", &striped, vec![stroke(Tool::Bloat, &sine(12, 0.42), 0.03, 40)], 7610260927988065029),
+            (
+                "restore_套在推挤后",
+                &striped,
+                vec![stroke(Tool::Push, &sine(40, 0.5), 0.08, 60), stroke(Tool::Restore, &sine(20, 0.52), 0.09, 80)],
+                15527378411396461740,
+            ),
+            ("两点直笔_弱压", &striped, vec![stroke(Tool::Push, &[[0.1, 0.3], [0.9, 0.31]], 0.04, 5)], 8058671356134880944),
+            ("单点笔", &striped, vec![stroke(Tool::Pucker, &[[0.5, 0.5]], 0.10, 90)], 14485832776867491059),
+            (
+                "五笔混合",
+                &striped,
+                vec![
+                    stroke(Tool::Push, &sine(30, 0.3), 0.06, 70),
+                    stroke(Tool::Bloat, &sine(10, 0.5), 0.04, 55),
+                    stroke(Tool::Pucker, &sine(10, 0.7), 0.05, 80),
+                    stroke(Tool::Restore, &sine(14, 0.5), 0.07, 60),
+                    stroke(Tool::Push, &sine(26, 0.8), 0.05, -50),
+                ],
+                15345631783532399588,
+            ),
+            ("半径顶满", &banded, vec![stroke(Tool::Push, &sine(24, 0.5), 0.5, 100)], 2040180177096295244),
+            ("出界轨迹", &banded, vec![stroke(Tool::Bloat, &[[-0.2, 1.3], [0.5, 1.4], [1.4, 0.9]], 0.18, 90)], 18209119739007652645),
+            ("负压力", &banded, vec![stroke(Tool::Push, &sine(18, 0.6), 0.09, -50)], 7977175818157627831),
+            ("零压力", &banded, vec![stroke(Tool::Push, &sine(18, 0.6), 0.09, 0)], 18209119739007652645),
+        ];
+        for (name, img, ss, want) in cases {
+            let out = strokes(img, &Warp { strokes: ss, auto: Auto::default() });
+            assert_eq!(hash(&out), want, "{name} 的输出变了：位移场改写动了语义");
+        }
+    }
+
+    /// 长笔要盖过好几个行带才会走并行路径；这条盯两件事：盘内确实动了、盘外一格都没被带进去。
+    /// （逐位不变由上一条黄金指纹钉住，这条盯的是切带之后影响范围没溢出）
+    #[test]
+    fn 行带并行后作用范围不外溢() {
+        let (w, h) = (900, 700);
+        let img = striped(w, h);
+        let long = stroke(Tool::Push, &[[0.02, 0.5], [0.5, 0.5], [0.98, 0.5]], 0.03, 80);
+        let a = strokes(&img, &Warp { strokes: vec![long.clone(), long.clone(), long], auto: Auto::default() });
+        // 半径按几何均边算：0.03 × √(900×700) ≈ 24 像素 → 这一笔盖约 6 个行带
+        let r = (0.03 * ((w * h) as f32).sqrt()) as i64;
+        let yc = (h / 2) as i64;
+        let at = |im: &Rgba, x: i64, y: i64| im.px[((y * w as i64 + x) * 4) as usize];
+        let mut moved = 0;
+        for y in (yc - r)..=(yc + r) {
+            for x in 440..470 {
+                if at(&a, x, y) != at(&img, x, y) {
+                    moved += 1;
+                }
+            }
+        }
+        assert!(moved > 50, "盘内那条亮带几乎没被推动：只变了 {moved} 格");
+        // 盘缘外两行起必须逐格相同——切带写错范围就会在这里露出来
+        for y in 0..h as i64 {
+            if (y - yc).abs() <= r + 1 {
+                continue;
+            }
+            for x in 0..w as i64 {
+                assert_eq!(at(&a, x, y), at(&img, x, y), "盘外第 {x},{y} 格被改了");
+            }
+        }
     }
 }

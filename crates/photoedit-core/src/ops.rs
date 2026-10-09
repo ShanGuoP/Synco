@@ -163,20 +163,35 @@ impl Color {
     }
 }
 
-/// 美颜：磨皮/美白/锐化，量程 0~100
+/// 美颜：磨皮/质感/祛瑕疵/匀肤/美白/去油光/锐化，量程 0~100
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Beauty {
     pub smooth: Slider,
+    /// 高频回填的下限。0 = 沿用磨皮强度自己那条曲线（与 0.3.0 逐位一致）
+    pub texture: Slider,
+    /// 点状瑕疵回收（软阈值高通），只在涂过的地方最准
+    pub blemish: Slider,
+    /// 色度往大尺度低频搬：去红绿不均与成片色斑
+    pub even_tone: Slider,
     pub brighten: Slider,
+    /// 肤色域内超线高光往回压（去油光）
+    pub de_shine: Slider,
     pub sharpen: Slider,
     /// true = 只在已涂的蒙版区域内生效；false = 全图
     pub by_mask: bool,
 }
 
 impl Beauty {
+    /// `texture` 不在内：它只是磨皮曲线的下限，`smooth=0` 时它一根像素都不碰。
+    /// 把它算进来会让"只拖了质感没拖磨皮"这套参数被判成非恒等，白渲染一张预览。
     pub fn is_empty(&self) -> bool {
-        self.smooth.is_zero() && self.brighten.is_zero() && self.sharpen.is_zero()
+        self.smooth.is_zero()
+            && self.blemish.is_zero()
+            && self.even_tone.is_zero()
+            && self.brighten.is_zero()
+            && self.de_shine.is_zero()
+            && self.sharpen.is_zero()
     }
 }
 
@@ -313,7 +328,11 @@ fn clamp_ops(o: &mut EditOps, rep: &mut Vec<String>) {
     let b = &mut o.beauty;
     for (name, s) in [
         ("beauty.smooth", &mut b.smooth),
+        ("beauty.texture", &mut b.texture),
+        ("beauty.blemish", &mut b.blemish),
+        ("beauty.even_tone", &mut b.even_tone),
         ("beauty.brighten", &mut b.brighten),
+        ("beauty.de_shine", &mut b.de_shine),
         ("beauty.sharpen", &mut b.sharpen),
     ] {
         s.0 = clamp_i(s.0 as i64, 0, 100, name, rep);
@@ -398,7 +417,11 @@ fn read_ops(v: &serde_json::Value, rep: &mut Vec<String>) -> EditOps {
         let mut one = |k: &str| Slider(clamp_i(b.get(k).and_then(|x| x.as_i64()).unwrap_or(0), 0, 100, &format!("beauty.{k}"), rep));
         o.beauty = Beauty {
             smooth: one("smooth"),
+            texture: one("texture"),
+            blemish: one("blemish"),
+            even_tone: one("even_tone"),
             brighten: one("brighten"),
+            de_shine: one("de_shine"),
             sharpen: one("sharpen"),
             by_mask: b.get("by_mask").and_then(|x| x.as_bool()).unwrap_or(false),
         };

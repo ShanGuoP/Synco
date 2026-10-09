@@ -16,7 +16,7 @@ const blankOps = () => ({
   geometry: { crop: null, rotate_deg: 0, flip_h: false, flip_v: false, fill: 'edge' },
   warp: { strokes: [], auto: { face_slim: 0, eye_big: 0, nose_slim: 0, chin: 0 } },
   color: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, temp: 0, tint: 0, saturation: 0, vibrance: 0, clarity: 0, sharpen: 0, preset: null },
-  beauty: { smooth: 0, brighten: 0, sharpen: 0, by_mask: false },
+  beauty: { smooth: 0, texture: 0, blemish: 0, even_tone: 0, brighten: 0, de_shine: 0, sharpen: 0, by_mask: false },
   lut: null,
 });
 
@@ -33,7 +33,15 @@ const COLOR_KEYS = [
   ['clarity', '清晰度', '大半径局部对比'],
   ['sharpen', '锐化', '3×3 高频回填'],
 ];
-const BEAUTY_KEYS = [['smooth', '磨皮', '双边滤波在长边 2048 的域里跑，被抹掉的高频按比例回填'], ['brighten', '美白', '只在肤色域提亮，蓝天灰墙跟着动就是坏了'], ['sharpen', '锐化', '亮度域一次 3×3 高频回填']];
+const BEAUTY_KEYS = [
+  ['smooth', '磨皮', '双边滤波在长边 2048 的域里跑，被抹掉的高频按比例回填'],
+  ['texture', '质感保留', '磨皮回填高频的下限：0 = 用磨皮自带那条曲线，越往右留下的皮肤纹理越多'],
+  ['blemish', '祛瑕疵', '只回收明显偏离局部均值的那一截——痘、斑、胡青；正常纹理在阈值以下一根不动'],
+  ['even_tone', '匀肤', '把色度往大尺度那一层搬，去红绿不均与成片色斑。只认肤色，蓝天白墙不动'],
+  ['brighten', '美白', '只在肤色域提亮，蓝天灰墙跟着动就是坏了'],
+  ['de_shine', '去油光', '肤色亮部超过那一线（亮度约 185）往回压，线以下的中间调不动'],
+  ['sharpen', '锐化', '亮度域一次 3×3 高频回填'],
+];
 const BRUSHES = [['push', '推挤', '顺拖动方向把像素推开——沿身型轮廓向内推就是瘦身'], ['pucker', '收缩', '朝盘心吸，盘内整体变小'], ['bloat', '膨胀', '自盘心向外胀，盘内整体变大'], ['restore', '恢复', '把这一带拉回未变形之前']];
 
 /** 预设就是一组滑杆值，和后端 color::preset 同一份表（改这里要同步改那边） */
@@ -163,12 +171,18 @@ export function createAdjust(deps) {
   const maskSw = switchRow('只在涂过的地方生效', '复用遮罩那层笔迹：涂哪儿磨哪儿；关掉就是全图', v => { ops.beauty.by_mask = v; touch(); });
   const beautyBox = el('div', { style: { display: 'grid', gap: '10px' } },
     ...BEAUTY_KEYS.map(([k, label, tip]) => {
-      const ctl = makeProw({ label, min: 0, max: 100, step: 1, value: 0, tip, onChange: v => { ops.beauty[k] = v; touch(); } });
+      const ctl = makeProw({ label, min: 0, max: 100, step: 1, value: 0, tip, onChange: v => {
+        ops.beauty[k] = v;
+        // 质感保留只是磨皮曲线的下限：磨皮归零时它一根像素都不碰，别让人对着空杆子拖
+        if (k === 'smooth') BEAUTY.texture?.setDisabled(v <= 0);
+        touch();
+      } });
       BEAUTY[k] = ctl;
       return ctl.node;
     }),
     maskSw.node,
     el('p.muted', { text: '没涂遮罩 = 全图。这一层的蒙版坐标在变形之后的域里。' }));
+  BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
 
   const node = el('div', { style: { display: 'grid', gap: '12px' } },
     el('p.muted', { text: '原图永不改写：下面这些都是参数，随时能退回。预览按 proxy 档算，落盘才走原分辨率。' }),
@@ -197,7 +211,10 @@ export function createAdjust(deps) {
   // 一键塑形那排滑杆在 0.3.0 里没有生产者（见 service/face.rs），界面上不摆，参数域里留着
   const autoQuiet = !ops.warp.auto || Object.values(ops.warp.auto).every(v => !v);
   const isIdentity = () => !geoActive() && !ops.warp.strokes.length && autoQuiet
-    && COLOR_KEYS.every(([k]) => !ops.color[k]) && BEAUTY_KEYS.every(([k]) => !ops.beauty[k]) && !ops.lut;
+    && COLOR_KEYS.every(([k]) => !ops.color[k])
+    // texture 不参与判恒等，服务端那条也是同一个口径：磨皮归零时它不碰像素，
+    // 算进来只会逼出一张与上一版逐位相同的白渲染
+    && BEAUTY_KEYS.every(([k]) => k === 'texture' || !ops.beauty[k]) && !ops.lut;
 
   function paintGeo() {
     fineCtl.set(ops.geometry.rotate_deg - quad(), true);
@@ -220,6 +237,7 @@ export function createAdjust(deps) {
   function paintPaints() {
     for (const [k] of COLOR_KEYS) COLOR[k].set(ops.color[k] ?? 0, true);
     for (const [k] of BEAUTY_KEYS) BEAUTY[k].set(ops.beauty[k] ?? 0, true);
+    BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
     maskSw.set(!!ops.beauty.by_mask);
     paintPreset();
     lutSel.value = ops.lut?.name || '';
