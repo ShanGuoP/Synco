@@ -34,12 +34,12 @@
         <circle cx="12" cy="14" r="2.4" fill="var(--spot)"/>
         <circle cx="6" cy="22" r="2.6" fill="currentColor"/>
       </svg>
-      <span class="nowrap">Synco 新刻</span>
+      <span class="nowrap" data-i18n="app.title">Synco 新刻</span>
     </div>
 
-    <nav class="rail__nav" id="railNav" aria-label="主导航"></nav>
+    <nav class="rail__nav" id="railNav" data-i18n-aria="nav.aria"></nav>
 
-    <div class="rail__group" id="railRecentLabel" hidden>最近打开</div>
+    <div class="rail__group" id="railRecentLabel" hidden data-i18n="nav.recent"></div>
     <div class="rail__list" id="railRecent"></div>
 
     <div class="rail__spacer"></div>
@@ -52,7 +52,7 @@
       <div class="topbar__zone topbar__zone--c">
         <label class="search" id="searchBox">
           <svg class="icon icon--sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4"/><path d="m15.6 15.6 4 4"/></svg>
-          <input class="search__input" id="searchInput" type="search" placeholder="搜索所有项目" autocomplete="off" spellcheck="false">
+          <input class="search__input" id="searchInput" type="search" data-i18n-placeholder="shell.searchPlaceholder" placeholder="搜索所有项目" autocomplete="off" spellcheck="false">
           <kbd class="kbd search__key">/</kbd>
         </label>
       </div>

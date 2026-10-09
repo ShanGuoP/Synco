@@ -2,6 +2,8 @@
 // 涂抹层本来就按 proxy 分辨率画，保存时原样编码；上采样到原图尺寸是服务端的事
 'use strict';
 
+import { t } from './i18n.js';
+
 let worker = null;      // null=未初始化, false=不可用
 let seq = 0;
 const pending = new Map();     // id -> { res, rej }
@@ -30,7 +32,7 @@ function ensureWorker() {
       pending.delete(id);
       if (e.data.error) p.rej(new Error(e.data.error)); else p.res(e.data);
     };
-    worker.onerror = ev => retireWorker(new Error('蒙版编码 Worker 出错：' + (ev && ev.message || '未知')));
+    worker.onerror = ev => retireWorker(new Error(t('maskEncode.workerDead', { msg: (ev && ev.message) || t('maskEncode.unknown') })));
   } catch {
     worker = false;
   }
@@ -41,7 +43,7 @@ function blobToDataURL(blob) {
   return new Promise((res, rej) => {
     const rd = new FileReader();
     rd.onload = () => res(rd.result);
-    rd.onerror = () => rej(new Error('读取编码结果失败'));
+    rd.onerror = () => rej(new Error(t('maskEncode.fileRead')));
     rd.readAsDataURL(blob);
   });
 }
@@ -76,7 +78,7 @@ export async function encodeMask(paintCanvas, fullW, fullH) {
     r = await new Promise((res, rej) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        rej(new Error(`蒙版编码 ${ENCODE_MS / 1000} 秒没回话`));
+        rej(new Error(t('maskEncode.timeout', { s: ENCODE_MS / 1000 })));
       }, ENCODE_MS);
       pending.set(id, {
         res: v => { clearTimeout(timer); res(v); },

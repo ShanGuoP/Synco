@@ -127,6 +127,7 @@ const SWEEP = [
   ['更新日志（GitHub Releases）', 'GET', '/api/releases', undefined, [200],
     r => (Array.isArray(r.body?.releases) && (typeof r.body?.error === 'string' || r.body?.error == null) ? '' : '形状不对')],
   ['工坊设置', 'GET', '/api/settings', undefined, [200]],
+  ['界面语言写入', 'POST', '/api/settings/lang', { lang: 'zh' }, [200]],
   ['工作流路径写入', 'POST', '/api/settings/workflow', { path: 'D:/不存在的目录/wf.json' }, [200]],
   ['角色表读得到', 'GET', '/api/workflow/roles', undefined, [200]],
   ['云端保存', 'POST', '/api/cloud', { kind: 'cloud', base: 'http://127.0.0.1:1/v1', model: 'm-check', key: 'sk-local-check', timeout: '5000', concurrency: 9, stitch_expand: 64, stitch_feather: 200, stitch_edge: 1024 }, [200]],
@@ -276,6 +277,19 @@ async function m3SelfCheck(base, dataDir) {
   ok('档位越界被夹回下限', edge2.body.proxy_edge === 1024, JSON.stringify(edge2.body));
   const st = await req(base, 'GET', '/api/settings');
   ok('设置接口回显当前档位', st.body.proxy_edge === 1024, JSON.stringify(st.body).slice(0, 160));
+
+  /* ---- 界面语言：库里那份是唯一真相（跟着 app_settings 走，重装不丢），坏值夹回 zh 并回显 ---- */
+  const langEn = await req(base, 'POST', '/api/settings/lang', { lang: 'en' });
+  ok('语言能存成英文并回显', langEn.status === 200 && langEn.body.lang === 'en', JSON.stringify(langEn.body));
+  const st2 = await req(base, 'GET', '/api/settings');
+  ok('设置接口回显当前语言', st2.body.lang === 'en', JSON.stringify(st2.body).slice(0, 160));
+  const langBad = await req(base, 'POST', '/api/settings/lang', { lang: 'fr' });
+  ok('没有字典的语言夹回中文', langBad.status === 200 && langBad.body.lang === 'zh', JSON.stringify(langBad.body));
+  const dict = await req(base, 'GET', '/public/locales/en.json');
+  ok('英文字典读得到且键位齐', dict.status === 200 && dict.body?.nav?.home === 'Home' && dict.body?.shell?.refresh === 'Refresh', JSON.stringify(dict.body || {}).slice(0, 120));
+  ok('字典不缓存（升级不会拿着一份旧文案）', /no-store/.test(String(dict.cache)), String(dict.cache));
+  const dict404 = await req(base, 'GET', '/public/locales/de.json');
+  ok('没有的语言字典不返 200', dict404.status !== 200, `${dict404.status}`);
 
   // M4 的回归：云端行是 0 步 0 CFG，串回本机这条路的提交必须被挡下而不是跑出一张废图
   const run0 = await req(base, 'POST', '/api/run', { image_ids: [iid], settings: { prompt: 'x', steps: 0, cfg: 0 } });

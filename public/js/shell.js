@@ -5,13 +5,15 @@ import { icon } from './core/icons.js';
 import { go } from './core/router.js';
 import { store, statOf } from './state.js';
 import { mountWindowControls } from './core/desktop.js';
+import { t } from './core/i18n.js';
 
+// 导航条目：href 与图标是代码，文字全在字典里（`nav.<k>`），换语言不用动这里
 const NAV = [
-  { href: '/',         ico: 'home',   label: '主页' },
-  { href: '/f/all',    ico: 'folder', label: '全部项目' },
-  { href: '/f/nomask', ico: 'brush',  label: '待涂遮罩' },
-  { href: '/f/masked', ico: 'gauge',  label: '已涂待提交' },
-  { href: '/f/canvas', ico: 'canvas', label: '画布' },
+  { href: '/',         ico: 'home',   k: 'home' },
+  { href: '/f/all',    ico: 'folder', k: 'projects' },
+  { href: '/f/nomask', ico: 'brush',  k: 'nomask' },
+  { href: '/f/masked', ico: 'gauge',  k: 'masked' },
+  { href: '/f/canvas', ico: 'canvas', k: 'canvas' },
 ];
 
 let hooks = {};
@@ -21,20 +23,20 @@ export function initShell(opt) {
   const nav = NAV.map(n => el('button.rail__link', {
     type: 'button', dataset: { href: n.href },
     onclick: () => go(n.href),
-    html: icon(n.ico) + `<span>${n.label}</span>`,
+    html: icon(n.ico) + `<span>${t(`nav.${n.k}`)}</span>`,
   }));
   nav.push(el('button.rail__link', {
-    type: 'button', 'data-tip': '快捷键见问号键',
-    html: icon('book') + '<span>帮助与快捷键</span>',
+    type: 'button', 'data-tip': t('nav.helpTip'),
+    html: icon('book') + `<span>${t('nav.help')}</span>`,
     onclick: () => hooks.onHelp?.(),
   }));
   fill($('#railNav'), nav);
 
   fill($('#topRight'),
-    el('span.chip', { id: 'wfChip', 'data-tip': '来自工作流的默认采样参数' }),
-    el('button.btn.btn--ghost.btn--sm', { html: icon('refresh', { cls: 'icon icon--sm' }) + '<span>刷新</span>', onclick: () => hooks.onRefresh?.() }),
-    el('button.btn.btn--ghost.btn--icon.btn--sm', { 'aria-label': '设置', 'data-tip': '后端 / 工作流 / ComfyUI 目录', html: icon('sliders', { cls: 'icon icon--sm' }), onclick: () => hooks.onBackends?.() }),
-    el('button.btn.btn--ghost.btn--icon.btn--sm', { 'aria-label': '帮助', 'data-tip': '快捷键', html: icon('keyboard', { cls: 'icon icon--sm' }), onclick: () => hooks.onHelp?.() }),
+    el('span.chip', { id: 'wfChip', 'data-tip': t('shell.workflowChip') }),
+    el('button.btn.btn--ghost.btn--sm', { html: icon('refresh', { cls: 'icon icon--sm' }) + `<span>${t('shell.refresh')}</span>`, onclick: () => hooks.onRefresh?.() }),
+    el('button.btn.btn--ghost.btn--icon.btn--sm', { 'aria-label': t('shell.settings'), 'data-tip': t('shell.settingsTip'), html: icon('sliders', { cls: 'icon icon--sm' }), onclick: () => hooks.onBackends?.() }),
+    el('button.btn.btn--ghost.btn--icon.btn--sm', { 'aria-label': t('shell.helpAria'), 'data-tip': t('shell.helpTip'), html: icon('keyboard', { cls: 'icon icon--sm' }), onclick: () => hooks.onHelp?.() }),
   );
   // 无边框之后窗口控件得页面自己画；浏览器版里它是空操作
   mountWindowControls($('#topRight'));
@@ -90,17 +92,17 @@ export function renderRecent(projects) {
 
 /** 左栏底部：设置入口（当前后端）+ 项目/图片总量 + 教程位 */
 export function renderRailFoot({ projects = 0, images = 0, masked = 0 } = {}) {
-  const comfy = store.peek('comfy') || '未连接';
+  const comfy = store.peek('comfy') || t('shell.comfyOff');
   fill($('#railFoot'),
-    el('button.rail__comfy', { type: 'button', 'data-tip': '后端 / 工作流 / ComfyUI 目录 / 预设', onclick: () => hooks.onBackends?.() },
+    el('button.rail__comfy', { type: 'button', 'data-tip': t('shell.footTip'), onclick: () => hooks.onBackends?.() },
       el('span.dot', { class: `dot ${store.peek('comfy') ? 'dot--done' : 'dot--err'}` }),
-      el('span.nowrap', { text: '设置 · ' + comfy.replace(/^https?:\/\//, '') })),
+      el('span.nowrap', { text: t('shell.comfyEntry', { host: comfy.replace(/^https?:\/\//, '') }) })),
     el('div.status-line', {},
       el('span.dot', { class: `dot ${masked ? 'dot--mask' : ''}` }),
-      el('span', { text: `${projects} 个项目 · ${images} 张图` })),
+      el('span', { text: t('shell.statsLine', { projects, images }) })),
     el('button.promo', { type: 'button', onclick: () => hooks.onGuide?.() },
       el('span.promo__ico', { html: icon('book', { cls: 'icon' }) }),
-      el('span', {}, el('b', { text: '修图流程' }), el('span', { text: '导入 → 涂抹 → 提交 → 对比' }))),
+      el('span', {}, el('b', { text: t('shell.guideTitle') }), el('span', { text: t('shell.guideSub') }))),
   );
 }
 

@@ -33,7 +33,8 @@
 .hero-card.is-drop { background: var(--spot-dim); border-color: var(--spot-line); }
 .hero-card.is-drop::before { border-color: var(--spot-line); }
 .hero-card.is-drop::after {
-  content: '松手即可导入'; position: absolute; inset: 0; display: grid; place-items: center;
+  /* 文案由 app.js 从字典递进来（--drop-hint）：CSS 里写死一句，换语言就翻不动 */
+  content: var(--drop-hint); position: absolute; inset: 0; display: grid; place-items: center;
   background: var(--bg-ink); color: var(--txt-inv);
   font-family: var(--f-display); font-size: var(--f-lg); font-weight: 700; letter-spacing: 2px;
 }

@@ -1,5 +1,6 @@
 // 格式化层：日期 / 路径 / 尺寸 / 耗时，视图只调用不自己拼
 'use strict';
+import { t } from './i18n.js';
 
 /** 'YYYY-MM-DD HH:MM:SS' → '2026.9.25 18:51' */
 export function fmtStamp(s) {
@@ -9,11 +10,11 @@ export function fmtStamp(s) {
   return `${+m[1]}.${+m[2]}.${+m[3]} ${m[4]}:${m[5]}`;
 }
 
-/** 秒 → '1 分 12 秒' */
+/** 秒 → '1 分 12 秒' / '1m 12s' */
 export function fmtElapsed(sec) {
   const s = Math.max(0, Math.round(sec));
-  if (s < 60) return `${s} 秒`;
-  return `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, '0')} 秒`;
+  if (s < 60) return t('format.sec', { s });
+  return t('format.minSec', { m: Math.floor(s / 60), ss: String(s % 60).padStart(2, '0') });
 }
 
 /** Windows/Unix 路径都取末段 */

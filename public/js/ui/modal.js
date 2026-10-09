@@ -2,6 +2,7 @@
 'use strict';
 import { el, $ } from '../core/dom.js';
 import { icon } from '../core/icons.js';
+import { t } from '../core/i18n.js';
 
 let openStack = [];
 
@@ -22,7 +23,7 @@ function mount({ title, body, actions = [], wide, onClose }) {
     el('div.modal__hd', {},
       el('h2', { text: title }),
       el('button.btn.btn--ghost.btn--icon.btn--sm.modal__x', {
-        type: 'button', 'aria-label': '关闭', html: icon('close', { cls: 'icon icon--sm' }), onclick: () => close('x') })),
+        type: 'button', 'aria-label': t('common.close'), html: icon('close', { cls: 'icon icon--sm' }), onclick: () => close('x') })),
     el('div.modal__bd', {}, body),
     actions.length ? el('div.modal__ft', {}, actions.map(a => {
       const b = el('button.btn', {
@@ -63,7 +64,7 @@ function mount({ title, body, actions = [], wide, onClose }) {
 export { mount as modal };
 
 /** Promise 化的确认框 */
-export function confirm({ title = '确认操作', text, html, danger, okLabel = '确定', cancelLabel = '取消' }) {
+export function confirm({ title = t('common.confirmOp'), text, html, danger, okLabel = t('common.ok'), cancelLabel = t('common.cancel') }) {
   return new Promise(resolve => {
     let ok = false;
     mount({
@@ -79,7 +80,7 @@ export function confirm({ title = '确认操作', text, html, danger, okLabel = 
 }
 
 export function info(title, bodyHtml, { wide } = {}) {
-  return mount({ title, wide, body: el('div', { html: bodyHtml }), actions: [{ label: '知道了', kind: 'primary' }] });
+  return mount({ title, wide, body: el('div', { html: bodyHtml }), actions: [{ label: t('common.gotIt'), kind: 'primary' }] });
 }
 
 /**
@@ -87,7 +88,7 @@ export function info(title, bodyHtml, { wide } = {}) {
  * 预设 / 短语 / 项目名 / 画布名共用这一个，maxlength 与"空值不给提交"的规矩只此一份。
  * @returns {Promise<string|null>} 确认返回 trim 后的文本，取消返回 null
  */
-export function askName(title, initial = '', { maxlength = 40, placeholder = '', hint = '', okLabel = '保存' } = {}) {
+export function askName(title, initial = '', { maxlength = 40, placeholder = '', hint = '', okLabel = t('common.save') } = {}) {
   return new Promise(res => {
     let settled = false;
     const done = v => { if (!settled) { settled = true; res(v); } };
@@ -97,7 +98,7 @@ export function askName(title, initial = '', { maxlength = 40, placeholder = '',
     const box = el('div', { style: { display: 'grid', gap: '10px' } }, inp,
       hint ? el('p.muted', { text: hint }) : null,
       el('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px' } },
-        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '取消', onclick: () => { done(null); m.close('cancel'); } }),
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('common.cancel'), onclick: () => { done(null); m.close('cancel'); } }),
         el('button.btn.btn--primary.btn--sm', { type: 'button', text: okLabel, onclick: save })));
     const m = mount({ title, body: box, onClose: () => done(null) });
     requestAnimationFrame(() => { inp.focus(); inp.select(); });

@@ -3,6 +3,7 @@
 import { el, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { fmtStamp, fmtNum } from '../../core/format.js';
+import { t } from '../../core/i18n.js';
 
 const settingsOf = r => { try { return JSON.parse(r.settings_json || 'null'); } catch { return null; } };
 
@@ -13,15 +14,15 @@ const settingsOf = r => { try { return JSON.parse(r.settings_json || 'null'); } 
  */
 export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, emptyHint }) {
   /* 空态文案默认说编辑器的话；画布那条线没有遮罩和「提交生成」，进来时自己给一句 */
-  const emptyText = emptyHint || '这张图还没有提交过生成。涂好遮罩后点下方「提交生成」。';
+  const emptyText = emptyHint || t('hist.empty');
   let mode = 'all';
   let list = [];
   let active = null;
 
   const listBox = el('div.pre-list');
   const seg = el('div.seg', {},
-    el('button.seg__it', { type: 'button', class: 'seg__it is-on', dataset: { k: 'all' }, text: '全部', onclick: () => setMode('all') }),
-    el('button.seg__it', { type: 'button', dataset: { k: 'ok' }, text: '已出图', onclick: () => setMode('ok') }),
+    el('button.seg__it', { type: 'button', class: 'seg__it is-on', dataset: { k: 'all' }, text: t('hist.all'), onclick: () => setMode('all') }),
+    el('button.seg__it', { type: 'button', dataset: { k: 'ok' }, text: t('status.done'), onclick: () => setMode('ok') }),
   );
 
   function setMode(k) {
@@ -34,7 +35,7 @@ export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, 
     const rows = list.filter(r => (mode === 'ok' ? r.status === 'done' && !r.final_dead : true));
     if (!rows.length) {
       fill(listBox, el('p', { class: 'muted', style: { padding: '14px 6px', lineHeight: '1.7' },
-        text: list.length ? '这个筛选下没有记录。' : emptyText }));
+        text: list.length ? t('hist.noneInFilter') : emptyText }));
       return;
     }
     fill(listBox, rows.map(r => {
@@ -45,12 +46,12 @@ export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, 
       const c = settingsOf(r)?.cloud;
       /* 本机那一路要说清用的是谁的图：接管失败退回内置图时，历史记录里看得见的差别
          只有这一句，不然用户会以为改了自己那张图却出了内置的样 */
-      const graph = s?.graph_source === 'builtin' ? ' · 内置图' : '';
+      const graph = s?.graph_source === 'builtin' ? t('hist.builtinGraph') : '';
       const body = r.backend === 'cloud'
-        ? [c?.model, c?.quality].filter(Boolean).join(' · ') || '云端'
-        : `${r.steps}步 CFG${fmtNum(r.cfg, 0.5)}${nl != null ? ` · LoRA ${nl}` : ''}${graph}`;
+        ? [c?.model, c?.quality].filter(Boolean).join(' · ') || t('hist.cloud')
+        : t('hist.steps', { steps: r.steps, cfg: fmtNum(r.cfg, 0.5) }) + (nl != null ? t('hist.lora', { n: nl }) : '') + graph;
       // 画布那一版带了参考图要在条目上看得见：不然"这条和那条差在哪"只能点开对比层猜
-      const withRefs = Array.isArray(s?.refs) && s.refs.length ? ` · 参考 ${s.refs.length}` : '';
+      const withRefs = Array.isArray(s?.refs) && s.refs.length ? t('hist.refs', { n: s.refs.length }) : '';
       const meta = `${fmtStamp(r.created_at).slice(5)} · ${body}${withRefs}`;
       /* 状态是 done 但 PNG 不在盘上（清过 data/projects、手工删过文件）：缩略图与对比都没有左边可画，
          这里按"文件丢失"渲染，比摆一张碎图标诚实 */
@@ -65,32 +66,32 @@ export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, 
         thumb ? el('img.pre-it__th', { src: thumb, alt: '', loading: 'lazy' })
               : el('span.pre-it__ph', { class: `pre-it__ph${gone ? ' pre-it__ph--gone' : ''}` }),
         el('span.pre-it__tx', {},
-          el('b', { text: `#${r.id} · ${gone ? '文件已丢失' : r.status === 'done' ? '已出图' : r.status === 'error' ? '失败' : '生成中'}` }),
+          el('b', { text: `#${r.id} · ${gone ? t('hist.goneFile') : r.status === 'done' ? t('status.done') : r.status === 'error' ? t('status.err') : t('status.run')}` }),
           el('span.pre-it__meta', { text: meta, title: meta }),
           /* 失败原因原来只在右下角 toast 里活 5 秒，回头看这条就什么都没有了 */
           r.status === 'error' && r.error && !gone ? el('span.pre-it__err', { text: String(r.error).slice(0, 160), title: String(r.error || '') }) : null,
-          r.rerun_of ? el('span.pre-it__from', { text: `改自 #${r.rerun_of}` }) : null),
+          r.rerun_of ? el('span.pre-it__from', { text: t('hist.from', { id: r.rerun_of }) }) : null),
         /* 这一列在 .pre-list（overflow 滚动容器）里，自绘气泡会被裁掉一截：
            实测 174px 宽的提示只有 33px 落在面板内，剩下的被切了。改用原生 title，浏览器画的浮层不受我们布局的裁剪。 */
         el('span.pre-it__acts', {},
           onRestore ? el('button.pre-it__btn', {
-            type: 'button', title: s ? '回填这组参数，改完自己点提交' : '这条没存参数', disabled: !s,
+            type: 'button', title: s ? t('hist.restoreTitle') : t('hist.noParams'), disabled: !s,
             html: icon('sliders', { cls: 'icon icon--sm' }),
-            'aria-label': '回填这组参数',
+            'aria-label': t('hist.restoreAria'),
             onclick: e => { e.stopPropagation(); onRestore(r); },
           }) : null,
           !gone && r.final_url && onFork ? el('button.pre-it__btn', {
-            type: 'button', title: '把这张成图另存为项目里的新图，之后在它上面涂',
+            type: 'button', title: t('hist.forkTitle'),
             html: icon('copy', { cls: 'icon icon--sm' }),
-            'aria-label': '另存为新图',
+            'aria-label': t('hist.forkAria'),
             onclick: e => { e.stopPropagation(); onFork(r); },
           }) : null,
           onDel ? el('button.pre-it__btn', {
-            type: 'button', title: gone ? '删掉这条记录（文件已经不在了，只清库里这一行）'
-              : r.status === 'running' ? '还在生成中，等它落定再删' : '删掉这条记录与它的成图，原图和遮罩不动',
+            type: 'button', title: gone ? t('hist.delGone')
+              : r.status === 'running' ? t('hist.delRunning') : t('hist.delNormal'),
             disabled: r.status === 'running',
             html: icon('trash', { cls: 'icon icon--sm' }),
-            'aria-label': '删除这条记录',
+            'aria-label': t('hist.delAria'),
             onclick: e => { e.stopPropagation(); if (r.status !== 'running') onDel(r); },
           }) : null),
         el('span.dot', { class: `dot ${gone ? 'dot--err' : r.status === 'done' ? 'dot--done' : r.status === 'error' ? 'dot--err' : 'dot--pending'}` }),
@@ -105,7 +106,7 @@ export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, 
   }
 
   const node = el(bare ? 'div' : 'aside', { class: `ed-pre${bare ? ' ed-pre--bare' : ''}` },
-    bare ? null : el('div.col-hd', {}, el('h3', { html: icon('layers', { cls: 'icon icon--sm' }) + '<span>结果历史</span>' })),
+    bare ? null : el('div.col-hd', {}, el('h3', { html: icon('layers', { cls: 'icon icon--sm' }) + `<span>${t('hist.title')}</span>` })),
     el('div.col-sub', {}, seg),
     listBox,
   );

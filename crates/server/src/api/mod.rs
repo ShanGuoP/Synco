@@ -87,6 +87,7 @@ pub fn router() -> Router<Shared> {
         .route("/api/workflow/inspect", get(settings::workflow_inspect))
         .route("/api/workflow/roles", get(settings::workflow_roles_get).post(settings::workflow_roles_post))
         .route("/api/settings/proxy-edge", post(settings::proxy_edge_set))
+        .route("/api/settings/lang", post(settings::lang_set))
         .route("/api/export", get(settings::export_get))
         .route("/api/export/dir", post(settings::export_dir_set))
         .route("/api/export/run", post(settings::export_run))

@@ -22,25 +22,26 @@ import { createHistory } from './history.js';
 import { createFilmstrip } from '../../views/editor/filmstrip.js';
 import { createCompare } from './compare.js';
 import { fmtFile, fmtDims } from '../../core/format.js';
+import { beforeSwitch, t } from '../../core/i18n.js';
 
 let ctx = null;   // 当前编辑器上下文（只建一次，切图复用）
 let rerunFrom = null;       // 下一次提交是「哪条结果的重跑」
 let lastSubmitted = null;   // 上次提交的参数快照，用来判断面板里是否有未提交改动
 
 const TOOLS = [
-  { key: 'pan',   ico: 'hand',   label: '抓手', tip: '平移画布 · H' },
-  { key: 'brush', ico: 'brush',  label: '画笔', tip: '涂要修的区域 · B' },
-  { key: 'erase', ico: 'eraser', label: '橡皮', tip: '擦回已涂 · E' },
+  { key: 'pan',   ico: 'hand',   label: 'ed.tPan', tip: 'ed.tPanTip' },
+  { key: 'brush', ico: 'brush',  label: 'dlg.dBrush', tip: 'ed.tBrushTip' },
+  { key: 'erase', ico: 'eraser', label: 'dlg.dEraser', tip: 'ed.tEraseTip' },
 ];
 const ZOOMS = [
-  { key: 'fit',  ico: 'fit',     label: '合适', tip: '适应窗口 · 0' },
-  { key: 'one',  ico: 'one2one', label: '1:1',  tip: '实际像素 · 1' },
-  { key: 'zin',  ico: 'zoomIn',  label: '放大', tip: '或按 +' },
-  { key: 'zout', ico: 'zoomOut', label: '缩小', tip: '或按 -' },
+  { key: 'fit',  ico: 'fit',     label: 'ed.tFit', tip: 'ed.tFitTip' },
+  { key: 'one',  ico: 'one2one', label: 'ed.tOne', tip: 'ed.tOneTip' },
+  { key: 'zin',  ico: 'zoomIn',  label: 'compare.zoomIn', tip: 'ed.tZinTip' },
+  { key: 'zout', ico: 'zoomOut', label: 'compare.zoomOut', tip: 'ed.tZoutTip' },
 ];
 const EDITS = [
-  { key: 'undo',  ico: 'undo',  label: '撤销', tip: '回退一笔 · Ctrl+Z' },
-  { key: 'clear', ico: 'trash', label: '清空', tip: '擦掉整张遮罩' },
+  { key: 'undo',  ico: 'undo',  label: 'ed.tUndo', tip: 'ed.tUndoTip' },
+  { key: 'clear', ico: 'trash', label: 'ed.tClear', tip: 'ed.tClearTip' },
 ];
 
 /**
@@ -69,7 +70,7 @@ function buildShell() {
   const vp = el('div.vp', {}, layer, cursor, compare.node);
 
   const hudSize = el('span.pill', { text: '—' });
-  const hudFit = el('button.pill', { type: 'button', text: '适应', onclick: () => viewport.fit() });
+  const hudFit = el('button.pill', { type: 'button', text: t('compare.fit'), onclick: () => viewport.fit() });
   const hudOne = el('button.pill', { type: 'button', text: '1:1', onclick: () => viewport.one2one() });
   const hudZoom = el('span.pill', { text: '100%' });
   const hint = el('div.ed-hint', { hidden: true });
@@ -94,47 +95,47 @@ function buildShell() {
   const brushVal = el('span.tool-slider__val', { text: '70' });
   const zoomPct = el('span.tool__val', { text: '100%' });
   const brushSlider = makeSlider({
-    min: 8, max: 320, step: 2, value: 70, ariaLabel: '笔刷大小',
+    min: 8, max: 320, step: 2, value: 70, ariaLabel: t('ed.brushAria'),
     onChange: v => { brushVal.textContent = String(v); ctx.painter?.setBrush(v); },
   });
   const tools = el('div.ed-tools', {},
-    el('button.tool-zoom', { type: 'button', 'data-tip': '点击适应窗口', onclick: () => viewport.fit() }, zoomPct),
-    ...ZOOMS.map(z => toolBtn(z.key, z.ico, z.label, z.tip, () => onZoom(z.key))),
+    el('button.tool-zoom', { type: 'button', 'data-tip': t('ed.zoomTip'), onclick: () => viewport.fit() }, zoomPct),
+    ...ZOOMS.map(z => toolBtn(z.key, z.ico, t(z.label), t(z.tip), () => onZoom(z.key))),
     el('span.tool-sep'),
-    ...TOOLS.map(t => toolBtn(t.key, t.ico, t.label, t.tip, () => setTool(t.key))),
+    ...TOOLS.map(d => toolBtn(d.key, d.ico, t(d.label), t(d.tip), () => setTool(d.key))),
     el('span.tool-sep'),
-    ...EDITS.map(t => toolBtn(t.key, t.ico, t.label, t.tip, () => onEdit(t.key))),
-    el('div.tool-slider', {}, el('span.tool-slider__lab', { text: '笔刷' }), brushSlider.node, brushVal),
+    ...EDITS.map(d => toolBtn(d.key, d.ico, t(d.label), t(d.tip), () => onEdit(d.key))),
+    el('div.tool-slider', {}, el('span.tool-slider__lab', { text: t('ed.brushLab') }), brushSlider.node, brushVal),
   );
 
   const fname = el('b.nowrap');
   const fdims = el('span');
   const saveFlag = el('span.saveflag');
-  const exportBtn = el('button.btn.btn--primary.btn--sm', { type: 'button', html: icon('download', { cls: 'icon icon--sm' }) + '<span>导出</span>', onclick: exportCurrent });
+  const exportBtn = el('button.btn.btn--primary.btn--sm', { type: 'button', html: icon('download', { cls: 'icon icon--sm' }) + `<span>${t('ed.export')}</span>`, onclick: exportCurrent });
   const topRight = el('div.ed-top__r', {},
     saveFlag,
-    el('button.btn.btn--ghost.btn--sm.ed-params-btn', { type: 'button', html: icon('sliders', { cls: 'icon icon--sm' }) + '<span>参数</span>', onclick: toggleDrawer }),
-    el('button.btn.btn--ghost.btn--sm', { type: 'button', html: icon('compare', { cls: 'icon icon--sm' }) + '<span>对比</span>', onclick: openBestCompare }),
+    el('button.btn.btn--ghost.btn--sm.ed-params-btn', { type: 'button', html: icon('sliders', { cls: 'icon icon--sm' }) + `<span>${t('ed.params')}</span>`, onclick: toggleDrawer }),
+    el('button.btn.btn--ghost.btn--sm', { type: 'button', html: icon('compare', { cls: 'icon icon--sm' }) + `<span>${t('ed.compare')}</span>`, onclick: openBestCompare }),
     exportBtn);
   // 顶栏兼作窗口标题区：deep 让空白处都能拖，里面的按钮/输入仍按可点处理不会被吞
   const top = el('div.ed-top', { 'data-tauri-drag-region': 'deep' },
     el('div.ed-top__l', {},
-      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': '返回项目', 'data-tip': '返回项目', html: icon('left', { cls: 'icon icon--sm' }), onclick: goBack }),
+      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': t('ed.back'), 'data-tip': t('ed.back'), html: icon('left', { cls: 'icon icon--sm' }), onclick: goBack }),
       el('div.ed-file', {}, fname, fdims)),
     el('div.ed-top__c', {},
       el('div.ed-seg', {},
-        el('button', { type: 'button', text: '首页', onclick: () => go('/') }),
-        el('button', { type: 'button', text: '项目', onclick: goBack }),
-        el('button.is-on', { type: 'button', text: '精修', disabled: true }))),
+        el('button', { type: 'button', text: t('crumb.home'), onclick: () => go('/') }),
+        el('button', { type: 'button', text: t('crumb.project'), onclick: goBack }),
+        el('button.is-on', { type: 'button', text: t('crumb.editor'), disabled: true }))),
     topRight);
   mountWindowControls(topRight);
 
   const rail = el('div.ed-rail', {},
-    railBtn('pre', 'layers', '历史', true, () => toggleCol('no-pre', 'pre')),
-    railBtn('prop', 'sliders', '参数', true, () => toggleCol('no-prop', 'prop')),
-    railBtn('cmp', 'compare', '对比', false, openBestCompare),
+    railBtn('pre', 'layers', 'ed.railHist', true, () => toggleCol('no-pre', 'pre')),
+    railBtn('prop', 'sliders', 'ed.railProp', true, () => toggleCol('no-prop', 'prop')),
+    railBtn('cmp', 'compare', 'ed.railCmp', false, openBestCompare),
     el('div', { style: { flex: '1 1 auto' } }),
-    railBtn('help', 'book', '帮助', false, helpModal));
+    railBtn('help', 'book', 'dlg.help', false, helpModal));
 
   const history = createHistory({ onPick: showCompare, onRestore: restoreFromResult, onFork: forkResult, onDel: delResult });
   const params = createParams({ onSubmit: doSubmit, onStop: stopCurrent, onMode: applyMode, onInk: applyScope });
@@ -155,18 +156,18 @@ function buildShell() {
     mask, cursor,
     onSaved: onMaskSaved,
     // 画笔模块每描完一帧才回调一次，反向预览跟着它刷新（每帧一次小尺寸 blit，付得起）
-    onDirty: () => { setFlag('有未保存的涂抹', 'busy'); syncInvertHint(); },
+    onDirty: () => { setFlag(t('ed.dirtyFlag'), 'busy'); syncInvertHint(); },
   });
 
   /* 「本地调整」：参数在这一层，像素永远交给服务端算。它要用 params 那条状态行，
      所以必须排在 params 之后；面板那一页再反向挂回 params 的标签条上 */
   const adjust = createAdjust({
     layer, poster, stage, viewport, tiles,
-    line: txt => params.line(txt),
+    line: (txt, isErr) => params.line(txt, isErr),
     idOf: () => ctx?.imgId || 0,
     infoOf: () => ctx?.info,
     onForked: id => forkAdjusted(id),
-    brushLocked: msg => { if (msg) toastErr('现在不能涂遮罩', msg); },
+    brushLocked: msg => { if (msg) toastErr(t('ed.brushLocked'), msg); },
     // 画幅尺寸交给左下角那枚读数：带着裁切/旋转时，屏幕上那张已与源图不同
     onFrame: (w, h) => { if (ctx) { ctx.hudFrame = { w, h }; paintHud(); } },
   });
@@ -182,9 +183,9 @@ function buildShell() {
            history, params, presets, film, rail, exportBtn, zoomPct };
 }
 
-function railBtn(key, ico, label, on, onclick) {
+function railBtn(key, ico, labelKey, on, onclick) {
   return el('button.rail-btn', { type: 'button', dataset: { key }, class: `rail-btn${on ? ' is-on' : ''}`, onclick },
-    el('span.ic', { html: icon(ico) }), el('span', { text: label }));
+    el('span.ic', { html: icon(ico) }), el('span', { text: t(labelKey) }));
 }
 
 const narrow = () => window.matchMedia('(max-width: 1100px)').matches;
@@ -193,7 +194,7 @@ function toggleCol(cls, key) {
   /* 窄屏没有三栏可收，图标轨改当抽屉/浮层开关 */
   if (narrow()) {
     if (key === 'prop') toggleDrawer();
-    else if (key === 'pre') toastErr('窄屏下结果历史并入参数面板', '旋转横屏或到桌面端查看');
+    else if (key === 'pre') toastErr(t('ed.narrowHist'), t('ed.narrowHistBody'));
     return;
   }
   const off = $('#editor').classList.toggle(cls);
@@ -221,7 +222,7 @@ export async function openEditor(projectId, imgId) {
   const { project, images } = store.get();
   if (!project || project.id !== +projectId || !images.some(i => i.id === +imgId)) {
     try { await loadProject(projectId); }
-    catch (e) { toastErr('项目打不开', e.message || String(e)); go('/'); return; }
+    catch (e) { toastErr(t('ed.projFail'), e.message || String(e)); go('/'); return; }
   }
   ed.hidden = false;
   ed.classList.remove('is-drawer');
@@ -248,21 +249,29 @@ window.addEventListener('pagehide', () => {
   Promise.resolve(ctx?.adjust?.flush()).catch(() => {});
 });
 
+/* 换语言走的是"存好 → 重载"，pagehide 那条只能尽力（异步保存赶得上卸载就输了），
+   所以这里给一次真正 await 的机会：注册制，设置弹窗不认识编辑器内部 */
+beforeSwitch(async () => {
+  if (!ctx) return;
+  await Promise.resolve(ctx.painter.flush());
+  await Promise.resolve(ctx.adjust.flush());
+});
+
 const goBack = () => { const p = store.peek('project'); go(p ? `/p/${p.id}` : '/'); };
 
 /* ==================== 单图装载 ==================== */
 async function showImage(imgId) {
   const row = store.peek('images').find(i => i.id === imgId);
-  if (!row) { toastErr('这张图不在项目里'); return; }
+  if (!row) { toastErr(t('ed.notInProject')); return; }
   /* 连点胶片条会并发跑好几次装载：认领 imgId 之后还有三个 await，
      晚到的旧响应必须能认出自己已经过期，否则它会把画布、海报与 painter 的归属写成上一张 */
   const seq = (ctx.showSeq = (ctx.showSeq || 0) + 1);
   const stale = () => seq !== ctx.showSeq;
   ctx.imgId = imgId;
 
-  const busy = toastBusy('载入图片…');
+  const busy = toastBusy(t('ed.loadingImage'));
   let info;
-  try { info = await api.image(imgId); } catch (e) { busy.close(); toastErr('载入失败', e.message); return; }
+  try { info = await api.image(imgId); } catch (e) { busy.close(); toastErr(t('ed.loadFail'), e.message); return; }
   busy.close();
   if (stale()) return;
 
@@ -274,7 +283,7 @@ async function showImage(imgId) {
   ctx.params.setCloud(isCloud());
   paintHud();
   /* 库里有过这行 ≠ 盘上还有这个文件（清过 data/projects、手工删过图都会留下指向空气的记录） */
-  ctx.setFlag(info.orig_dead ? '原图文件已丢失' : '', info.orig_dead ? 'err' : '');
+  ctx.setFlag(info.orig_dead ? t('film.lostFile') : '', info.orig_dead ? 'err' : '');
 
   // 底图先换掉：切图时旧照片不该还贴在屏幕上，瓦片清单随后异步补
   ctx.tiles.abort();
@@ -284,7 +293,7 @@ async function showImage(imgId) {
   if (!ctx.poster.hidden) await new Promise(res => {
     const done = () => res();
     ctx.poster.onload = done;
-    ctx.poster.onerror = () => { toastErr('底图解码失败', info.name); done(); };
+    ctx.poster.onerror = () => { toastErr(t('ed.decodeFail'), info.name); done(); };
     if (ctx.poster.complete && ctx.poster.naturalWidth) done();
   });
   if (stale()) return;
@@ -329,13 +338,13 @@ async function showImage(imgId) {
       ctx.history.setResults(info.results, hit.id);
       showCompare(hit);
     } else {
-      toastErr('这条结果暂时看不了', hit ? String(hit.error || '它还没出图或文件已丢失').slice(0, 120) : '记录已经不在了');
+      toastErr(t('ed.resultBlind'), hit ? String(hit.error || t('ed.resultBlindWhy')).slice(0, 120) : t('ed.recordGone'));
     }
   }
   ctx.params.stages.reset();
   ctx.params.setBusy(false);
   ctx.params.clearMarks();
-  ctx.params.line(had ? '已有遮罩，可继续修改后提交' : '');
+  ctx.params.line(had ? t('ed.hasMask') : '');
   rerunFrom = null;
   lastSubmitted = null;
 
@@ -346,7 +355,7 @@ async function showImage(imgId) {
     ctx.params.setBusy(true);
     for (const key of ['submit', 'queue']) ctx.params.stages.set(key, 'done');
     ctx.params.stages.set('sample', 'run');
-    ctx.params.line('接回一个进行中的任务…');
+    ctx.params.line(t('ed.rejoin'));
     for (const r of resumable) adopt(r.id, imgId, {
       /* 轮询回来时可能已经切图：这一张的阶段条只在这张还是当前图时改 */
       onTick: s => { if (ctx.imgId === imgId && s !== 'running' && s !== 'queued') ctx.params.stages.set('sample', s === 'done' ? 'done' : 'err'); },
@@ -360,7 +369,7 @@ async function showImage(imgId) {
 
 const showHint = on => {
   ctx.hint.hidden = !on;
-  if (on) ctx.hint.innerHTML = `${icon('brush', { cls: 'icon icon--sm' })}<span>还没涂遮罩 · 用画笔把要修的区域涂出来</span>`;
+  if (on) ctx.hint.innerHTML = `${icon('brush', { cls: 'icon icon--sm' })}<span>${t('ed.noMaskHint')}</span>`;
 };
 
 /** 左下角那条 HUD：两条出图路的口径不一样，切换之后必须重写，不能停在装载时那一句 */
@@ -371,10 +380,10 @@ function paintHud() {
   const d = ctx.hudFrame || info;
   const inv = isCloud() && !!store.peek('settings')?.invert;
   ctx.hudSize.textContent = inv
-    ? `${d.w}×${d.h} · 云端整幅重绘 · 涂住的区域保持原图`
+    ? t('ed.dimsA', { wh: `${d.w}×${d.h}` })
     : isCloud()
-      ? `${d.w}×${d.h} · 云端裁切缝合 · 未涂区域保持原图`
-      : `${d.w}×${d.h} · 提交时按长边裁到 1024`;
+      ? t('ed.dimsB', { wh: `${d.w}×${d.h}` })
+      : t('ed.dimsC', { wh: `${d.w}×${d.h}` });
 }
 
 /* ---------------- 反向涂抹（只在这条路上开） ---------------- */
@@ -430,10 +439,10 @@ function applyScope(mode) {
   paintHud();
   syncInvertHint();
   ctx.params.line(mode === 'full'
-    ? '整张重绘：原图整张发过去按提示词生成，蒙版外不再逐像素保持（这条只走云端）'
+    ? t('ed.modeFullNote')
     : mode === 'keep'
-      ? '反向涂抹：涂住的是要保住的主体，其余整幅交给云端重绘'
-      : '正向涂抹：涂住的那块交给云端重绘，其余逐像素保持原图');
+      ? t('ed.modeKeepNote')
+      : t('ed.modePartNote'));
 }
 
 /**
@@ -451,8 +460,8 @@ function applyMode(next) {
   ctx.params.setCloud(isCloud());
   paintHud();
   ctx.params.line(next === 'cloud'
-    ? '已切到云端：裁一块发一块，没有步数 / CFG / LoRA / 种子可调，负面并进正向一起发'
-    : '已切回本机 ComfyUI：提交前确认 ComfyUI 正跑着，裁切长边固定 1024');
+    ? t('ed.switchedCloud')
+    : t('ed.switchedLocal'));
 }
 
 /* ==================== 工具 / 缩放 ==================== */
@@ -460,7 +469,7 @@ function setTool(k) {
   /* 裁切/旋转换了画幅，遮罩那一层还是按源图坐标系存的：这时涂上去的笔迹会歪。
      与其静默错位，不如挡住并说清楚出口（先「应用为新图」，新图的源图就是那张裁好的） */
   if ((k === 'brush' || k === 'erase') && ctx.adjust?.geometryActive) {
-    toastErr('现在不能涂遮罩', '裁切/旋转后的画面与遮罩不是同一个坐标系：先点「应用为新图」，在那张图上继续涂');
+    toastErr(t('ed.brushLocked'), t('ed.adjustLocked'));
     return;
   }
   if (k === 'brush' || k === 'erase') ctx.adjust?.exit();   // 交回画笔：裁切框与液化盘让位
@@ -478,8 +487,8 @@ function onZoom(k) {
 
 function onEdit(k) {
   if (k === 'undo') {
-    if (!ctx.painter.canUndo) { toastErr('没有可撤销的笔画'); return; }
-    ctx.painter.undo().then(ok => { if (ok) { ctx.setFlag('已撤销一笔'); syncInvertHint(); } });
+    if (!ctx.painter.canUndo) { toastErr(t('ed.noUndo')); return; }
+    ctx.painter.undo().then(ok => { if (ok) { ctx.setFlag(t('ed.undone')); syncInvertHint(); } });
   } else if (k === 'clear') {
     ctx.painter.clear();
     syncInvertHint();
@@ -499,19 +508,19 @@ function syncZoomPills() {
 async function onMaskSaved({ empty, b64, id }) {
   if (!id) return true;
   const here = id === ctx.imgId;                 // 这批笔迹是否还属于屏幕上这张
-  if (here) ctx.setFlag('保存中…', 'busy');
+  if (here) ctx.setFlag(t('ed.saving'), 'busy');
   try {
     await api.saveMask(id, b64);
     touchImage(id, { has_mask: !empty });
     if (here) {
-      ctx.setFlag(empty ? '遮罩已清空' : '遮罩已保存', 'ok');
+      ctx.setFlag(empty ? t('ed.maskCleared') : t('ed.maskSaved'), 'ok');
       if (!empty) ctx.hint.hidden = true;
     }
     syncFilm();
     return true;
   } catch (e) {
-    if (here) ctx.setFlag('保存失败', 'err');
-    toastErr('遮罩保存失败', e.message);
+    if (here) ctx.setFlag(t('ed.saveFail'), 'err');
+    toastErr(t('ed.maskSaveFail'), e.message);
     return false;                                // 画笔模块据此把这批笔迹重新标脏并排一次重试
   }
 }
@@ -523,8 +532,8 @@ const parseSettings = r => { try { return JSON.parse(r.settings_json || 'null');
 const resultTag = r => {
   const c = parseSettings(r)?.cloud;
   return r.backend === 'cloud'
-    ? [c?.model, c?.quality, c?.size].filter(Boolean).join(' · ') || '云端'
-    : `${r.steps} 步 · CFG ${r.cfg} · 种子 ${r.seed}`;
+    ? [c?.model, c?.quality, c?.size].filter(Boolean).join(' · ') || t('pm.modeCloud')
+    : t('ed.resultTag', { steps: r.steps, cfg: r.cfg, seed: r.seed });
 };
 
 /** 套用预设：LoRA 往当前工作流的骨架上贴，本机没有的置灰 */
@@ -535,7 +544,7 @@ function applyPreset(p) {
     const next = { prompt: p.prompt || '', negative: p.negative || '' };
     rerunFrom = null;
     ctx.params.applySettings(next, diffSettings(cur, next));
-    ctx.params.line(`已套用「${p.name}」的指令（云端不看步数与 LoRA），改完点提交`);
+    ctx.params.line(t('ed.appliedCloudPreset', { name: p.name }));
     return;
   }
   const next = settingsFromPreset(p, cur, (store.peek('cfg') || {}).loras);
@@ -543,42 +552,42 @@ function applyPreset(p) {
   rerunFrom = null;
   ctx.params.applySettings(next, diffSettings(cur, next));
   ctx.params.line(missing.length
-    ? `已套用「${p.name}」，${missing.length} 个 LoRA 本机没有已置灰`
-    : `已套用「${p.name}」，改完点提交`);
-  if (missing.length) toastErr('部分 LoRA 本机没有', missing.map(l => l.name).join('、'));
+    ? t('ed.appliedPresetMissing', { name: p.name, n: missing.length })
+    : t('ed.appliedPreset', { name: p.name }));
+  if (missing.length) toastErr(t('ed.loraPartial'), missing.map(l => l.name).join(t('settings.sepList')));
 }
 
 /** 把某条成图复制成项目里的一张新图，并跳过去在它上面涂 */
 /** 「本地调整 → 应用为新图」之后：项目要重取（多了一行），并跳到那张新图上 */
 async function forkAdjusted(imageId) {
   if (!imageId) return;
-  const busy = toastBusy('登记新图…');
+  const busy = toastBusy(t('ed.registering'));
   try {
     await loadProject(ctx.projectId);
     busy.close();
     go(`/p/${ctx.projectId}/e/${imageId}`);
-  } catch (e) { busy.close(); toastErr('新图没接上', e.message); }
+  } catch (e) { busy.close(); toastErr(t('ed.newImageFail'), e.message); }
 }
 
 async function forkResult(r) {
-  if (!r?.final_url) { toastErr('这条记录还没有成图'); return; }
-  if (r.final_dead) { toastErr('这条成图的文件已经不在了', '记录还留着，PNG 不在盘上了。删掉这条记录即可'); return; }
-  const busy = toastBusy('正在复制成图…');
+  if (!r?.final_url) { toastErr(t('ed.noResultYet')); return; }
+  if (r.final_dead) { toastErr(t('ed.resultGone'), t('ed.resultGoneBody')); return; }
+  const busy = toastBusy(t('ed.copying'));
   try {
     const f = await api.forkResult(r.id);
     await loadProject(ctx.projectId);
     busy.close();
     go(`/p/${ctx.projectId}/e/${f.image_id}`);
-    toastOk('已另存为新图', `${f.name} · 不要了可在项目页删掉它`);
-  } catch (e) { busy.close(); toastErr('另存失败', e.message); }
+    toastOk(t('ed.forked'), t('ed.forkedBody', { name: f.name }));
+  } catch (e) { busy.close(); toastErr(t('ed.forkFail'), e.message); }
 }
 
 /** 删一条生成记录：连着它的成图文件一起删，原图与遮罩不动 */
 async function delResult(r) {
   const ok = await confirm({
-    title: `删除记录 #${r.id}`,
-    text: r.final_url ? '这条记录连同它的成图文件一起删掉。原图和遮罩不动。' : '原图和遮罩不动，只删这条记录。',
-    danger: true, okLabel: '删除记录',
+    title: t('ed.delRecTitle', { id: r.id }),
+    text: r.final_url ? t('ed.delRecText') : t('ed.delRecOnly'),
+    danger: true, okLabel: t('ed.delRecBtn'),
   });
   if (!ok) return;
   try {
@@ -588,8 +597,8 @@ async function delResult(r) {
     ctx.info = info;
     ctx.history.setResults(info.results, info.last?.status === 'done' ? info.last.id : null);
     syncExport();
-    toastOk('记录已删除', `#${r.id}`);
-  } catch (e) { toastErr('删除失败', e.message); }
+    toastOk(t('ed.recDeleted'), `#${r.id}`);
+  } catch (e) { toastErr(t('ed.delFail'), e.message); }
 }
 
 /** 回填是"接着改"的起点：对比层还开着、工具还停在抓手就涂不了，退回画布并切到画笔 */
@@ -604,14 +613,14 @@ function backToCanvas() {
 /** 把某条结果当时的参数搬回面板，等用户自己点提交；种子默认沿用 */
 async function restoreFromResult(r) {
   const s = parseSettings(r);
-  if (!s) { toastErr('这条记录没存参数', '它是在参数记录功能之前跑的'); return; }
+  if (!s) { toastErr(t('ed.noParams'), t('ed.noParamsWhy')); return; }
   const cur = store.peek('settings') || {};
   const dirty = lastSubmitted && diffSettings(lastSubmitted, cur).length;
   if (dirty) {
     const ok = await confirm({
-      title: '回填会覆盖当前参数',
-      text: `面板里有未提交的改动，仍要用 #${r.id} 的参数替换吗？`,
-      okLabel: '仍然回填',
+      title: t('ed.restoreTitle'),
+      text: t('ed.restoreText', { id: r.id }),
+      okLabel: t('ed.restoreBtn'),
     });
     if (!ok) return;
   }
@@ -633,8 +642,8 @@ async function restoreFromResult(r) {
     };
     rerunFrom = r.id;
     ctx.params.applySettings(next, [...diffSettings(cur, next), 'prompt']);
-    ctx.params.line(`已回填 #${r.id} 的正向指令（云端把负面并进了正向），采样参数按本机这一路重新取值`);
-    toastOk('参数已回填', `${resultTag(r)} · 云端结果不保证复现`);
+    ctx.params.line(t('ed.restoredCloud', { id: r.id }));
+    toastOk(t('ed.restored'), t('ed.restoredBody', { tag: resultTag(r) }));
     backToCanvas();
     return;
   }
@@ -645,10 +654,10 @@ async function restoreFromResult(r) {
   const next = { ...s, seed: base, randomSeed: false };
   rerunFrom = r.id;
   ctx.params.applySettings(next, [...diffSettings(cur, next), 'seed', 'randomSeed']);
-  ctx.params.line(`已回填 #${r.id} 的参数，改完点提交`);
-  toastOk('参数已回填', (base + ctx.imgId) % SEED_MAX === raw
-    ? `种子沿用 #${r.id} 的 ${base}`
-    : `#${r.id} 的种子超出面板范围，重跑对不上`);
+  ctx.params.line(t('ed.restoredWf', { id: r.id }));
+  toastOk(t('ed.restored'), (base + ctx.imgId) % SEED_MAX === raw
+    ? t('ed.seedKept', { id: r.id, seed: base })
+    : t('ed.seedOut', { id: r.id }));
   backToCanvas();
 }
 
@@ -660,7 +669,7 @@ async function restoreFromResult(r) {
  */
 async function doSubmitCloud() {
   const c = store.peek('cloud') || {};
-  if (!c.key_saved) { toastErr('云端还没配好', '设置 → 云端：填 base_url、模型名与 API key'); return; }
+  if (!c.key_saved) { toastErr(t('ed.cloudOff'), t('ed.cloudOffBody')); return; }
   const imgId = ctx.imgId;
   /* 先 flush 再判有没有遮罩：刚涂完 700ms 内点提交，库里的 has_mask 还是 false，
      按原顺序会被"还没有遮罩"打回一次，用户看到的是按钮失灵 */
@@ -669,7 +678,7 @@ async function doSubmitCloud() {
   const full = !!s?.full;
   // 反向与整张重绘都不要求涂过：前者"没涂=整幅"，后者根本不看遮罩；正向才要求先涂出区域
   if (!full && !s?.invert && !store.peek('images').find(i => i.id === imgId)?.has_mask) {
-    toastErr('还没有遮罩', '先用画笔涂出要修的区域，或把上面切到「整张重绘」');
+    toastErr(t('ed.noMask'), t('ed.noMaskBody'));
     return;
   }
   const st = ctx.params.stages;
@@ -682,20 +691,20 @@ async function doSubmitCloud() {
     st.set(cur, 'done'); cur = key; st.set(key, 'run'); if (msg) ctx.params.line(msg);
   };
   const fail = msg => {
-    const text = String(msg || '云端未返回原因').slice(0, 200);
+    const text = String(msg || t('ed.noReason')).slice(0, 200);
     if (here()) {
       st.set(cur, 'err');
       ctx.params.setBusy(false);
       ctx.params.line(text);
     }
     setJob(imgId, { state: 'err', error: text });
-    toastErr('云端提交失败', text.slice(0, 140));
+    toastErr(t('ed.cloudFail'), text.slice(0, 140));
   };
 
   st.reset();
   st.set('submit', 'run');
   ctx.params.setBusy(true);
-  ctx.params.line(full ? '排队与发送原图…' : '排队与裁切…');
+  ctx.params.line(full ? t('ed.queuingFull') : t('ed.queuingCrop'));
   ctx.compare.hide();
   await saveSettings();
   lastSubmitted = { ...s };
@@ -717,16 +726,16 @@ async function doSubmitCloud() {
       },
     });
   } catch (e) { fail(e.message || e); return; }
-  if (!r?.result_id) { fail(r?.error || '云端应答异常'); return; }
+  if (!r?.result_id) { fail(r?.error || t('ed.cloudBadReply')); return; }
 
   setJob(imgId, { state: 'run', resultId: r.result_id, error: null });
-  advance('sample', full ? `云端整图生成 #${r.result_id}…` : `云端重绘裁切区 #${r.result_id}…`);
+  advance('sample', full ? t('ed.cloudGen', { id: r.result_id }) : t('ed.cloudCrop', { id: r.result_id }));
   // 之后与本机链路同一套：轮库里这一行，缝合与落盘都在服务端推进
   adopt(r.result_id, imgId, {
     onTick: status => {
       if (!here()) return;
       if (status === 'running' || status === 'queued') st.set('sample', 'run');
-      else if (status === 'done') { if (full) st.set('sample', 'done'); else advance('stitch', '服务端缝合落盘…'); }
+      else if (status === 'done') { if (full) st.set('sample', 'done'); else advance('stitch', t('ed.serverStitch')); }
       else if (status === 'error') { st.set(cur, 'err'); }
     },
     onDone: done => {
@@ -738,21 +747,21 @@ async function doSubmitCloud() {
 
 async function doSubmit() {
   if (!ctx?.imgId) return;
-  if (ctx.info?.orig_dead) { toastErr('这张图的原文件已经不在磁盘上', '只剩一条记录，画布是空的，提交上去只会生成一张废图。回项目页删掉它或重新导入同名原图'); return; }
+  if (ctx.info?.orig_dead) { toastErr(t('ed.origGone'), t('ed.origGoneBody')); return; }
   /* 提交的是"调整后"那张（服务端在链里先算参数再走裁切缝合）。几何段动了画幅时
      遮罩与画面不同域，这一步必须挡住，不然发出去的是错位的一版 */
-  if (ctx.adjust?.geometryActive) { toastErr('先处理掉裁切/旋转', '带着裁切或旋转提交，遮罩会落在错位的那一版上：先「应用为新图」再提交'); return; }
+  if (ctx.adjust?.geometryActive) { toastErr(t('ed.geomPending'), t('ed.geomPendingBody')); return; }
   await ctx.adjust.flush();          // 面板里最后一次改动还没发出去就先补上，参数与预览要一致
   if (isCloud()) return doSubmitCloud();
   // 整张重绘只做了云端那一条：本机这条要整图重绘得换一张没有裁切/缝合的工作流，别悄悄改用局部重绘去跑
   if (store.peek('settings')?.full) {
-    toastErr('整张重绘只走云端', '本机 ComfyUI 那一路始终会走裁切-缝合（蒙版外逐像素保持）。要整图重绘请切到云端。');
+    toastErr(t('ed.fullNeedsCloud'), t('ed.fullNeedsCloudBody'));
     return;
   }
   const imgId = ctx.imgId;
   await ctx.painter.flush();          // 同上：先落笔迹，再判这张有没有遮罩
   const img = store.peek('images').find(i => i.id === imgId);
-  if (!img?.has_mask) { toastErr('还没有遮罩', '先用画笔涂出要修的区域'); return; }
+  if (!img?.has_mask) { toastErr(t('ed.noMask'), t('ed.noMaskLocalBody')); return; }
 
   const settings = store.peek('settings');
   await saveSettings();
@@ -770,16 +779,16 @@ async function doSubmit() {
   st.reset();
   st.set('submit', 'run');
   ctx.params.setBusy(true);
-  ctx.params.line('上传照片与遮罩…');
+  ctx.params.line(t('ed.uploading'));
   ctx.compare.hide();
 
   const r = await submit([ctx.imgId], settings, {
     quiet: true,
     rerunOf,
     onTick: status => {
-      if (status === 'running') advance('sample', 'ComfyUI 采样中…');
-      else if (status === 'error') { if (mine()) { st.set(cur, 'err'); ctx.params.line('ComfyUI 执行出错'); } }
-      else advance('stitch', '回传成图…');
+      if (status === 'running') advance('sample', t('ed.comfySampling'));
+      else if (status === 'error') { if (mine()) { st.set(cur, 'err'); ctx.params.line(t('ed.comfyError'), true); } }
+      else advance('stitch', t('ed.returning'));
     },
     onDone: status => onJobSettled(status),
   });
@@ -788,11 +797,11 @@ async function doSubmit() {
     if (mine()) {
       st.set(cur, 'err');
       ctx.params.setBusy(false);
-      ctx.params.line(r.error || '没有任务被接受（可能遮罩未保存）');
+      ctx.params.line(r.error || t('gen.noneAccepted'), true);
     }
     return;
   }
-  advance('queue', '已进入 ComfyUI 队列');
+  advance('queue', t('ed.queued'));
 }
 
 /** 任务终态 → 刷新历史并自动进入对比 */
@@ -802,9 +811,9 @@ async function onJobSettled(r) {
   if (r?.image_id && r.image_id !== ctx.imgId) return;
   ctx.params.setBusy(false);
   // 带得上原因就直接说原因：轮询放弃那两条出口（记录没了、连续读不到）并没有右下角通知可看
-  if (r.status !== 'done') { ctx.params.line(r.error ? String(r.error).slice(0, 120) : '生成失败，原因见右下角通知'); return; }
+  if (r.status !== 'done') { ctx.params.line(r.error ? String(r.error).slice(0, 120) : t('ed.genFailNote'), true); return; }
   ctx.params.stages.finish(true);
-  ctx.params.line('完成，拖动中缝可对比原图');
+  ctx.params.line(t('ed.doneDrag'));
   try {
     const info = await api.image(ctx.imgId);
     ctx.info = info;
@@ -824,24 +833,24 @@ async function stopCurrent() {
   if (!imgId) return;
   const rid = store.peek('jobs')[imgId]?.resultId;
   if (!rid) {
-    toastErr('这次云端请求撤不回来', '它还在对面跑，回来后会正常落图或报错；这边不能强关');
+    toastErr(t('ed.stopCloudNo'), t('ed.stopCloudNoBody'));
     return;
   }
   const ok = await confirm({
-    title: `中断 #${rid}`,
-    text: isCloud() ? '云端那次请求撤不回来（可能已经计费），这里只是不再采用它的结果并解锁界面。'
-                    : '给 ComfyUI 发中断并把它从队列移走；已经跑掉的那部分不退。',
-    okLabel: '中断', danger: true,
+    title: t('ed.stopTitle', { id: rid }),
+    text: isCloud() ? t('ed.stopCloudText')
+                    : t('ed.stopLocalText'),
+    okLabel: t('ed.stop'), danger: true,
   });
   if (!ok) return;
   try {
     await api.interruptResult(rid);
     drop(rid);                                   // 别再轮询它，否则下一轮又把状态刷回 running
-    setJob(imgId, { state: 'err', resultId: rid, error: '已手动中断' });
+    setJob(imgId, { state: 'err', resultId: rid, error: t('ed.stoppedByUser') });
     if (ctx.imgId === imgId) {
       ctx.params.setBusy(false);
       ctx.params.stages.finish(false);
-      ctx.params.line('已中断这一张');
+      ctx.params.line(t('ed.interrupted'));
       try {
         const info = await api.image(imgId);
         ctx.info = info;
@@ -849,14 +858,14 @@ async function stopCurrent() {
         syncExport();
       } catch { /* 列表刷新失败不影响已中断 */ }
     }
-    toastOk('已中断', `#${rid}`);
-  } catch (e) { toastErr('中断失败', e.message); }
+    toastOk(t('ed.stopped'), `#${rid}`);
+  } catch (e) { toastErr(t('ed.stopFail'), e.message); }
 }
 
 function showCompare(r) {
-  if (!r?.final_url) { toastErr('这条记录还没有成图'); return; }
-  if (r.final_dead) { toastErr('这条成图的文件已经不在了', '记录还在，PNG 不在盘上了'); return; }
-  if (ctx.info?.orig_dead) { toastErr('原图文件已丢失', '对比要有左边那张底图才能拉，现在它不在了'); return; }
+  if (!r?.final_url) { toastErr(t('ed.noResultYet')); return; }
+  if (r.final_dead) { toastErr(t('ed.resultGone'), t('ed.resultGoneShort')); return; }
+  if (ctx.info?.orig_dead) { toastErr(t('film.lostFile'), t('ed.compareNeedsOrig')); return; }
   ctx.cmpId = r.id;
   ctx.compare.show({
     // 对比看的是 proxy 档：两张 20–33MB 的 PNG 一起解码是"点大图卡"的直接来源
@@ -874,28 +883,28 @@ const aliveDone = () => (ctx.info?.results || []).find(r => r.status === 'done' 
 
 function openBestCompare() {
   const done = aliveDone();
-  if (!done) { toastErr('这张图还没有成图', '先涂遮罩并提交生成'); return; }
+  if (!done) { toastErr(t('ed.noResult'), t('ed.noResultBody')); return; }
   showCompare(done);
 }
 
 /** 导出：成图直接复制到设置里的本机文件夹；没配目录就带去设置页 */
 async function exportCurrent() {
   const done = aliveDone();
-  if (!done) { toastErr('没有可导出的成图'); return; }
-  const busy = toastBusy('导出中…');
+  if (!done) { toastErr(t('ed.noExport')); return; }
+  const busy = toastBusy(t('ed.exporting'));
   try {
     const r = await api.exportRun([done.id]);
     busy.close();
     const one = r.files?.[0];
-    if (!one || one.skipped) { toastErr('导出失败', one?.reason || '未知原因'); return; }
-    toastOk('已导出', `${r.dir}\\${one.file}`);
+    if (!one || one.skipped) { toastErr(t('ed.exportFail'), one?.reason || t('ed.unknown')); return; }
+    toastOk(t('ed.exported'), `${r.dir}\\${one.file}`);
   } catch (e) {
     busy.close();
     const m = String(e.message || e);
     if (/导出目录/.test(m)) {
-      toastErr('还没设置导出目录', '设置 → 导出目录：填一个本机文件夹');
+      toastErr(t('ed.exportUnset'), t('ed.exportUnsetBody'));
       settingsModal('export');
-    } else toastErr('导出失败', m);
+    } else toastErr(t('ed.exportFail'), m);
   }
 }
 
@@ -924,7 +933,7 @@ function wireKeys(c) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); onEdit('undo'); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       /* .is-busy 只挡鼠标点击，键盘绕得过去：生成中再按就是多排一条任务、多烧一次云端额度 */
-      if (c.params.busy) { toastErr('这一张还在生成中', '等它落定，或先切到别的图'); return; }
+      if (c.params.busy) { toastErr(t('ed.busySwitch'), t('ed.busySwitchBody')); return; }
       e.preventDefault(); doSubmit(); return;
     }
     const k = e.key.toLowerCase();

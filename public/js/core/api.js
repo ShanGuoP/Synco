@@ -1,6 +1,8 @@
 // 网络层：唯一与后端 REST 契约打交道的地方，视图不直接 fetch
 'use strict';
 
+import { t } from './i18n.js';
+
 export class ApiError extends Error {
   constructor(msg, status) { super(msg); this.name = 'ApiError'; this.status = status || 0; }
 }
@@ -13,7 +15,7 @@ async function request(path, { method = 'GET', body, signal } = {}) {
       : { method, signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   } catch (e) {
     if (e.name === 'AbortError') throw e;
-    throw new ApiError('连不上本地服务，确认 Synco 还开着', 0);
+    throw new ApiError(t('api.offline'), 0);
   }
   const text = await res.text();
   let data = null;
@@ -108,6 +110,12 @@ export const api = {
   queueState:  () => request('/api/cloud/queue'),
 
   setProxyEdge: edge => request('/api/settings/proxy-edge', { method: 'POST', body: { proxy_edge: edge } }),
+  /** 全局设置一次读回：工作流路径、生效后端、proxy 档位、界面语言 */
+  settings:   () => request('/api/settings'),
+  /** 界面语言存 app_settings（跟着库走，重装不丢）；服务端只认 zh/en，别的夹回 zh */
+  setLang:    lang => request('/api/settings/lang', { method: 'POST', body: { lang } }),
+  /** 字典是 `public/locales/` 下的静态文件，no-store；fetch 仍只走这一个口（R5） */
+  locale:     l => request(`/public/locales/${l}.json`),
 
   setup:        () => request('/api/setup'),
   setupProgress: () => request('/api/setup/progress'),
@@ -121,7 +129,7 @@ export async function fileToPayload(file) {
   const b64 = await new Promise((res, rej) => {
     const rd = new FileReader();
     rd.onload = () => res(rd.result);
-    rd.onerror = () => rej(new ApiError(`读取失败：${file.name}`));
+    rd.onerror = () => rej(new ApiError(t('api.fileRead', { name: file.name })));
     rd.readAsDataURL(file);
   });
   const { width: w, height: h } = await new Promise(res => {
@@ -177,7 +185,7 @@ export async function importPhotos(list, { projectId = null, name = '', onProgre
         else { const r = await api.addImages(pid, payloads); ids.push(...r.ids); }
       } catch (e) {
         /* 项目已经建起来了，说清楚停在第几张，免得用户以为一张都没进 */
-        if (ids.length) e.message = `已导入 ${ids.length} 张后中断：${e.message}`;
+        if (ids.length) e.message = t('api.importAborted', { n: ids.length, msg: e.message });
         throw e;
       }
     }

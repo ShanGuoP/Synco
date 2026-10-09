@@ -2,13 +2,14 @@
 'use strict';
 import { el, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
-import { STATE_TEXT } from '../../state.js';
+import { stateText } from '../../state.js';
 import { fmtFile, fmtDims } from '../../core/format.js';
+import { t } from '../../core/i18n.js';
 
 const DOT = { run: 'dot--pending', done: 'dot--done', err: 'dot--err', skip: '', nomask: 'dot--mask', ready: '' };
 
 export function createFilmstrip(hooks = {}) {
-  const strip = el('div.film-strip', { role: 'listbox', 'aria-label': '项目图片' });
+  const strip = el('div.film-strip', { role: 'listbox', 'aria-label': t('film.aria') });
   const count = el('span.film-count');
   const meta = el('div.film-meta');
 
@@ -19,10 +20,10 @@ export function createFilmstrip(hooks = {}) {
 
   const node = el('footer.ed-film', {},
     el('div.film-chips', {},
-      el('button.btn.btn--icon.btn--sm', { type: 'button', 'data-tip': '追加照片', html: icon('plus', { cls: 'icon icon--sm' }), onclick: () => hooks.onImport?.() }),
-      chip('check', '已涂', () => hooks.onSelectMasked?.()),
-      chip('images', '反选', () => hooks.onInvert?.()),
-      chip('close', '清除', () => hooks.onClearSel?.()),
+      el('button.btn.btn--icon.btn--sm', { type: 'button', 'data-tip': t('film.add'), html: icon('plus', { cls: 'icon icon--sm' }), onclick: () => hooks.onImport?.() }),
+      chip('check', t('film.masked'), () => hooks.onSelectMasked?.()),
+      chip('images', t('film.invert'), () => hooks.onInvert?.()),
+      chip('close', t('film.clear'), () => hooks.onClearSel?.()),
       count),
     strip,
     meta,
@@ -36,7 +37,7 @@ export function createFilmstrip(hooks = {}) {
   const items = new Map();
 
   function sync({ images, curId, sel, stateOf }) {
-    fill(count, `已选 `, el('b', { text: String(sel.length) }), ` 张（共 ${images.length} 张）`);
+    fill(count, t('film.selected', { n: sel.length, total: images.length }));
     const seen = new Set();
     let prev = null;
     images.forEach((img, i) => {
@@ -59,7 +60,7 @@ export function createFilmstrip(hooks = {}) {
       const st = stateOf(img);
       it.node.className = `film-it${img.id === curId ? ' is-on' : ''}${sel.includes(img.id) ? ' is-pick' : ''}`;
       it.node.setAttribute('aria-selected', String(img.id === curId));
-      it.node.title = `${img.name} · ${img.orig_dead ? '原图文件已丢失' : STATE_TEXT[st] || st}`;
+      it.node.title = `${img.name} · ${img.orig_dead ? t('film.lostFile') : stateText(st)}`;
       it.num.textContent = String(i + 1);
       it.dot.className = `film-it__d ${DOT[st] || ''}`;
       const want = prev ? prev.nextSibling : strip.firstChild;
@@ -71,7 +72,7 @@ export function createFilmstrip(hooks = {}) {
     fill(meta, cur ? [
       el('b', { text: fmtFile(cur.name, 22) }),
       el('span', { text: fmtDims(cur.w, cur.h) }),
-      el('span', { text: STATE_TEXT[stateOf(cur)] || '' }),
+      el('span', { text: stateText(stateOf(cur)) }),
     ] : null);
     const on = strip.querySelector('.film-it.is-on');
     if (on) on.scrollIntoView({ block: 'nearest', inline: 'center' });

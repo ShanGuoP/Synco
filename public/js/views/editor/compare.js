@@ -5,16 +5,18 @@
 import { el, fill, clamp } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { createViewport } from './viewport.js';
+import { t } from '../../core/i18n.js';
 
-const DEFAULTS = {
-  left: '原图', right: '成图',
-  restore: '用这组参数再改一次', restoreTip: '把这条结果的参数搬回右侧面板，改完你自己点提交',
+/* 取用时才查字典：模块在 boot 装载字典之前就求值了，写在这里会是 ⟨键名⟩ */
+const defaults = () => ({
+  left: t('compare.left'), right: t('compare.right'),
+  restore: t('compare.restore'), restoreTip: t('compare.restoreTip'),
   useSketch: null, useSketchTip: null,
   overOnWhite: false,
-};
+});
 
 export function createCompare({ onClose, onRestore, onFork, onUseSketch, copy }) {
-  const T = { ...DEFAULTS, ...(copy || {}) };
+  const T = { ...defaults(), ...(copy || {}) };
   const top = el('div.cmp__top');
   const line = el('div.cmp__line', {}, el('span.cmp__knob', { html: icon('compare', { cls: 'icon icon--sm' }) }));
   const base = el('img', { alt: T.right, draggable: 'false' });
@@ -28,11 +30,11 @@ export function createCompare({ onClose, onRestore, onFork, onUseSketch, copy })
   /* 标签与缩放控件挂在 stage 上，不参与缩放，字才不会跟着糊 */
   const stage = el('div.cmp__stage', {}, box, tagL, tagR,
     el('div.cmp__ctl', {},
-      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'data-tip': '缩小', 'aria-label': '缩小', html: icon('zoomOut', { cls: 'icon icon--sm' }), onclick: () => vp.zoomBy(1 / 1.35) }),
+      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'data-tip': t('compare.zoomOut'), 'aria-label': t('compare.zoomOut'), html: icon('zoomOut', { cls: 'icon icon--sm' }), onclick: () => vp.zoomBy(1 / 1.35) }),
       zoomLabel,
-      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'data-tip': '放大', 'aria-label': '放大', html: icon('zoomIn', { cls: 'icon icon--sm' }), onclick: () => vp.zoomBy(1.35) }),
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '1:1', 'data-tip': '实际像素', onclick: () => vp.one2one() }),
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '适应', 'data-tip': '适应窗口', onclick: () => vp.fit() })));
+      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'data-tip': t('compare.zoomIn'), 'aria-label': t('compare.zoomIn'), html: icon('zoomIn', { cls: 'icon icon--sm' }), onclick: () => vp.zoomBy(1.35) }),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '1:1', 'data-tip': t('compare.one2one'), onclick: () => vp.one2one() }),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('compare.fit'), 'data-tip': t('compare.fitTip'), onclick: () => vp.fit() })));
   const bar = el('div.cmp__bar');
   const node = el('div.cmp', {}, stage, bar);
 
@@ -113,15 +115,15 @@ export function createCompare({ onClose, onRestore, onFork, onUseSketch, copy })
         html: icon('sliders', { cls: 'icon icon--sm' }) + `<span>${T.restore}</span>`, onclick: () => onRestore(result) }) : null,
       // 画布那一路才有"取回这一版当时的线稿"：照片的原图一直在那儿，不需要还
       onUseSketch && result?.sketch_url ? el('button.btn.btn--ghost.btn--sm', {
-        type: 'button', 'data-tip': T.useSketchTip || '把这一版提交时的线稿写回画布，接着改',
-        html: icon('brush', { cls: 'icon icon--sm' }) + '<span>取回这版画稿</span>', onclick: () => onUseSketch(result) }) : null,
+        type: 'button', 'data-tip': T.useSketchTip || t('compare.useSketchTip'),
+        html: icon('brush', { cls: 'icon icon--sm' }) + `<span>${t('compare.useSketch')}</span>`, onclick: () => onUseSketch(result) }) : null,
       onFork && result?.final_url ? el('button.btn.btn--ghost.btn--sm', {
-        type: 'button', 'data-tip': '复制成项目里的一张新图，在它上面重新涂遮罩',
-        html: icon('copy', { cls: 'icon icon--sm' }) + '<span>另存为新图</span>', onclick: () => onFork(result) }) : null,
-      dl(cropUrl, '裁切图'),
-      dl(overlayUrl, '遮罩叠加'),
-      dl(resultUrl, '下载成图'),
-      el('button.btn.btn--primary.btn--sm', { type: 'button', html: icon('close', { cls: 'icon icon--sm' }) + '<span>回到画布</span>', onclick: () => hide() }),
+        type: 'button', 'data-tip': t('compare.forkTip'),
+        html: icon('copy', { cls: 'icon icon--sm' }) + `<span>${t('compare.fork')}</span>`, onclick: () => onFork(result) }) : null,
+      dl(cropUrl, t('compare.crop')),
+      dl(overlayUrl, t('compare.overlay')),
+      dl(resultUrl, t('compare.download')),
+      el('button.btn.btn--primary.btn--sm', { type: 'button', html: icon('close', { cls: 'icon icon--sm' }) + `<span>${t('compare.back')}</span>`, onclick: () => hide() }),
     );
     node.classList.add('is-on');
     requestAnimationFrame(align);

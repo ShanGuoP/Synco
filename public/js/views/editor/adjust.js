@@ -9,6 +9,7 @@ import { makeProw, makeSlider } from '../../ui/controls.js';
 import { toastErr, toastOk } from '../../ui/toast.js';
 import { confirm } from '../../ui/modal.js';
 import { icon } from '../../core/icons.js';
+import { t } from '../../core/i18n.js';
 
 /** 与后端 photoedit-core 的 EditOps 同形：缺的字段服务端按默认补，多余字段会被拒 */
 const blankOps = () => ({
@@ -20,29 +21,29 @@ const blankOps = () => ({
   lut: null,
 });
 
-const RATIOS = [['free', '自由', 0], ['1:1', '1:1', 1], ['4:3', '4:3', 4 / 3], ['3:4', '3:4', 3 / 4], ['16:9', '16:9', 16 / 9], ['3:2', '3:2', 1.5], ['9:16', '9:16', 9 / 16]];
+const RATIOS = [['free', 'ad.ratioFree', 0], ['1:1', 'ad.ratio11', 1], ['4:3', 'ad.ratio43', 4 / 3], ['3:4', 'ad.ratio34', 3 / 4], ['16:9', 'ad.ratio169', 16 / 9], ['3:2', 'ad.ratio32', 1.5], ['9:16', 'ad.ratio916', 9 / 16]];
 const COLOR_KEYS = [
-  ['exposure', '曝光', '满档 = ±1.5 EV'],
-  ['contrast', '对比度', '绕中灰缩放，中灰那点几乎不动'],
-  ['highlights', '高光', '只作用在亮部'],
-  ['shadows', '阴影', '只作用在暗部'],
-  ['temp', '色温', '正 = 偏暖：R 升 B 降'],
-  ['tint', '色调', '正 = 偏品红：G 降 B 补'],
-  ['saturation', '饱和度', '整体绕亮度拉伸'],
-  ['vibrance', '自然饱和度', '已经艳的不再加，肤色那一档先保住'],
-  ['clarity', '清晰度', '大半径局部对比'],
-  ['sharpen', '锐化', '3×3 高频回填'],
+  ['exposure', 'ad.exposure', 'ad.exposureTip'],
+  ['contrast', 'ad.contrast', 'ad.contrastTip'],
+  ['highlights', 'ad.highlights', 'ad.highlightsTip'],
+  ['shadows', 'ad.shadows', 'ad.shadowsTip'],
+  ['temp', 'ad.temp', 'ad.tempTip'],
+  ['tint', 'ad.tint', 'ad.tintTip'],
+  ['saturation', 'ad.saturation', 'ad.saturationTip'],
+  ['vibrance', 'ad.vibrance', 'ad.vibranceTip'],
+  ['clarity', 'ad.clarity', 'ad.clarityTip'],
+  ['sharpen', 'ad.sharpen', 'ad.sharpenTip'],
 ];
 const BEAUTY_KEYS = [
-  ['smooth', '磨皮', '双边滤波在长边 2048 的域里跑，被抹掉的高频按比例回填'],
-  ['texture', '质感保留', '磨皮回填高频的下限：0 = 用磨皮自带那条曲线，越往右留下的皮肤纹理越多'],
-  ['blemish', '祛瑕疵', '只回收明显偏离局部均值的那一截——痘、斑、胡青；正常纹理在阈值以下一根不动'],
-  ['even_tone', '匀肤', '把色度往大尺度那一层搬，去红绿不均与成片色斑。只认肤色，蓝天白墙不动'],
-  ['brighten', '美白', '只在肤色域提亮，蓝天灰墙跟着动就是坏了'],
-  ['de_shine', '去油光', '肤色亮部超过那一线（亮度约 185）往回压，线以下的中间调不动'],
-  ['sharpen', '锐化', '亮度域一次 3×3 高频回填'],
+  ['smooth', 'ad.smooth', 'ad.smoothTip'],
+  ['texture', 'ad.texture', 'ad.textureTip'],
+  ['blemish', 'ad.blemish', 'ad.blemishTip'],
+  ['even_tone', 'ad.evenTone', 'ad.evenToneTip'],
+  ['brighten', 'ad.brighten', 'ad.brightenTip'],
+  ['de_shine', 'ad.deShine', 'ad.deShineTip'],
+  ['sharpen', 'ad.sharpen', 'ad.beautySharpenTip'],
 ];
-const BRUSHES = [['push', '推挤', '顺拖动方向把像素推开——沿身型轮廓向内推就是瘦身'], ['pucker', '收缩', '朝盘心吸，盘内整体变小'], ['bloat', '膨胀', '自盘心向外胀，盘内整体变大'], ['restore', '恢复', '把这一带拉回未变形之前']];
+const BRUSHES = [['push', 'ad.push', 'ad.pushTip'], ['pucker', 'ad.pucker', 'ad.puckerTip'], ['bloat', 'ad.bloat', 'ad.bloatTip'], ['restore', 'ad.restore', 'ad.restoreTip']];
 
 /** 预设就是一组滑杆值，和后端 color::preset 同一份表（改这里要同步改那边） */
 const PRESET_VALUES = {
@@ -107,60 +108,60 @@ export function createAdjust(deps) {
 
   /* ==================== 裁切重构 ==================== */
   const ratioChips = el('div.chips', {}, ...RATIOS.map(([k, label, r]) => el('button.chip-s', {
-    type: 'button', text: label, dataset: { r: String(r), k },
-    'data-tip': r ? `锁定 ${label}` : '不锁比例',
+    type: 'button', text: t(label), dataset: { r: String(r), k },
+    'data-tip': r ? t('ad.lockRatio', { ratio: t(label) }) : t('ad.lockFree'),
     onclick: () => setRatio(r),
   })));
-  const fineCtl = makeProw({ label: '微调旋转', min: -15, max: 15, step: 0.5, value: 0, tip: '小角度走双线性重采样，画布会自动扩边', onChange: v => { ops.geometry.rotate_deg = quad() + v; touch(); } });
+  const fineCtl = makeProw({ label: t('ad.fineRot'), min: -15, max: 15, step: 0.5, value: 0, tip: t('ad.fineRotTip'), onChange: v => { ops.geometry.rotate_deg = quad() + v; touch(); } });
   const fillSeg = el('div.seg', {},
-    el('button.seg__it', { type: 'button', dataset: { f: 'edge' }, text: '边缘延伸', 'data-tip': '不引入新颜色，构图里最看不出来', onclick: () => setFill('edge') }),
-    el('button.seg__it', { type: 'button', dataset: { f: 'avg' }, text: '纯色(四角)', 'data-tip': '要留白时用，取源图四角均值', onclick: () => setFill('avg') }));
+    el('button.seg__it', { type: 'button', dataset: { f: 'edge' }, text: t('ad.fillEdge'), 'data-tip': t('ad.fillEdgeTip'), onclick: () => setFill('edge') }),
+    el('button.seg__it', { type: 'button', dataset: { f: 'avg' }, text: t('ad.fillAvg'), 'data-tip': t('ad.fillAvgTip'), onclick: () => setFill('avg') }));
   // ✔ 只在框摆出来时出现：拖框的过程不重算也不落参数，裁不裁由这一下说了算
   const cropOk = el('button.btn.btn--primary.btn--sm', {
-    type: 'button', hidden: true, text: '✔ 裁这一版', 'data-tip': '按现在这个框出预览 · 原图不动', onclick: () => applyCrop(),
+    type: 'button', hidden: true, text: t('ad.cropApply'), 'data-tip': t('ad.cropApplyTip'), onclick: () => applyCrop(),
   });
   const geoBox = el('div', { style: { display: 'grid', gap: '10px' } },
     el('div.adj-row', {},
-      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': '左转 90°', 'data-tip': '左转 90°（无损，不插值）', text: '↺', onclick: () => rotateBy(-90) }),
-      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': '右转 90°', 'data-tip': '右转 90°（无损，不插值）', text: '↻', onclick: () => rotateBy(90) }),
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '左右翻转', onclick: () => flipIt('flip_h') }),
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '上下翻转', onclick: () => flipIt('flip_v') })),
-    el('span.muted', { text: '宽高比 · 点一颗就把裁切框摆出来' }), ratioChips, fineCtl.node,
-    el('div.adj-row', {}, el('span.muted', { text: '转出来的边角补' }), fillSeg),
+      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': t('ad.rotL'), 'data-tip': t('ad.rotLTip'), text: '↺', onclick: () => rotateBy(-90) }),
+      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': t('ad.rotR'), 'data-tip': t('ad.rotRTip'), text: '↻', onclick: () => rotateBy(90) }),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.flipH'), onclick: () => flipIt('flip_h') }),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.flipV'), onclick: () => flipIt('flip_v') })),
+    el('span.muted', { text: t('ad.ratioHint') }), ratioChips, fineCtl.node,
+    el('div.adj-row', {}, el('span.muted', { text: t('ad.fillHint') }), fillSeg),
     el('div.adj-row', {}, cropOk,
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '回到上次裁切', onclick: backToLastCrop }),
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '不裁', onclick: () => { cropDraft = null; ops.geometry.crop = null; ratioPick = 0; paintCrop(); paintRatio(); touch(); } })),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.backCrop'), onclick: backToLastCrop }),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.noCrop'), onclick: () => { cropDraft = null; ops.geometry.crop = null; ratioPick = 0; paintCrop(); paintRatio(); touch(); } })),
   );
 
   /* ==================== 塑形（手动液化） ==================== */
   const brushSeg = el('div.seg', {}, ...BRUSHES.map(([k, label, tip]) => el('button.seg__it', {
-    type: 'button', dataset: { b: k }, text: label, 'data-tip': tip, onclick: () => setBrush(k),
+    type: 'button', dataset: { b: k }, text: t(label), 'data-tip': t(tip), onclick: () => setBrush(k),
   })));
-  const radiusCtl = makeSlider({ min: 12, max: 400, step: 2, value: brushPx, ariaLabel: '液化盘半径', onChange: v => { brushPx = v; paintDiscSize(); } });
-  const pressureCtl = makeProw({ label: '压力', min: 5, max: 100, step: 1, value: pressure, tip: '一步最多搬掉半径的 45%，再大就会咬到自己上一帧的采样', onChange: v => { pressure = v; } });
-  const strokeCount = el('span.badge', { text: '0 笔' });
-  const warpBtn = el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '开始画形', 'aria-pressed': 'false', onclick: () => toggleMode('warp') });
+  const radiusCtl = makeSlider({ min: 12, max: 400, step: 2, value: brushPx, ariaLabel: t('ad.discRadius'), onChange: v => { brushPx = v; paintDiscSize(); } });
+  const pressureCtl = makeProw({ label: t('ad.pressure'), min: 5, max: 100, step: 1, value: pressure, tip: t('ad.pressureTip'), onChange: v => { pressure = v; } });
+  const strokeCount = el('span.badge', { text: t('ad.strokeCount', { n: 0 }) });
+  const warpBtn = el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.startWarp'), 'aria-pressed': 'false', onclick: () => toggleMode('warp') });
   const warpBox = el('div', { style: { display: 'grid', gap: '10px' } },
     brushSeg,
-    el('div.adj-row', {}, el('span.muted.nowrap', { text: '盘半径' }), radiusCtl.node),
+    el('div.adj-row', {}, el('span.muted.nowrap', { text: t('ad.radiusLab') }), radiusCtl.node),
     pressureCtl.node,
     el('div.adj-row', {},
       warpBtn,
       strokeCount,
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '退一笔', onclick: undoStroke }),
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '清掉笔画', onclick: clearStrokes })),
-    el('p.muted', { text: '拖动时只有盘面内是前端的近似反馈；松手按整条参数链重算，以服务端那张为准。' }));
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.undoOne'), onclick: undoStroke }),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.clearStrokes'), onclick: clearStrokes })),
+    el('p.muted', { text: t('ad.warpNote') }));
 
   /* ==================== 调色 + 美颜 ==================== */
   const COLOR = {};
   const colorBox = el('div', { style: { display: 'grid', gap: '10px' } }, ...COLOR_KEYS.map(([k, label, tip]) => {
-    const ctl = makeProw({ label, min: -100, max: 100, step: 1, value: 0, tip, onChange: v => { ops.color[k] = v; if (ops.color.preset) { ops.color.preset = null; paintPreset(); } touch(); } });
+    const ctl = makeProw({ label: t(label), min: -100, max: 100, step: 1, value: 0, tip: t(tip), onChange: v => { ops.color[k] = v; if (ops.color.preset) { ops.color.preset = null; paintPreset(); } touch(); } });
     COLOR[k] = ctl;
     return ctl.node;
   }));
   const presetChips = el('div.chips');
-  const lutSel = el('select.input', { 'aria-label': 'LUT 文件' });
-  const lutCtl = makeProw({ label: 'LUT 强度', min: 0, max: 100, step: 1, value: 100, tip: '与原图混合的比例，0 = 完全不过表', onChange: v => { if (ops.lut) { ops.lut.strength = v; touch(); } } });
+  const lutSel = el('select.input', { 'aria-label': t('ad.lutAria') });
+  const lutCtl = makeProw({ label: t('ad.lutStrength'), min: 0, max: 100, step: 1, value: 100, tip: t('ad.lutStrengthTip'), onChange: v => { if (ops.lut) { ops.lut.strength = v; touch(); } } });
   lutSel.addEventListener('change', () => {
     const v = lutSel.value;
     ops.lut = v ? { name: v, strength: ops.lut?.strength ?? 100 } : null;
@@ -169,10 +170,10 @@ export function createAdjust(deps) {
     touch();
   });
   const BEAUTY = {};
-  const maskSw = switchRow('只在涂过的地方生效', '复用遮罩那层笔迹：涂哪儿磨哪儿；关掉就是全图', v => { ops.beauty.by_mask = v; touch(); });
+  const maskSw = switchRow(t('ad.byMask'), t('ad.byMaskTip'), v => { ops.beauty.by_mask = v; touch(); });
   const beautyBox = el('div', { style: { display: 'grid', gap: '10px' } },
     ...BEAUTY_KEYS.map(([k, label, tip]) => {
-      const ctl = makeProw({ label, min: 0, max: 100, step: 1, value: 0, tip, onChange: v => {
+      const ctl = makeProw({ label: t(label), min: 0, max: 100, step: 1, value: 0, tip: t(tip), onChange: v => {
         ops.beauty[k] = v;
         // 质感保留只是磨皮曲线的下限：磨皮归零时它一根像素都不碰，别让人对着空杆子拖
         if (k === 'smooth') BEAUTY.texture?.setDisabled(v <= 0);
@@ -182,20 +183,20 @@ export function createAdjust(deps) {
       return ctl.node;
     }),
     maskSw.node,
-    el('p.muted', { text: '没涂遮罩 = 全图。这一层的蒙版坐标在变形之后的域里。' }));
+    el('p.muted', { text: t('ad.maskNote') }));
   BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
 
   const node = el('div', { style: { display: 'grid', gap: '12px' } },
-    el('p.muted', { text: '原图永不改写：下面这些都是参数，随时能退回。预览按 proxy 档算，落盘才走原分辨率。' }),
-    grp('裁切重构', false, geoBox),
-    grp('塑形（手动液化）', true, warpBox),
-    grp('调色', true, el('div', { style: { display: 'grid', gap: '10px' } },
-      el('span.muted', { text: '内置预设＝一组滑杆值，点了就是把那几根杆摆过去' }), presetChips, lutSel, lutCtl.node, colorBox)),
-    grp('美颜', true, beautyBox),
+    el('p.muted', { text: t('ad.footNote') }),
+    grp(t('ad.grpGeo'), false, geoBox),
+    grp(t('ad.grpWarp'), true, warpBox),
+    grp(t('ad.grpColor'), true, el('div', { style: { display: 'grid', gap: '10px' } },
+      el('span.muted', { text: t('ad.presetNote') }), presetChips, lutSel, lutCtl.node, colorBox)),
+    grp(t('ad.grpBeauty'), true, beautyBox),
     el('div.adj-actions', {},
-      el('button.btn.btn--primary.btn--sm', { type: 'button', text: '落成图', onclick: renderFull }),
-      el('button.btn.btn--accent.btn--sm', { type: 'button', text: '应用为新图', onclick: forkNew }),
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '清空全部调整', onclick: clearAll })),
+      el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('ad.render'), onclick: renderFull }),
+      el('button.btn.btn--accent.btn--sm', { type: 'button', text: t('ad.fork'), onclick: forkNew }),
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.clearAll'), onclick: clearAll })),
   );
 
   /* ==================== overlay：裁切框与液化盘（都挂在 layer 里，跟着缩放走） ==================== */
@@ -245,7 +246,7 @@ export function createAdjust(deps) {
     lutSel.value = ops.lut?.name || '';
     lutCtl.set(ops.lut?.strength ?? 100, true);
     lutCtl.setDisabled(!ops.lut);
-    strokeCount.textContent = `${ops.warp.strokes.length} 笔`;
+    strokeCount.textContent = t('ad.strokeCount', { n: ops.warp.strokes.length });
   }
   /** 宽高比那一排就是裁切的入口：点一颗 → 框摆出来并按这个比例锁住（「自由」= 摆框但不锁）。
       再点当前那颗 → 收起框，拖出来的草稿丢掉；已经落定的裁切不动。
@@ -273,7 +274,7 @@ export function createAdjust(deps) {
   function setFill(f) { ops.geometry.fill = f; paintGeo(); touch(); }
   function flipIt(k) { ops.geometry[k] = !ops.geometry[k]; touch(); }
   function backToLastCrop() {
-    if (!lastCrop) { line('这次还没裁过，没有"上次"可回'); return; }
+    if (!lastCrop) { line(t('ad.noLastCrop')); return; }
     if (mode !== 'crop') toggleMode('crop');
     cropDraft = [...lastCrop];       // 也只摆框：按 ✔ 才算落定
     paintCrop();
@@ -310,7 +311,7 @@ export function createAdjust(deps) {
     try {
       const r = await api.saveAdjust(id, ops);
       if (!mine()) return;
-      if (r?.clamped?.length) line(`已夹逼 ${r.clamped.length} 项：${r.clamped.slice(0, 2).join('、')}`);
+      if (r?.clamped?.length) line(t('ad.clamped', { n: r.clamped.length, list: r.clamped.slice(0, 2).join(t('settings.sepList')) }));
       // 裁切模式背后必须一直铺"没裁但其它都算完"的那一张：底图自己要是被裁过，
       // 框就画在已经缩过的那张上，再拖一次量的是另一个坐标系
       const isProbe = mode === 'crop';
@@ -321,7 +322,7 @@ export function createAdjust(deps) {
       if (at === rev) dirty = false;   // 在飞的这一趟期间又动了参数就别清标记：那一次还排在定时器里
       applyPreview(p, isProbe);
     } catch (e) {
-      if (mine()) line(`预览失败：${short(e)}`);
+      if (mine()) line(t('ad.previewFail', { msg: short(e) }), true);
     }
   }
 
@@ -372,7 +373,7 @@ export function createAdjust(deps) {
     if (!id) return;
     const s = ++tileSeq;
     tileBusy = true;
-    if (key === 'adj') line('正在按真实像素算这一版…');   // 首次要几秒：整幅渲染 + 切一套瓦片
+    if (key === 'adj') line(t('ad.tilesBusy'));   // 首次要几秒：整幅渲染 + 切一套瓦片
     try {
       const m = await (key === 'src' ? api.tiles(id) : api.adjustTiles(id));
       if (s !== tileSeq || idOf() !== id || dirty) return;
@@ -381,7 +382,7 @@ export function createAdjust(deps) {
       viewport.refresh();
       if (key === 'adj') line('');
     } catch (e) {
-      if (s === tileSeq) line(`真像素档取不到：${short(e)}`);
+      if (s === tileSeq) line(t('ad.tilesFail', { msg: short(e) }));
     } finally {
       if (s === tileSeq) tileBusy = false;
     }
@@ -414,7 +415,7 @@ export function createAdjust(deps) {
   function paintWarpBtn() {
     const on = mode === 'warp';
     warpBtn.classList.toggle('is-on', on);
-    warpBtn.textContent = on ? '画形中 · 点这里退出' : '开始画形';
+    warpBtn.textContent = on ? t('ad.warpOn') : t('ad.startWarp');
     warpBtn.setAttribute('aria-pressed', String(on));
   }
 
@@ -431,8 +432,8 @@ export function createAdjust(deps) {
       paintWarpBtn();
       // 框要画在"其它都算完、只有没裁"的那一张上，坐标系才和用户看到的画面一致
       const uncropped = { ...ops, geometry: { ...ops.geometry, crop: null } };
-      api.adjustPreviewWith(idOf(), uncropped).then(p => { if (mode === 'crop') applyPreview(p, true); }).catch(e => line(`裁切底图取不到：${short(e)}`));
-      line('拖框选要留的部分 · 点「✔ 裁这一版」立刻看裁完的样子');
+      api.adjustPreviewWith(idOf(), uncropped).then(p => { if (mode === 'crop') applyPreview(p, true); }).catch(e => line(t('ad.cropBaseFail', { msg: short(e) })));
+      line(t('ad.cropHint'));
     } else if (m === 'warp') {
       mode = 'warp';
       stage.classList.add('is-adjust', 'is-warp');
@@ -442,7 +443,7 @@ export function createAdjust(deps) {
       paintDiscSize();
       paintRatio();
       paintWarpBtn();
-      line(`用「${(BRUSHES.find(b => b[0] === tool) || ['', '推挤'])[1]}」在画面上拖 · 中键是平移`);
+      line(t('ad.warpHint', { brush: t((BRUSHES.find(b => b[0] === tool) || ['', 'ad.push'])[1]) }));
     }
   }
 
@@ -467,7 +468,7 @@ export function createAdjust(deps) {
         const id = idOf();
         const s = ++seq;
         const mine = () => s === seq && idOf() === id && mode === 'off';
-        api.adjustPreview(id).then(p => { if (mine()) applyPreview(p); }).catch(e => { if (mine()) line(`裁切结果取不到：${short(e)}`); });
+        api.adjustPreview(id).then(p => { if (mine()) applyPreview(p); }).catch(e => { if (mine()) line(t('ad.cropResultFail', { msg: short(e) })); });
       }
     }
   }
@@ -581,7 +582,7 @@ export function createAdjust(deps) {
     stroke = null;
     warpCanvas.hidden = true;
     // 盘故意不藏：指针还停在画面上，接着亮才是连续的反馈；移出去了由 pointerleave 收
-    if (pts.length < 2) { line('这一笔没拖出轨迹，没有记进来'); return; }
+    if (pts.length < 2) { line(t('ad.emptyStroke')); return; }
     const unit = Math.sqrt(frame.w * frame.h) || 1;
     ops.warp.strokes.push({ tool, points: pts, radius: clamp(brushPx / unit, 0.002, 0.5), strength: pressure });
     paintPaints();
@@ -643,7 +644,7 @@ export function createAdjust(deps) {
           out.data[o] = src[o]; out.data[o + 1] = src[o + 1]; out.data[o + 2] = src[o + 2]; out.data[o + 3] = src[o + 3];
           continue;
         }
-        const t = 1 - dist * dist, wgt = t * t;
+        const ease = 1 - dist * dist, wgt = ease * ease;
         let ux, uy;
         if (tool === 'push') { ux = (b[0] - a[0]) * frame.w * shift * wgt; uy = (b[1] - a[1]) * frame.h * shift * wgt; }
         else {
@@ -663,17 +664,17 @@ export function createAdjust(deps) {
   function setBrush(k) {
     tool = k;
     for (const b of brushSeg.children) b.classList.toggle('is-on', b.dataset.b === k);
-    if (mode === 'warp') line(`用「${(BRUSHES.find(b => b[0] === k) || ['', '推挤'])[1]}」在画面上拖`);
+    if (mode === 'warp') line(t('ad.warpDrag', { brush: t((BRUSHES.find(b => b[0] === k) || ['', 'ad.push'])[1]) }));
   }
   function undoStroke() {
-    if (!ops.warp.strokes.length) { line('还没有笔画可退'); return; }
+    if (!ops.warp.strokes.length) { line(t('ad.noStroke')); return; }
     ops.warp.strokes.pop();
     paintPaints();
     touch();
   }
   async function clearStrokes() {
     if (!ops.warp.strokes.length) return;
-    if (!await confirm({ title: '清掉液化笔画', body: `这一张共 ${ops.warp.strokes.length} 笔。清掉后画面回到只有裁切/调色的状态，原图不受影响。`, ok: '清掉' })) return;
+    if (!await confirm({ title: t('ad.clearTitle'), body: t('ad.clearBody', { n: ops.warp.strokes.length }), ok: t('ad.clearOk') })) return;
     ops.warp.strokes = [];
     paintPaints();
     touch();
@@ -683,32 +684,32 @@ export function createAdjust(deps) {
   async function renderFull() {
     const id = idOf();
     if (!id) return;
-    if (isIdentity()) { line('一根滑杆都没动，没有要落的盘'); return; }
+    if (isIdentity()) { line(t('ad.noChange')); return; }
     await flushNow();
-    line('按原分辨率落盘中…');
+    line(t('ad.rendering'));
     try {
       const r = await api.adjustRender(id);
-      line(`成图已落盘（${(r.ms || 0).toLocaleString('zh-CN')} ms）· 原图没动`);
-      toastOk('成图已落盘', r.reused ? '这套参数之前渲过，直接复用' : '');
-    } catch (e) { line(`落盘失败：${short(e)}`); toastErr('落盘失败', short(e)); }
+      line(t('ad.rendered', { ms: (r.ms || 0).toLocaleString('zh-CN') }));
+      toastOk(t('ad.renderedToast'), r.reused ? t('ad.renderedReuse') : '');
+    } catch (e) { line(t('ad.renderFail', { msg: short(e) }), true); toastErr(t('ad.renderFailTitle'), short(e)); }
   }
 
   async function forkNew() {
     const id = idOf();
     if (!id) return;
-    if (isIdentity()) { line('这张图还没调整，另存为新图没有意义'); return; }
+    if (isIdentity()) { line(t('ad.noChangeFork')); return; }
     await flushNow();
-    line('渲染并按新图登记…');
+    line(t('ad.forking'));
     try {
       const r = await api.adjustFork(id);
-      toastOk('已应用为新图', '新图从空白参数开始，父图这套调整还在');
+      toastOk(t('ad.forkedToast'), t('ad.forkedBody'));
       onForked?.(r.image_id);
-    } catch (e) { line(`另存失败：${short(e)}`); toastErr('另存为新图失败', short(e)); }
+    } catch (e) { line(t('ad.forkFail', { msg: short(e) }), true); toastErr(t('ad.forkFailTitle'), short(e)); }
   }
 
   async function clearAll() {
-    if (isIdentity()) { line('本来就是空的'); return; }
-    if (!await confirm({ title: '清空全部调整', body: '裁切、液化笔画、调色、美颜都退回未调整，画面回到源图。原图一直没被改过，清空只是不再叠加这些参数。', ok: '清空' })) return;
+    if (isIdentity()) { line(t('ad.alreadyEmpty')); return; }
+    if (!await confirm({ title: t('ad.clearAll'), body: t('ad.clearAllBody'), ok: t('ad.clearOnly') })) return;
     if (ops.geometry.crop) lastCrop = [...ops.geometry.crop];
     cropDraft = null;
     ops = blankOps();
@@ -718,7 +719,7 @@ export function createAdjust(deps) {
     touch();
     await commit();
     await restoreSource();
-    line('已清空，画面回到源图');
+    line(t('ad.cleared'));
   }
 
   /* ==================== 换图 ==================== */
@@ -768,27 +769,27 @@ export function createAdjust(deps) {
       const p = await api.adjustPreview(info.id);
       if (idOf() !== info.id) return false;
       applyPreview(p);
-      if (geoActive()) brushLocked?.('裁切/旋转后的画面和遮罩不是同一个坐标系：要先「应用为新图」再继续涂');
+      if (geoActive()) brushLocked?.(t('ad.geomLocked'));
       return true;   // 这一张的显示已经是调整预览，装载流程就别再去摆源图瓦片了
     } catch (e) {
-      if (idOf() === info.id) line(`调整参数读不到：${short(e)}`);
+      if (idOf() === info.id) line(t('ad.paramsFail', { msg: short(e) }));
     }
     return false;
   }
 
   function buildPresets(list) {
-    const items = list && list.length ? list : Object.entries(PRESET_VALUES).map(([id]) => ({ id, name: PRESET_NAMES[id] || id }));
-    fill(presetChips, el('button.chip-s', { type: 'button', text: '无预设', dataset: { p: '' }, onclick: () => pickPreset(null) }),
-      ...items.map(p => el('button.chip-s', { type: 'button', text: p.name, dataset: { p: p.id }, 'data-tip': `预设＝一组滑杆值（${p.id}）`, onclick: () => pickPreset(p.id) })));
+    const items = list && list.length ? list : Object.entries(PRESET_VALUES).map(([id]) => ({ id, name: PRESET_NAMES[id] ? t(PRESET_NAMES[id]) : id }));
+    fill(presetChips, el('button.chip-s', { type: 'button', text: t('ad.noPreset'), dataset: { p: '' }, onclick: () => pickPreset(null) }),
+      ...items.map(p => el('button.chip-s', { type: 'button', text: p.name, dataset: { p: p.id }, 'data-tip': t('ad.presetTip', { id: p.id }), onclick: () => pickPreset(p.id) })));
     paintPreset();
   }
   function buildLuts(names) {
-    fill(lutSel, el('option', { value: '', text: '不用 LUT' }), ...(names || []).map(n => el('option', { value: n, text: n.replace(/\.cube$/i, '') })));
+    fill(lutSel, el('option', { value: '', text: t('ad.noLut') }), ...(names || []).map(n => el('option', { value: n, text: n.replace(/\.cube$/i, '') })));
     lutSel.value = ops.lut?.name || '';
     lutCtl.setDisabled(!ops.lut);
   }
 
-  const short = e => String(e?.message || e || '未知错误').slice(0, 90);
+  const short = e => String(e?.message || e || t('ad.unknown')).slice(0, 90);
 
   return {
     node,
@@ -815,4 +816,4 @@ export function createAdjust(deps) {
   }
 }
 
-const PRESET_NAMES = { clean: '纯净', warm: '暖阳', film: '胶片', mono: '黑白对比', cool: '冷调', soft: '人像柔和', crisp: '通透', teal: '青橙', faded: '褪色', night: '夜色' };
+const PRESET_NAMES = { clean: 'ad.pnClean', warm: 'ad.pnWarm', film: 'ad.pnFilm', mono: 'ad.pnMono', cool: 'ad.pnCool', soft: 'ad.pnSoft', crisp: 'ad.pnCrisp', teal: 'ad.pnTeal', faded: 'ad.pnFaded', night: 'ad.pnNight' };

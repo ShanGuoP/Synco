@@ -20,7 +20,25 @@ pub async fn api_settings(State(ctx): State<Shared>) -> Result<Response> {
         "workflow_path": cfg::workflow_path(&ctx),
         "comfy": backend::active_url(&ctx),
         "proxy_edge": crate::service::imagesvc::proxy_edge(&ctx),
+        "lang": lang_of(&ctx),
     })))
+}
+
+/// 界面语言只认 `zh` / `en`。别的（拼错的、字典里还没有的）一律夹回 zh：
+/// 装一个不存在的花名会让前端拿不到字典，比退回默认糟得多。与 proxy_edge 同一惯例——夹住并回显。
+pub fn normalize_lang(v: &str) -> &'static str {
+    if v.eq_ignore_ascii_case("en") { "en" } else { "zh" }
+}
+
+pub fn lang_of(ctx: &crate::state::Ctx) -> String {
+    rset::get(ctx, "lang").unwrap_or_else(|| "zh".to_string())
+}
+
+pub async fn lang_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
+    let body = body_of(raw).await?;
+    let want = normalize_lang(body.get("lang").and_then(|v| v.as_str()).unwrap_or(""));
+    rset::put(&ctx, "lang", want)?;
+    Ok(ok(serde_json::json!({ "lang": want })))
 }
 
 /// 档位旋钮：proxy 长边改了不用手动清档——档位写进文件名，旧 URL 自然失效，

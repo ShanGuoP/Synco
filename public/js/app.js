@@ -15,6 +15,27 @@ import { toastErr } from './ui/toast.js';
 import { mountTooltip } from './ui/tooltip.js';
 import { apply, watch } from './core/theme.js';
 import { apply as applyMotion, watch as watchMotion } from './core/motion.js';
+import { applyDom, t, use } from './core/i18n.js';
+
+/**
+ * 界面语言。中文先装——它是所有缺键的兜底；再按库里那份装目标语言。
+ * 必须排在 `initShell` 之前：导航那几条是建壳时一次写死的，晚了就是一片 ⟨键名⟩。
+ * 取不到字典就照常启动，界面上露出键名——比悄悄退回另一种语言好查（口径见 core/i18n.js 头注）。
+ */
+async function loadLocale() {
+  let want = 'zh';
+  try {
+    const s = await api.settings();
+    if (s?.lang === 'en') want = 'en';
+  } catch { /* 库还没起来就用中文，别拦启动 */ }
+  try {
+    use('zh', await api.locale('zh'), { boot: true });
+    if (want !== 'zh') use(want, await api.locale(want), { boot: true });
+  } catch { /* 字典文件没就位：t() 会自己露键名，界面其余部分照跑 */ }
+  applyDom();
+  // 拖拽导入那句提示画在 CSS 的 ::after 里，字典到不了那里，只能拿一个自定义属性递过去
+  document.documentElement.style.setProperty('--drop-hint', JSON.stringify(t('shell.dropHint')));
+}
 
 const show = which => {
   $('#viewHome').classList.toggle('is-active', which === 'home');
@@ -50,20 +71,20 @@ const router = createRouter()
     show('project');
     await renderProject(+params.id);
     const p = store.peek('project');
-    setCrumb([{ label: '主页', href: '/' }, { label: p?.name || '项目' }]);
+    setCrumb([{ label: t('crumb.home'), href: '/' }, { label: p?.name || t('crumb.project') }]);
     setActiveNav('');
   })
   .on('/p/:id/e/:imgId', async params => {
     closeCanvas();
     show('project');
-    setCrumb([{ label: '主页', href: '/' }, { label: store.peek('project')?.name || '项目', href: `/p/${params.id}` }, { label: '精修' }]);
+    setCrumb([{ label: t('crumb.home'), href: '/' }, { label: store.peek('project')?.name || t('crumb.project'), href: `/p/${params.id}` }, { label: t('crumb.editor') }]);
     setActiveNav('');
     await openEditor(+params.id, +params.imgId);
   })
   .on('/p/:id/c/:imgId', async params => {
     closeEditor();
     show('project');
-    setCrumb([{ label: '主页', href: '/' }, { label: store.peek('project')?.name || '项目', href: `/p/${params.id}` }, { label: '画布' }]);
+    setCrumb([{ label: t('crumb.home'), href: '/' }, { label: store.peek('project')?.name || t('crumb.project'), href: `/p/${params.id}` }, { label: t('nav.canvas') }]);
     setActiveNav('');
     await openCanvas(+params.id, +params.imgId);
   })
@@ -85,17 +106,18 @@ function paintChip() {
   const cfg = store.peek('cfg') || {};
   const cloud = store.peek('cloud');
   if (cloud?.kind === 'cloud') {
-    setWorkflowChip(`云端 ${cloud.model || '未填模型名'} · ${cloud.size || '未填挡位'}`);
+    setWorkflowChip(t('chip.cloud', { model: cloud.model || t('chip.noModel'), size: cloud.size || t('chip.noSize') }));
     return;
   }
   const n = (cfg.loras || []).length;
   setWorkflowChip(cfg.cfg_source === 'workflow'
-    ? `步数 ${cfg.steps} · CFG ${cfg.cfg} · LoRA ${n}`
-    : '工作流未关联 · 用内置默认参数');
+    ? t('chip.sampler', { steps: cfg.steps, cfg: cfg.cfg, n })
+    : t('chip.noWorkflow'));
 }
 
 /* ---------- 启动 ---------- */
 async function boot() {
+  await loadLocale();
   /* 减弱动效（F7 的兜底）：首帧之前 core/theme-boot.js 已经把类抢挂到 <html> 上，
      这里补上 <body> 那一份，并盯着系统那一档——它变了应用侧的判定要跟着重算 */
   applyMotion();
@@ -123,8 +145,8 @@ async function boot() {
     store.set({ cfg, comfy: be.active, cloud: cloud || { kind: 'comfyui' } }, 'comfy');
     paintChip();
   } catch (e) {
-    toastErr('读不到默认参数', '检查 ComfyUI 与 workflows 目录后刷新');
-    setWorkflowChip('工作流未就绪');
+    toastErr(t('app.cfgFail'), t('app.cfgFailBody'));
+    setWorkflowChip(t('chip.notReady'));
   }
 
   watchJobs();
@@ -138,8 +160,8 @@ async function boot() {
     settingsModal('data');
   }
 
-  window.addEventListener('error', e => { if (e.message) toastErr('页面异常', String(e.message).slice(0, 120)); });
-  window.addEventListener('unhandledrejection', e => toastErr('请求失败', String(e.reason?.message || e.reason).slice(0, 120)));
+  window.addEventListener('error', e => { if (e.message) toastErr(t('app.pageError'), String(e.message).slice(0, 120)); });
+  window.addEventListener('unhandledrejection', e => toastErr(t('app.requestFailed'), String(e.reason?.message || e.reason).slice(0, 120)));
 }
 
 document.addEventListener('keydown', e => {

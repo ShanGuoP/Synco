@@ -142,7 +142,8 @@ async fn serve_static(ctx: &Shared, rel: &str, inm: Option<String>) -> Response 
     // 中文字重文件 25MB，不缓存的话每次刷新都要重读一遍；样式和脚本不缓存是为了改完立刻见效
     let cache = match ext.as_str() {
         ".ttf" | ".otf" | ".woff2" => Some("public, max-age=31536000, immutable"),
-        ".css" | ".js" | ".html" => Some("no-store"),
+        // 语言字典也算界面代码：升级后拿着一份旧 JSON 会整屏文案对不上版本号
+        ".css" | ".js" | ".html" | ".json" => Some("no-store"),
         _ => None,
     };
     // 盘上没有就用 exe 里内嵌的那一份——发布形态下界面是打进单文件的

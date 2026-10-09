@@ -5,6 +5,7 @@ import { createStore } from './core/store.js';
 import { api } from './core/api.js';
 import { baseName } from './core/format.js';
 import { routeGen } from './core/router.js';
+import { t } from './core/i18n.js';
 
 export const store = createStore({
   cfg: null,
@@ -40,7 +41,8 @@ export const isCloud = () => effMode() === 'cloud';
 export function cloudPrompt(settings) {
   const p = String(settings?.prompt || '').trim();
   const n = String(settings?.negative || '').trim();
-  return n ? (p ? `${p}。避免：${n}` : `避免：${n}`) : p;
+  // 「避免：」这句不进字典：换语言不该改发出去的内容
+  return n ? (p ? `${p}。避免：${n}` : `避免：${n}`) : p;   // i18n-keep 发给模型的拼接，不是界面文案
 }
 
 /* ---------- 首页筛选 / 搜索 ---------- */
@@ -136,7 +138,7 @@ export async function loadProject(id) {
   // 连着切两个项目时，前一个的响应可能后到：那一份 images/settings 属于已经走掉的那一页，
   // 写进 store 就是"屏幕上开着 B，数据却是 A"，随后任何一张卡片的动作都作用在错的图上
   if (g !== routeGen()) return d;
-  if (!d.project) throw new Error('项目不存在');
+  if (!d.project) throw new Error(t('common.projectMissing'));
   const cfg = store.peek('cfg') || await api.cfg().then(c => { store.set({ cfg: c }); return c; });
   store.set({
     project: d.project,
@@ -217,9 +219,10 @@ export function stateOf(img) {
   return 'ready';
 }
 
-export const STATE_TEXT = {
-  run: '生成中', done: '已出图', err: '失败', skip: '已跳过',
-  nomask: '未涂遮罩', ready: '待提交',
-};
+const STATES = ['run', 'done', 'err', 'skip', 'nomask', 'ready'];
+
+/** 状态词表：键是契约（`imgState` 发出来那几个），文字走字典 `status.<key>`。
+    认不出的键原样回——宁可界面上看到一个 raw 状态名，也别在这里编一句没有依据的译文 */
+export const stateText = st => (STATES.includes(st) ? t(`status.${st}`) : st);
 
 export default store;

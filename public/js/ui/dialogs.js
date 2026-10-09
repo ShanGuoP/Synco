@@ -3,88 +3,89 @@
 import { el } from '../core/dom.js';
 import { modal } from './modal.js';
 import { fmtNum, baseName } from '../core/format.js';
+import { t as tr } from '../core/i18n.js';
 
-const FLOW = [
-  ['导入', '首页拖入一批照片建项目，或在项目页「导入更多」追加'],
-  ['涂抹', '打开图片用画笔涂出要修的区域；白色=要重绘，橡皮可擦回'],
-  ['提交', '右面板写好指令与参数后提交，可勾选多张批量跑'],
-  ['对比', '完成后拖动中缝对比原图与成图，满意再下载'],
-];
+/* 键进字典取成对文案：dlg.<k> 是步骤名，dlg.<k>D 是那句解释 */
+const FLOW = ['imp', 'mask', 'submit', 'compare'].map(k => [k, `dlg.${k}`, `dlg.${k}D`]);
 
 const KEYS = [
-  ['B', '画笔'], ['E', '橡皮'], ['H', '抓手平移'],
-  ['空格（按住）', '临时平移'], ['Ctrl + Z', '撤销一笔'],
-  ['滚轮', '以光标为锚点缩放'], ['0', '适应窗口'], ['1', '实际像素 1:1'],
-  ['Ctrl + Enter', '提交生成'], ['Esc', '退出对比 / 关闭弹窗'],
+  ['B', 'dlg.dBrush'], ['E', 'dlg.dEraser'], ['H', 'dlg.dPan'],
+  ['dlg.dSpace', 'dlg.dPanTemp'], ['Ctrl + Z', 'dlg.dUndo'],
+  ['dlg.dWheel', 'dlg.dZoomAnchor'], ['0', 'dlg.dFit'], ['1', 'dlg.dOne2One'],
+  ['Ctrl + Enter', 'dlg.dSubmitGen'], ['dlg.dEsc', 'dlg.dEscWhat'],
 ];
 
+/* 左列混着两种东西：`B` / `Ctrl + Z` 是键帽上印的字（哪国语言都一样），
+   「空格（按住）」「滚轮」是要翻译的说法。带 dlg. 前缀的才查字典，别的一律原样上键帽 */
+const cap = s => (s.startsWith('dlg.') ? tr(s.slice(4)) : s);
+
 const keyList = () => el('dl', { class: 'kv' },
-  ...KEYS.flatMap(([k, d]) => [el('dt', {}, el('span.kbd', { text: k })), el('dd', { text: d })]));
+  ...KEYS.flatMap(([k, d]) => [el('dt', {}, el('span.kbd', { text: cap(k) })), el('dd', { text: tr(d) })]));
 
 export function flowModal() {
   modal({
-    title: '修图流程',
+    title: tr('dlg.flow'),
     wide: true,
     body: el('div.dlg-flow', {},
-      ...FLOW.map(([t, d], i) => el('div.dlg-step', {},
+      ...FLOW.map(([k, tk, dk], i) => el('div.dlg-step', {},
         el('span.dlg-step__k', { text: String(i + 1) }),
-        el('b.dlg-step__t', { text: t }),
-        el('span.dlg-step__d', { text: d }))),
-      el('div.dlg-note', { text: '遮罩以 PNG 存在项目目录，随时回来接着改；生成结果会进图片的历史列表，可反复对比。' }),
+        el('b.dlg-step__t', { text: tr(tk) }),
+        el('span.dlg-step__d', { text: tr(dk) }))),
+      el('div.dlg-note', { text: tr('dlg.flowNote') }),
     ),
-    actions: [{ label: '知道了', kind: 'primary' }],
+    actions: [{ label: tr('common.gotIt'), kind: 'primary' }],
   });
 }
 
 export function shortcutsModal() {
   modal({
-    title: '快捷键',
+    title: tr('dlg.shortcuts'),
     body: keyList(),
-    actions: [{ label: '知道了', kind: 'primary' }],
+    actions: [{ label: tr('common.gotIt'), kind: 'primary' }],
   });
 }
 
 export function helpModal() {
   const grid = el('div.dlg-grid', {},
-    ...FLOW.map(([t, d], i) => el('div.dlg-card', {},
-      el('b', { text: `${i + 1} · ${t}` }),
-      el('span', { text: d }))));
+    ...FLOW.map(([k, tk, dk], i) => el('div.dlg-card', {},
+      el('b', { text: `${i + 1} · ${tr(tk)}` }),
+      el('span', { text: tr(dk) }))));
 
   modal({
-    title: '帮助',
+    title: tr('dlg.help'),
     wide: true,
     body: el('div.dlg-flow', {},
-      el('div', {}, el('h4.dlg-h4', { text: '四步走' }), grid),
-      el('div', {}, el('h4.dlg-h4', { text: '快捷键' }), keyList()),
+      el('div', {}, el('h4.dlg-h4', { text: tr('dlg.steps') }), grid),
+      el('div', {}, el('h4.dlg-h4', { text: tr('dlg.shortcuts') }), keyList()),
     ),
-    actions: [{ label: '关闭', kind: 'primary' }],
+    actions: [{ label: tr('common.close'), kind: 'primary' }],
   });
 }
 
 export function workflowModal(cfg) {
   const loras = cfg.loras || [];
   modal({
-    title: '工作流默认参数',
+    title: tr('dlg.wfDefaults'),
     wide: true,
     body: el('div.dlg-flow', {},
       el('dl', { class: 'kv' },
-        el('dt', { text: '参数来源' }), el('dd', { text: cfg.cfg_source === 'workflow' ? `本机工作流 · ${cfg.workflow_path || ''}` : `内置默认 · ${cfg.workflow_error || '未关联工作流'}` }),
-        el('dt', { text: '默认步数' }), el('dd', { text: fmtNum(cfg.steps, 1) }),
-        el('dt', { text: '默认 CFG' }), el('dd', { text: fmtNum(cfg.cfg, 0.5) }),
-        el('dt', { text: '负面提示词' }), el('dd', { text: cfg.negative || '（空）' }),
-        el('dt', { text: 'LoRA 链' }), el('dd', {},
+        el('dt', { text: tr('dlg.src') }), el('dd', { text: cfg.cfg_source === 'workflow' ? tr('dlg.srcWf', { path: cfg.workflow_path || '' }) : tr('dlg.srcBuiltin', { err: cfg.workflow_error || tr('dlg.srcNoWf') }) }),
+        el('dt', { text: tr('dlg.defSteps') }), el('dd', { text: fmtNum(cfg.steps, 1) }),
+        el('dt', { text: tr('dlg.defCfg') }), el('dd', { text: fmtNum(cfg.cfg, 0.5) }),
+        el('dt', { text: tr('dlg.defNeg') }), el('dd', { text: cfg.negative || tr('dlg.empty') }),
+        el('dt', { text: tr('dlg.defLora') }), el('dd', {},
           loras.length
             ? el('div.dlg-list', {},
               ...loras.map(l => el('div.dlg-row', {},
                 el('span.dot', { class: `dot ${l.enabled === false ? '' : 'dot--done'}` }),
                 el('span', { text: baseName(l.name) }),
                 el('span.muted', { text: `×${fmtNum(l.strength, 0.05)}` }))))
-            : el('span', { text: '（无）' }))),
+            : el('span', { text: tr('dlg.none') }))),
       el('div', {},
-        el('h4.dlg-h4', { text: '默认正向指令' }),
-        el('div.dlg-prompt', { text: cfg.prompt_default || '（工作流里没有预置指令）' })),
-      el('div.dlg-note', { text: '这些值直接读自本机 ComfyUI 工作流文件，改工作流后重启服务即生效。' }),
+        el('h4.dlg-h4', { text: tr('dlg.defPrompt') }),
+        el('div.dlg-prompt', { text: cfg.prompt_default || tr('dlg.noPreset') })),
+      el('div.dlg-note', { text: tr('dlg.wfNote') }),
     ),
-    actions: [{ label: '关闭', kind: 'primary' }],
+    actions: [{ label: tr('common.close'), kind: 'primary' }],
   });
 }

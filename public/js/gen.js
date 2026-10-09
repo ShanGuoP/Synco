@@ -1,6 +1,7 @@
 // 生成任务层：提交 / 轮询 / 状态回写，项目页批量与编辑器单张共用
 'use strict';
 import { api, ApiError } from './core/api.js';
+import { t } from './core/i18n.js';
 import { store, setJob, touchImage, saveSettings } from './state.js';
 import { toast, toastErr, toastOk, toastBusy } from './ui/toast.js';
 
@@ -39,15 +40,15 @@ async function tick() {
       if (e instanceof ApiError && e.status === 404) {
         pending.delete(rid);
         setJob(job.imgId, { state: 'idle', resultId: null });
-        callDone(job, { id: rid, image_id: job.imgId, status: 'error', error: '这条记录已经不在了（被删掉或服务重启过）' });
+        callDone(job, { id: rid, image_id: job.imgId, status: 'error', error: t('gen.gone') });
         continue;
       }
       // 其余错误按网络抖动处理，但也要有尽头：服务换了端口、后端整个不在时失败是永远不会成功的
       if (++job.fails >= 8) {
         pending.delete(rid);
-        const why = '读不到这条任务的状态，已停止轮询（服务可能已经重启）';
+        const why = t('gen.stopWhy');
         setJob(job.imgId, { state: 'err', resultId: rid, error: why });
-        toastErr('轮询已停止', `#${rid}：连续 8 次读不到状态`);
+        toastErr(t('gen.stopTitle'), t('gen.stopBody', { id: rid, n: job.fails }));
         callDone(job, { id: rid, image_id: job.imgId, status: 'error', error: why });
       }
       continue;
@@ -67,10 +68,10 @@ async function tick() {
         latest_result_url: r.thumb_url || r.final_url || cur?.latest_result_url || null,
         last_result: r,
       });
-      toastOk('生成完成', job.t0 ? `#${rid} · 用时 ${Math.round((Date.now() - job.t0) / 1000)} 秒` : `#${rid}`);
+      toastOk(t('gen.doneTitle'), job.t0 ? t('gen.doneBody', { id: rid, sec: Math.round((Date.now() - job.t0) / 1000) }) : t('gen.doneBodyBare', { id: rid }));
     } else {
-      setJob(job.imgId, { state: 'err', resultId: rid, error: r.error || 'ComfyUI 未返回原因' });
-      toastErr('生成失败', String(r.error || '').slice(0, 120));
+      setJob(job.imgId, { state: 'err', resultId: rid, error: r.error || t('gen.noReason') });
+      toastErr(t('gen.failTitle'), String(r.error || '').slice(0, 120));
     }
     callDone(job, r);
   }
@@ -110,14 +111,14 @@ export async function submit(ids, settings, opt = {}) {
     r = await api.run(ids, settings, opt.rerunOf);
   } catch (e) {
     for (const id of ids) setJob(id, { state: 'err', error: e.message });
-    toastErr('提交失败', e instanceof ApiError ? e.message : String(e));
+    toastErr(t('gen.submitFail'), e instanceof ApiError ? e.message : String(e));
     return { ok: 0, skipped: [], error: e.message };
   }
 
   /* 后端在 ComfyUI 拒收时返回 200 + {error} */
   if (r?.error) {
     for (const id of ids) setJob(id, { state: 'err', error: r.error });
-    toastErr('ComfyUI 拒绝提交', String(r.error).slice(0, 160));
+    toastErr(t('gen.rejectTitle'), String(r.error).slice(0, 160));
     return { ok: 0, skipped: [], error: r.error };
   }
 
@@ -134,9 +135,9 @@ export async function submit(ids, settings, opt = {}) {
     setJob(one.image_id, { state: 'run', error: null, resultId: one.result_id });   // 记下 id，界面上才有"中断这一张"的对象
     done.push(one);
   }
-  if (ok && !opt.quiet) toastBusy(`已提交 ${ok} 张`, 'ComfyUI 排队采样中，可继续操作');
+  if (ok && !opt.quiet) toastBusy(t('gen.submittedTitle', { n: ok }), t('gen.submittedBody'));
   startPolling();
-  return { ok, skipped, results: done, error: ok ? undefined : (skipped[0]?.reason || '没有任务被接受（可能遮罩未保存）') };
+  return { ok, skipped, results: done, error: ok ? undefined : (skipped[0]?.reason || t('gen.noneAccepted')) };
 }
 
 /** 用户中断：从轮询里摘掉，别让下一轮又把状态改回 running */

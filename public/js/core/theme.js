@@ -7,7 +7,8 @@ import { canTransition } from './motion.js';
 
 const KEY = 'synco.theme';
 
-export const MODES = [['system', '跟随系统'], ['light', '纸白'], ['dark', '墨黑']];
+// 只有键：模块求值早于字典装载，标签必须在渲染时查
+export const MODES = [['system', 'theme.follow'], ['light', 'theme.paper'], ['dark', 'theme.ink']];
 
 export function mode() {
   try { return localStorage.getItem(KEY) || 'system'; } catch { return 'system'; }

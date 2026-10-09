@@ -6,6 +6,7 @@ import { el, $, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { api, fileToPayload } from '../../core/api.js';
 import { encodeMask } from '../../core/maskEncode.js';
+import { t } from '../../core/i18n.js';
 import { store, loadProject, loadPhrases } from '../../state.js';
 import { go } from '../../core/router.js';
 import { toastOk, toastErr, toastBusy } from '../../ui/toast.js';
@@ -22,15 +23,15 @@ import { adopt } from '../../gen.js';
 const INK = '#1f1e1c';
 const SIZES = [['1024×1024', 1024, 1024], ['1152×896', 1152, 896], ['896×1152', 896, 1152], ['1536×1024', 1536, 1024]];
 const TOOLS = [
-  { key: 'pan', ico: 'hand', label: '抓手', tip: '平移画布 · H' },
-  { key: 'brush', ico: 'brush', label: '画笔', tip: '画草稿 · B' },
-  { key: 'erase', ico: 'eraser', label: '橡皮', tip: '擦回白纸 · E' },
+  { key: 'pan', ico: 'hand', label: 'ed.tPan', tip: 'ed.tPanTip' },
+  { key: 'brush', ico: 'brush', label: 'dlg.dBrush', tip: 'cv.tBrushTip' },
+  { key: 'erase', ico: 'eraser', label: 'dlg.dEraser', tip: 'cv.tEraseTip' },
 ];
 const ZOOMS = [
-  { key: 'fit', ico: 'fit', label: '合适', tip: '适应窗口 · 0' },
-  { key: 'one', ico: 'one2one', label: '1:1', tip: '实际像素 · 1' },
-  { key: 'zin', ico: 'zoomIn', label: '放大', tip: '或按 +' },
-  { key: 'zout', ico: 'zoomOut', label: '缩小', tip: '或按 -' },
+  { key: 'fit', ico: 'fit', label: 'ed.tFit', tip: 'ed.tFitTip' },
+  { key: 'one', ico: 'one2one', label: 'ed.tOne', tip: 'ed.tOneTip' },
+  { key: 'zin', ico: 'zoomIn', label: 'compare.zoomIn', tip: 'ed.tZinTip' },
+  { key: 'zout', ico: 'zoomOut', label: 'compare.zoomOut', tip: 'ed.tZoutTip' },
 ];
 
 let c = null;                      // 上下文：只建一次，换画布复用
@@ -46,7 +47,7 @@ export function newCanvas({ projectId = null } = {}) {
   return new Promise(res => {
     let settled = false;
     const finish = v => { if (!settled) { settled = true; res(v); } };
-    const nm = el('input.input', { type: 'text', maxlength: '60', placeholder: '如 海报草稿' });
+    const nm = el('input.input', { type: 'text', maxlength: '60', placeholder: t('cv.namePh') });
     let size = SIZES[0];
     const seg = el('div.seg', {}, ...SIZES.map(([label, w, h], i) => el('button.seg__it', {
       type: 'button', class: `seg__it${i === 0 ? ' is-on' : ''}`, text: label,
@@ -57,7 +58,7 @@ export function newCanvas({ projectId = null } = {}) {
     })));
     let busy = { close() {} };
     const submit = async () => {
-      busy = toastBusy('建画布…');
+      busy = toastBusy(t('cv.busy'));
       try {
         const r = await api.canvasCreate({ name: nm.value.trim(), w: size[1], h: size[2], project_id: projectId });
         busy.close();
@@ -65,18 +66,18 @@ export function newCanvas({ projectId = null } = {}) {
         m.close('ok');
       } catch (e) {
         busy.close();
-        toastErr('建不起来', e.message);
+        toastErr(t('home.createFail'), e.message);
         nm.focus();
       }
     };
     const box = el('div', { style: { display: 'grid', gap: '10px' } },
-      el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: '名字' }), nm),
-      el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: '画布尺寸' }), seg),
-      el('p.muted', { text: '云端对画布有硬约束：长边 ≤3840、比例 ≤3:1、像素 65.5 万~829 万。这几档都在框里。' }),
+      el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: t('ph.name') }), nm),
+      el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: t('cv.sizeLab') }), seg),
+      el('p.muted', { text: t('cv.sizeNote') }),
       el('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px' } },
-        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '取消', onclick: () => { finish(null); m.close('cancel'); } }),
-        el('button.btn.btn--primary.btn--sm', { type: 'button', text: '建画布', onclick: submit })));
-    const m = modal({ title: '新建画布', body: box, onClose: () => finish(null) });
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('common.cancel'), onclick: () => { finish(null); m.close('cancel'); } }),
+        el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('cv.create'), onclick: submit })));
+    const m = modal({ title: t('home.canvasBtn'), body: box, onClose: () => finish(null) });
     requestAnimationFrame(() => nm.focus());
   });
 }
@@ -104,49 +105,49 @@ function build() {
     onRestore: r => usePrompt(r),
     onUseSketch: r => takeSketch(r),
     copy: {
-      left: '当时画稿', right: '成图', overOnWhite: true,
-      restore: '用这条提示词再改一版',
-      restoreTip: '把这一版的提示词搬回输入框，并记下谱系：下一版会标「改自 #id」',
+      left: t('cv.leftSketch'), right: t('compare.right'), overOnWhite: true,
+      restore: t('cv.restore'),
+      restoreTip: t('cv.restoreTip'),
     },
   });
   vpBox.append(compare.node);
 
   const brushVal = el('span.tool-slider__val', { text: '42' });
   const brushSlider = makeSlider({
-    min: 2, max: 200, step: 2, value: 42, ariaLabel: '笔刷大小',
+    min: 2, max: 200, step: 2, value: 42, ariaLabel: t('ed.brushAria'),
     onChange: v => { brushVal.textContent = String(v); c.painter.setBrush(v); },
   });
   const toolBtn = (k, ico, label, tip, onclick) => el('button.tool', {
     type: 'button', dataset: { k }, 'data-tip': tip, onclick,
   }, el('span.tool__ico', { html: icon(ico) }), el('span', { text: label }));
   const tools = el('div.ed-tools', {},
-    el('button.tool-zoom', { type: 'button', 'data-tip': '点击适应窗口', onclick: () => viewport.fit() }, zoomPct),
-    ...ZOOMS.map(z => toolBtn(z.key, z.ico, z.label, z.tip, () => onZoom(z.key))),
+    el('button.tool-zoom', { type: 'button', 'data-tip': t('ed.zoomTip'), onclick: () => viewport.fit() }, zoomPct),
+    ...ZOOMS.map(z => toolBtn(z.key, z.ico, t(z.label), t(z.tip), () => onZoom(z.key))),
     el('span.tool-sep'),
-    ...TOOLS.map(t => toolBtn(t.key, t.ico, t.label, t.tip, () => setTool(t.key))),
+    ...TOOLS.map(d => toolBtn(d.key, d.ico, t(d.label), t(d.tip), () => setTool(d.key))),
     el('span.tool-sep'),
-    toolBtn('undo', 'undo', '撤销', '回退一笔 · Ctrl+Z', () => onUndo()),
-    toolBtn('clear', 'trash', '清空', '擦成一张白纸', () => onClear()),
-    el('div.tool-slider', {}, el('span.tool-slider__lab', { text: '笔刷' }), brushSlider.node, brushVal));
+    toolBtn('undo', 'undo', t('ed.tUndo'), t('ed.tUndoTip'), () => onUndo()),
+    toolBtn('clear', 'trash', t('ed.tClear'), t('cv.eraseAll'), () => onClear()),
+    el('div.tool-slider', {}, el('span.tool-slider__lab', { text: t('ed.brushLab') }), brushSlider.node, brushVal));
 
   const name = el('b.nowrap');
   const top = el('div.cv-top', {},
     el('div.cv-top__l', {},
-      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': '返回项目', 'data-tip': '返回项目', html: icon('left', { cls: 'icon icon--sm' }), onclick: goBack }),
-      el('div.ed-file', {}, name, el('span', { class: 'cv-tag', text: '画布' }))),
+      el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': t('ed.back'), 'data-tip': t('ed.back'), html: icon('left', { cls: 'icon icon--sm' }), onclick: goBack }),
+      el('div.ed-file', {}, name, el('span', { class: 'cv-tag', text: t('nav.canvas') }))),
     el('div.cv-top__r', {}, saveFlag,
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', html: icon('refresh', { cls: 'icon icon--sm' }) + '<span>刷新成图</span>', onclick: () => load(c.imgId) })));
+      el('button.btn.btn--ghost.btn--sm', { type: 'button', html: icon('refresh', { cls: 'icon icon--sm' }) + `<span>${t('cv.refreshResult')}</span>`, onclick: () => load(c.imgId) })));
 
   /* 右侧：提示词 + 短语胶囊 + 参考图槽 + 提交 */
-  const ta = el('textarea.textarea', { rows: '6', placeholder: '描述你要生成什么：一段一个主体一个动作', spellcheck: 'false' });
+  const ta = el('textarea.textarea', { rows: '6', placeholder: t('cv.promptPh'), spellcheck: 'false' });
   const chips = el('div.chips.chips--side');
-  const count = el('span.badge', { text: '0 字' });
+  const count = el('span.badge', { text: t('pm.charCount', { n: 0 }) });
   const go2 = el('button.btn.btn--accent.btn--block', { type: 'button', onclick: () => submit() });
   const line = el('div.run-line');
   const paintGo = (busy) => {
     go2.innerHTML = busy
-      ? '<span class="spin spin--dark"></span><span class="btn__label">生成中…</span>'
-      : `${icon('wand', { cls: 'icon icon--sm' })}<span class="btn__label">生成</span>`;
+      ? `<span class="spin spin--dark"></span><span class="btn__label">${t('pm.busy')}</span>`
+      : `${icon('wand', { cls: 'icon icon--sm' })}<span class="btn__label">${t('cv.gen')}</span>`;
     go2.classList.toggle('is-busy', busy);
     go2.disabled = !!busy;
   };
@@ -157,35 +158,35 @@ function build() {
   const refFile = el('input', { type: 'file', accept: 'image/*', multiple: 'multiple', hidden: 'hidden', style: { display: 'none' } });
   refFile.onchange = () => { const fs = [...refFile.files]; refFile.value = ''; addRefFiles(fs); };
   const refUp = el('button.btn.btn--ghost.btn--sm', {
-    type: 'button', 'data-tip': '相机直出的图、截图都行；会被折进云端合法的尺寸档',
-    html: icon('upload', { cls: 'icon icon--sm' }) + '<span>本地上传</span>', onclick: () => refFile.click(),
+    type: 'button', 'data-tip': t('cv.refUpTip'),
+    html: icon('upload', { cls: 'icon icon--sm' }) + `<span>${t('cv.refUp')}</span>`, onclick: () => refFile.click(),
   });
   const refPick = el('button.btn.btn--ghost.btn--sm', {
-    type: 'button', 'data-tip': '从这个项目里已有的图挑', html: icon('image', { cls: 'icon icon--sm' }) + '<span>从项目挑</span>',
+    type: 'button', 'data-tip': t('cv.projPickTip'), html: icon('image', { cls: 'icon icon--sm' }) + `<span>${t('cv.projPick')}</span>`,
     onclick: addRefFromProject,
   });
   const refBox = el('div.grp', {},
-    el('div.cv-refhd', {}, el('span.cv-refhd__t', { text: '参考图' }), refCount, el('span.grow'), refUp, refPick),
+    el('div.cv-refhd', {}, el('span.cv-refhd__t', { text: t('cv.refsTitle') }), refCount, el('span.grow'), refUp, refPick),
     el('div.grp__bd', {}, refGrid, refFile));
 
   /* 右侧两列：生成列 + 结果历史列（与修图页同一套栏宽与卡片摆位，历史不再叠在生成面板下面） */
   const history = createHistory({
     onPick: showResult, onDel: delResult, onRestore: restoreRow, onFork: forkResult,
-    emptyHint: '这张画布还没生成过。写好提示词，点右侧「生成」。',
+    emptyHint: t('cv.emptyHint'),
   });
   const side = el('aside.cv-side', {},
-    el('div.col-hd', {}, el('h3', { html: icon('wand', { cls: 'icon icon--sm' }) + '<span>生成</span>' })),
+    el('div.col-hd', {}, el('h3', { html: icon('wand', { cls: 'icon icon--sm' }) + `<span>${t('cv.gen')}</span>` })),
     el('div.cv-side__bd', {},
       el('div.grp', {}, el('div.grp__bd', {}, ta)),
       chips,
-      el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, count, el('span.grow'), el('span.muted', { text: '整幅生成 · 不保留画稿像素' })),
+      el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, count, el('span.grow'), el('span.muted', { text: t('cv.fullNote') })),
       refBox,
       line, go2));
   const histCol = el('div.cv-hist', {}, history.node);
 
   const painter = createPainter({
     mask: paper, cursor, viewport, ink: INK,
-    onDirty: () => setFlag('保存中…', 'busy'),
+    onDirty: () => setFlag(t('ed.saving'), 'busy'),
     onSaved: onSketchSaved,
   });
 
@@ -214,7 +215,7 @@ export async function openCanvas(projectId, imgId) {
   // 数据到手再掀覆盖层：脏 URL 不该显示一个空画布
   const p = store.peek('project');
   if (!p || p.id !== +projectId) {
-    try { await loadProject(projectId); } catch (e) { toastErr('项目打不开', e.message || String(e)); go('/'); return; }
+    try { await loadProject(projectId); } catch (e) { toastErr(t('ed.projFail'), e.message || String(e)); go('/'); return; }
   }
   host.hidden = false;
   $('#shell').style.visibility = 'hidden';
@@ -239,9 +240,9 @@ const goBack = () => { const p = store.peek('project'); go(p ? `/p/${p.id}` : '/
 async function load(imgId) {
   const mine = ++seq;
   const stale = () => mine !== seq;
-  const busy = toastBusy('打开画布…');
+  const busy = toastBusy(t('cv.openBusy'));
   let d;
-  try { d = await api.canvas(imgId); } catch (e) { busy.close(); toastErr('打不开画布', e.message); goBack(); return; }
+  try { d = await api.canvas(imgId); } catch (e) { busy.close(); toastErr(t('cv.openFail'), e.message); goBack(); return; }
   busy.close();
   if (stale()) return;
   c.imgId = imgId;
@@ -251,14 +252,14 @@ async function load(imgId) {
   rerunFrom = null;      // 换画布不清掉谱系，下一版就会挂在上一张画布的成图上
   const im = d.image;
   c.name.textContent = im.name;
-  c.hud.textContent = `${im.w}×${im.h} · 云端整幅生成`;
+  c.hud.textContent = t('cv.dimsCloud', { wh: `${im.w}×${im.h}` });
   c.viewport.setContentSize(im.w, im.h);
   // 画稿就是内容本身：1:1 装载，不做任何降采样
   await c.painter.load(im.w, im.h, d.sketch_url, imgId, { w: im.w, h: im.h });
   if (stale()) return;
   c.viewport.fit();
   setTool('brush');
-  setFlag('已载入');
+  setFlag(t('cv.loaded'));
   paintChips();
   syncResults(d.results || []);
   c.refMax = d.refs_max || c.refMax || 4;
@@ -279,14 +280,14 @@ function paintRefs(list) {
   c.refList = list || [];
   fill(c.refGrid,
     ...c.refList.map(ref => el('div.refslot', { title: ref.name || '' },
-      ref.dead ? el('span.refslot__gone', { text: '文件已丢失' }) : el('img', { src: ref.url, alt: '', loading: 'lazy' }),
+      ref.dead ? el('span.refslot__gone', { text: t('hist.goneFile') }) : el('img', { src: ref.url, alt: '', loading: 'lazy' }),
       el('button.refslot__x', {
-        type: 'button', 'aria-label': '撤下这张参考图', 'data-tip': '撤下（不动盘上原来那张）',
+        type: 'button', 'aria-label': t('cv.refDropAria'), 'data-tip': t('cv.refDropTip'),
         html: icon('close', { cls: 'icon icon--sm' }),
         onclick: () => setRefs(c.refList.filter(x => x.path !== ref.path).map(x => x.path)),
       }))),
     c.refList.length < c.refMax ? el('button.refslot.refslot--add', {
-      type: 'button', 'aria-label': '从项目里挑一张参考图', 'data-tip': '从项目里挑',
+      type: 'button', 'aria-label': t('cv.refPickAria'), 'data-tip': t('cv.refPickTip'),
       html: icon('plus', { cls: 'icon icon--sm' }), onclick: addRefFromProject,
     }) : null);
   c.refCount.textContent = `${c.refList.length}/${c.refMax}`;
@@ -297,7 +298,7 @@ async function setRefs(paths) {
   try {
     const d = await api.canvasSetRefs(c.imgId, paths);
     paintRefs(d.refs || []);
-  } catch (e) { toastErr('槽位没改成', e.message); refreshRefs(); }
+  } catch (e) { toastErr(t('cv.slotFail'), e.message); refreshRefs(); }
 }
 
 async function refreshRefs() {
@@ -308,38 +309,38 @@ const isImgFile = f => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|bmp|a
 
 async function addRefFiles(files) {
   const list = files.filter(isImgFile);
-  if (!list.length) { toastErr('不是图片文件', '支持 png / jpg / webp / bmp / avif'); return; }
+  if (!list.length) { toastErr(t('cv.notImage'), t('cv.formats')); return; }
   const room = c.refMax - c.refList.length;
-  if (room <= 0) { toastErr(`参考图最多 ${c.refMax} 张`, '先撤下一张再传'); return; }
-  if (list.length > room) toastErr(`只收前 ${room} 张`, `参考图一次最多 ${c.refMax} 张`);
+  if (room <= 0) { toastErr(t('cv.refMax', { n: c.refMax }), t('cv.refFullUpload')); return; }
+  if (list.length > room) toastErr(t('cv.onlyFirst', { n: room }), t('cv.refMaxBatch', { n: c.refMax }));
   const payloads = [];
   for (const f of list.slice(0, room)) {
-    try { payloads.push(await fileToPayload(f)); } catch (e) { toastErr('这张读不出来', `${f.name}：${e.message}`); }
+    try { payloads.push(await fileToPayload(f)); } catch (e) { toastErr(t('cv.fileFail'), t('cv.fileBody', { name: f.name, msg: e.message })); }
   }
   if (!payloads.length) return;
-  const busy = toastBusy('正在收下参考图…');
+  const busy = toastBusy(t('cv.refBusy'));
   try {
     const d = await api.canvasAddRefs(c.imgId, { files: payloads.map(p => ({ b64: p.b64 })) });
     busy.close();
     paintRefs(d.refs || []);
-  } catch (e) { busy.close(); toastErr('参考图没加上', e.message); refreshRefs(); }
+  } catch (e) { busy.close(); toastErr(t('cv.refFail'), e.message); refreshRefs(); }
 }
 
 async function addRefIds(ids) {
   if (!ids.length) return;
-  if (c.refMax - c.refList.length <= 0) { toastErr(`参考图最多 ${c.refMax} 张`, '先撤下一张再挑'); return; }
+  if (c.refMax - c.refList.length <= 0) { toastErr(t('cv.refMax', { n: c.refMax }), t('cv.refFullPick')); return; }
   try {
     const d = await api.canvasAddRefs(c.imgId, { image_ids: ids.slice(0, c.refMax - c.refList.length) });
     paintRefs(d.refs || []);
-  } catch (e) { toastErr('参考图没加上', e.message); refreshRefs(); }
+  } catch (e) { toastErr(t('cv.refFail'), e.message); refreshRefs(); }
 }
 
 /** 从本项目已有的图里挑：加进来的是**复制的一份**，原图后来被删也不影响"这一版参考了哪张" */
 function addRefFromProject() {
   const imgs = (store.peek('images') || []).filter(i => i.id !== c.imgId);
-  if (!imgs.length) { toastErr('这个项目里还没有别的图', '先导入几张，或用「本地上传」'); return; }
+  if (!imgs.length) { toastErr(t('cv.noOther'), t('cv.noOtherBody')); return; }
   const m = modal({
-    title: '从项目里挑参考图',
+    title: t('cv.refPickTitle'),
     body: el('div.refpick', {}, ...imgs.map(i => el('button.refpick__it', {
       type: 'button', onclick: () => { addRefIds([i.id]); m.close('ok'); },
     }, i.thumb_url ? el('img', { src: i.thumb_url, alt: '', loading: 'lazy' }) : el('span.refpick__ph'),
@@ -349,34 +350,34 @@ function addRefFromProject() {
 
 /** 历史条目的「回填」：提示词 + 那一版**实际带走**的参考图整套搬回待提交状态 */
 async function restoreRow(r) {
-  if (!r.prompt) { toastErr('这一版没留提示词'); return; }
+  if (!r.prompt) { toastErr(t('cv.noPrompt')); return; }
   c.ta.value = r.prompt;
   syncPrompt();
   rerunFrom = r.id;
   c.compare.hide();
-  if (!r.refs?.length) { line(`准备好用 #${r.id} 的提示词再改一版了`); return; }
+  if (!r.refs?.length) { line(t('cv.readyRerun', { id: r.id })); return; }
   try {
     const d = await api.canvasAddRefs(c.imgId, { from_result: r.id });
     paintRefs(d.refs || []);
-    line(`已把 #${r.id} 那版的 ${d.refs.length} 张参考图搬进槽位`);
+    line(t('cv.refsMoved', { id: r.id, n: d.refs.length }));
   } catch (e) {
-    toastErr('这一版的参考图搬不过来', e.message);
-    line(`提示词已回填，参考图没搬过来：${String(e.message || '').slice(0, 60)}`);
+    toastErr(t('cv.refsFail'), e.message);
+    line(t('cv.refsPartial', { msg: String(e.message || '').slice(0, 60) }), true);
   }
 }
 
 /** 成图另存为项目里的新图：要接着涂遮罩就走修图页那一条，画布这张不动 */
 async function forkResult(r) {
-  if (!r?.final_url) { toastErr('这条记录还没有成图'); return; }
-  if (r.final_dead) { toastErr('这条成图的文件已经不在了', '记录还留着，PNG 不在盘上了。删掉这条记录即可'); return; }
-  const busy = toastBusy('正在复制成图…');
+  if (!r?.final_url) { toastErr(t('ed.noResultYet')); return; }
+  if (r.final_dead) { toastErr(t('ed.resultGone'), t('ed.resultGoneBody')); return; }
+  const busy = toastBusy(t('ed.copying'));
   try {
     const f = await api.forkResult(r.id);
     await loadProject(c.projectId);
     busy.close();
     go(`/p/${c.projectId}/e/${f.image_id}`);
-    toastOk('已另存为新图', `${f.name} · 画布和这张成图各自独立`);
-  } catch (e) { busy.close(); toastErr('另存失败', e.message); }
+    toastOk(t('ed.forked'), t('cv.forkedBody', { name: f.name }));
+  } catch (e) { busy.close(); toastErr(t('ed.forkFail'), e.message); }
 }
 
 /* ==================== 胶囊与提示词 ==================== */
@@ -396,7 +397,7 @@ function paintChips() {
 function syncPrompt() {
   const cur = c.ta.value || '';
   for (const el0 of c.chips.querySelectorAll('.chip-s[data-phrase]')) el0.classList.toggle('is-on', cur.includes(el0.dataset.phrase));
-  c.count.textContent = `${cur.length} 字`;
+  c.count.textContent = t('pm.charCount', { n: cur.length });
 }
 
 /* ==================== 保存画稿 ==================== */
@@ -405,15 +406,15 @@ async function onSketchSaved({ empty, b64, id }) {
   if (!id || id !== c.imgId) return true;      // 已经换画布了：这批笔迹不属于屏幕上这张
   let data = b64;
   if (empty && !data) {
-    try { data = (await encodeMask(c.paper)).b64; } catch { setFlag('保存失败', 'err'); return false; }
+    try { data = (await encodeMask(c.paper)).b64; } catch { setFlag(t('ed.saveFail'), 'err'); return false; }
   }
   try {
     await api.saveSketch(id, data);
-    setFlag('画稿已保存', 'ok');
+    setFlag(t('cv.saved'), 'ok');
     return true;
   } catch (e) {
-    setFlag('保存失败', 'err');
-    toastErr('画稿保存失败', e.message);
+    setFlag(t('ed.saveFail'), 'err');
+    toastErr(t('cv.saveFail'), e.message);
     return false;
   }
 }
@@ -422,7 +423,7 @@ async function onSketchSaved({ empty, b64, id }) {
 async function submit() {
   if (!c?.imgId || inFlight.has(c.imgId)) return;
   const prompt = (c.ta.value || '').trim();
-  if (!prompt) { toastErr('提示词是空的', '画布只看这句话生成'); return; }
+  if (!prompt) { toastErr(t('cv.emptyPrompt'), t('cv.emptyPromptBody')); return; }
   const imgId = c.imgId;
   const rerunOf = rerunFrom; rerunFrom = null;
   /* 闸门在第一个 await 之前落下。写在 await 之后就等于没设：提交要飞几秒，
@@ -434,31 +435,33 @@ async function submit() {
     inFlight.delete(imgId);
     if (c && c.imgId === imgId) c.paintGo(false);
   };
-  try { await c.painter.flush(); } catch (e) { release(); toastErr('画稿没落盘', e.message); return; }
+  try { await c.painter.flush(); } catch (e) { release(); toastErr(t('cv.notFlushed'), e.message); return; }
   let r;
   try { r = await api.canvasGenerate(imgId, { prompt }, rerunOf); }
-  catch (e) { release(); toastErr('提交失败', e.message); return; }
-  if (!r?.result_id) { release(); toastErr('没有排上', r?.error || '云端没接这次提交'); return; }
-  const withRefs = c.refList.length ? ` · 带 ${c.refList.length} 张参考图` : '';
+  catch (e) { release(); toastErr(t('gen.submitFail'), e.message); return; }
+  if (!r?.result_id) { release(); toastErr(t('cv.notQueued'), r?.error || t('cv.cloudRejected')); return; }
+  const nf = c.refList.length;
   line(rerunOf
-    ? `已排进云端队列 #${r.result_id}（改自 #${rerunOf}${withRefs}）…`
-    : `已排进云端队列 #${r.result_id}${withRefs}…`);
+    ? nf ? t('cv.queuedRerunRefs', { id: r.result_id, from: rerunOf, n: nf }) : t('cv.queuedRerun', { id: r.result_id, from: rerunOf })
+    : nf ? t('cv.queuedRefs', { id: r.result_id, n: nf }) : t('cv.queuedPlain', { id: r.result_id }));
   adopt(r.result_id, imgId, {
-    onTick: s => { if (c.imgId === imgId) line(s === 'queued' ? '排队中…' : '云端生成中…'); },
+    onTick: s => { if (c.imgId === imgId) line(s === 'queued' ? t('cv.queuedTick') : t('cv.cloudTick')); },
     onDone: async done => {
       release();
-      line(done?.status === 'done' ? `完成 #${done.id}` : `失败：${String(done?.error || '未知原因').slice(0, 90)}`);
+      done?.status === 'done'
+        ? line(t('cv.doneLine', { id: done.id }))
+        : line(t('cv.failLine', { msg: String(done?.error || t('ed.unknown')).slice(0, 90) }), true);
       try {
         const d = await api.canvas(imgId);
         if (c.imgId === imgId) syncResults(d.results || []);
       } catch { /* 列表刷新失败不影响这次结果本身 */ }
-      done?.status === 'done' ? toastOk('画布出图', `#${done.id}`) : toastErr('生成失败', String(done?.error || '').slice(0, 120));
+      done?.status === 'done' ? toastOk(t('cv.doneToast'), `#${done.id}`) : toastErr(t('gen.failTitle'), String(done?.error || '').slice(0, 120));
     },
   });
 }
 
-function line(txt) {
-  fill(c.line, txt ? el('span', { class: /失败|错误|拒收/.test(txt) ? 'err' : '', text: txt }) : null);
+function line(txt, isErr) {
+  fill(c.line, txt ? el('span', { class: isErr ? 'err' : '', text: txt }) : null);
 }
 
 /* ==================== 成图查看 / 删除 ==================== */
@@ -469,7 +472,7 @@ function line(txt) {
  */
 function showResult(r) {
   if (r.status !== 'done' || r.final_dead) {
-    toastErr(r.final_dead ? '成图文件已丢失' : '这条还没出图', r.error || '还排在队列里或已经失败');
+    toastErr(r.final_dead ? t('cv.resultDead') : t('cv.notYet'), r.error || t('cv.stillQueued'));
     return;
   }
   c.cmpId = r.id;
@@ -479,29 +482,29 @@ function showResult(r) {
     resultUrl: r.final_url,
     title: `#${r.id} · ${(r.prompt || '').slice(0, 46)}${r.prompt && r.prompt.length > 46 ? '…' : ''}`,
     result: r,
-    leftLabel: r.sketch_url ? '当时画稿' : '这一版没留画稿',
+    leftLabel: r.sketch_url ? t('cv.leftSketch') : t('cv.noSketch'),
   });
 }
 
 /** 用这一版的提示词再改一版：谱系记在下一行上，历史列才看得出这张是从哪一版迭代来的 */
 function usePrompt(r) {
-  if (!r.prompt) { toastErr('这一版没留提示词'); return; }
+  if (!r.prompt) { toastErr(t('cv.noPrompt')); return; }
   c.ta.value = r.prompt;
   syncPrompt();
   rerunFrom = r.id;
   c.compare.hide();
-  line(`准备好用 #${r.id} 的提示词再改一版了`);
+  line(t('cv.readyRerun', { id: r.id }));
 }
 
 /** 取回这一版当时的线稿：写回画稿本体，屏幕上回到"提交那一刻我画的东西" */
 async function takeSketch(r) {
   const ok = await confirm({
-    title: `取回 #${r.id} 那版的画稿`,
-    text: '画布会换成这一版提交时的线稿快照。你现在屏幕上的笔迹会被覆盖（快照本身不动，切回那一版还能再取一次）。',
-    okLabel: '取回画稿',
+    title: t('cv.sketchTitle', { id: r.id }),
+    text: t('cv.sketchText'),
+    okLabel: t('cv.sketchBtn'),
   });
   if (!ok) return;
-  const busy = toastBusy('取回画稿…');
+  const busy = toastBusy(t('cv.sketchBusy'));
   try {
     /* 先把屏幕上的笔迹冲出去再让服务端写回快照：不冲的话随后那次 load() 会带着"取回前那版"
        的 pending 笔迹 POST 回 /sketch，把刚写回的快照当场盖掉，而提示仍然说"已取回" */
@@ -510,27 +513,27 @@ async function takeSketch(r) {
     busy.close();
     c.compare.hide();
     await load(c.imgId);
-    setFlag('已取回这一版的画稿', 'ok');
-    toastOk('画稿已取回', `#${r.id} 那版`);
+    setFlag(t('cv.sketchDoneFlag'), 'ok');
+    toastOk(t('cv.sketchDoneToast'), t('cv.sketchDone', { id: r.id }));
   } catch (e) {
     busy.close();
-    toastErr('取回失败', e.message);
+    toastErr(t('cv.sketchFail'), e.message);
   }
 }
 
 async function delResult(r) {
   const ok = await confirm({
-    title: `删除记录 #${r.id}`,
-    text: r.final_url ? '这条记录连同它的成图文件一起删掉。画稿不动。' : '只删这条记录。',
-    danger: true, okLabel: '删除记录',
+    title: t('ed.delRecTitle', { id: r.id }),
+    text: r.final_url ? t('cv.delRecText') : t('cv.delRecOnly'),
+    danger: true, okLabel: t('ed.delRecBtn'),
   });
   if (!ok) return;
   try {
     await api.delResult(r.id);
     const d = await api.canvas(c.imgId);
     syncResults(d.results || []);
-    toastOk('记录已删除', `#${r.id}`);
-  } catch (e) { toastErr('删除失败', e.message); }
+    toastOk(t('ed.recDeleted'), `#${r.id}`);
+  } catch (e) { toastErr(t('ed.delFail'), e.message); }
 }
 
 /* ==================== 工具 / 缩放 / 键位 ==================== */
@@ -547,12 +550,12 @@ function onZoom(k) {
 }
 
 function onUndo() {
-  if (!c.painter.canUndo) { toastErr('没有可撤销的笔画'); return; }
-  c.painter.undo().then(ok => { if (ok) setFlag('已撤销一笔'); });
+  if (!c.painter.canUndo) { toastErr(t('ed.noUndo')); return; }
+  c.painter.undo().then(ok => { if (ok) setFlag(t('ed.undone')); });
 }
 
 async function onClear() {
-  const ok = await confirm({ title: '擦成一张白纸', text: '撤销键救不回来（会留 8 步），但画稿会在你下一次落笔时自动存回盘上。', okLabel: '清空' });
+  const ok = await confirm({ title: t('cv.eraseAll'), text: t('cv.clearText'), okLabel: t('ed.tClear') });
   if (!ok) return;
   c.painter.clear();
 }

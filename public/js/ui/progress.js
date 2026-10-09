@@ -2,25 +2,29 @@
 // 后端只提供 running/done/error 三态，这里按已知事实推进，不伪造细粒度百分比
 'use strict';
 import { el, fill } from '../core/dom.js';
+import { t } from '../core/i18n.js';
 
+// key 是契约（后端与视图都按它推进），文字走字典 `progress.<key>`
 export const STAGES = [
-  { key: 'submit', label: '提交' },
-  { key: 'queue',  label: '排队' },
-  { key: 'sample', label: '采样' },
-  { key: 'stitch', label: '回传成图' },
+  { key: 'submit' },
+  { key: 'queue' },
+  { key: 'sample' },
+  { key: 'stitch' },
 ];
+
+const label = d => t(`progress.${d.key}`);
 
 export function makeSteps(defs = STAGES) {
   const items = new Map();
-  const node = el('div.steps', { role: 'group', 'aria-label': '生成阶段' });
+  const node = el('div.steps', { role: 'group', 'aria-label': t('progress.aria') });
 
   const paint = () => fill(node, defs.flatMap((d, i) => {
     const st = items.get(d.key) || 'idle';
     const mark = st === 'done' ? '✓' : st === 'err' ? '!' : st === 'run' ? '●' : '';
     const sep = i < defs.length - 1 ? el('span.step__sep', { text: '›' }) : null;
     return [
-      el('span.step', { class: `step is-${st}`, 'aria-label': `${d.label} ${st}` },
-        el('span.step__k', { text: mark }), el('span', { text: d.label })),
+      el('span.step', { class: `step is-${st}`, 'aria-label': `${label(d)} ${st}` },
+        el('span.step__k', { text: mark }), el('span', { text: label(d) })),
       sep,
     ];
   }));
