@@ -234,7 +234,7 @@ Synco 自己不带模型，它是**调度台 + 缝合内核**。下面二选一�
 git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # 得到 synco.exe / synco-tools.exe / synco-desktop.exe
-npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_0.3.0_x64-setup.exe
+npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_0.3.1_x64-setup.exe
 ```
 
 只想跑起来看看，不用打包：

@@ -139,12 +139,13 @@ export function createAdjust(deps) {
   const radiusCtl = makeSlider({ min: 12, max: 400, step: 2, value: brushPx, ariaLabel: '液化盘半径', onChange: v => { brushPx = v; paintDiscSize(); } });
   const pressureCtl = makeProw({ label: '压力', min: 5, max: 100, step: 1, value: pressure, tip: '一步最多搬掉半径的 45%，再大就会咬到自己上一帧的采样', onChange: v => { pressure = v; } });
   const strokeCount = el('span.badge', { text: '0 笔' });
+  const warpBtn = el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '开始画形', 'aria-pressed': 'false', onclick: () => toggleMode('warp') });
   const warpBox = el('div', { style: { display: 'grid', gap: '10px' } },
     brushSeg,
     el('div.adj-row', {}, el('span.muted.nowrap', { text: '盘半径' }), radiusCtl.node),
     pressureCtl.node,
     el('div.adj-row', {},
-      el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '开始画形', onclick: () => toggleMode('warp') }),
+      warpBtn,
       strokeCount,
       el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '退一笔', onclick: undoStroke }),
       el('button.btn.btn--ghost.btn--sm', { type: 'button', text: '清掉笔画', onclick: clearStrokes })),
@@ -199,7 +200,7 @@ export function createAdjust(deps) {
 
   /* ==================== overlay：裁切框与液化盘（都挂在 layer 里，跟着缩放走） ==================== */
   const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(d => el(`div.adj-hd`, { dataset: { d }, 'aria-hidden': 'true', class: `adj-hd adj-hd--${d}` }));
-  const cropBox = el('div.adj-crop__box', {}, el('div.adj-crop__grid'), ...handles);
+  const cropBox = el('div.adj-crop__box', {}, ...handles);
   const cropLayer = el('div.adj-crop', { hidden: true }, cropBox);
   const warpCanvas = el('canvas.adj-warp', { 'aria-hidden': 'true', hidden: true });
   const disc = el('div.adj-disc', { hidden: true, 'aria-hidden': 'true' });
@@ -222,12 +223,13 @@ export function createAdjust(deps) {
     paintRatio();
   }
   function paintRatio() {
+    // 只有框真摆在画面上才点亮：没进裁切就亮着一颗，等于告诉用户"自由"是某种已生效的状态
     // 框自己就是比例：把实际比例最接近的那格点亮，锁没锁、拖没拖都看得出来
     const c = curBox();
     const r = c ? (c[2] * frame.w) / (c[3] * frame.h || 1) : ratioPick;
     for (const chip of ratioChips.children) {
       const cr = +chip.dataset.r;
-      chip.classList.toggle('is-on', cr === 0 ? (ratioPick === 0 && !c) : Math.abs(cr - r) < 0.03 * Math.max(1, cr));
+      chip.classList.toggle('is-on', mode === 'crop' && (cr === 0 ? ratioPick === 0 : Math.abs(cr - r) < 0.03 * Math.max(1, cr)));
     }
   }
   function paintPreset() {
@@ -408,6 +410,14 @@ export function createAdjust(deps) {
   }
 
   /* ==================== 模式进出 ==================== */
+  /** 「开始画形」得让人一眼看出现在在不在画形里：按钮自己变样，比状态行更准 */
+  function paintWarpBtn() {
+    const on = mode === 'warp';
+    warpBtn.classList.toggle('is-on', on);
+    warpBtn.textContent = on ? '画形中 · 点这里退出' : '开始画形';
+    warpBtn.setAttribute('aria-pressed', String(on));
+  }
+
   function toggleMode(m) {
     if (mode === m) { exitMode(); return; }
     if (mode) exitMode();
@@ -417,6 +427,8 @@ export function createAdjust(deps) {
       cropLayer.hidden = false;
       cropOk.hidden = false;
       paintCrop();
+      paintRatio();
+      paintWarpBtn();
       // 框要画在"其它都算完、只有没裁"的那一张上，坐标系才和用户看到的画面一致
       const uncropped = { ...ops, geometry: { ...ops.geometry, crop: null } };
       api.adjustPreviewWith(idOf(), uncropped).then(p => { if (mode === 'crop') applyPreview(p, true); }).catch(e => line(`裁切底图取不到：${short(e)}`));
@@ -425,9 +437,12 @@ export function createAdjust(deps) {
       mode = 'warp';
       stage.classList.add('is-adjust', 'is-warp');
       warpCanvas.hidden = false;
-      disc.hidden = false;
+      // 盘跟着鼠标走：进场时先藏着，指针一动就亮，免得摆一个没有位置的圆
+      disc.hidden = true;
       paintDiscSize();
-      line(`用「${(BRUSHES.find(b => b[0] === tool) || ['', '推挤'])[1]}」在画面上拖`);
+      paintRatio();
+      paintWarpBtn();
+      line(`用「${(BRUSHES.find(b => b[0] === tool) || ['', '推挤'])[1]}」在画面上拖 · 中键是平移`);
     }
   }
 
@@ -437,6 +452,7 @@ export function createAdjust(deps) {
     const was = mode;
     mode = 'off';
     stage.classList.remove('is-adjust', 'is-warp');
+    paintWarpBtn();
     cropLayer.hidden = true;
     cropOk.hidden = true;
     disc.hidden = true;
@@ -482,7 +498,8 @@ export function createAdjust(deps) {
 
   let drag = null;
   cropBox.addEventListener('pointerdown', ev => {
-    if (mode !== 'crop' || viewport.mode === 'pan') return;
+    // 中键留给平移：它在 stage 上有处理器，这里早退让事件冒泡上去就行
+    if (mode !== 'crop' || viewport.mode === 'pan' || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
     ev.preventDefault();
     ev.stopPropagation();
     drag = {
@@ -529,7 +546,8 @@ export function createAdjust(deps) {
   /* ==================== 液化：盘面反馈只在盘内那一小块 ==================== */
   let stroke = null;
   layer.addEventListener('pointerdown', ev => {
-    if (mode !== 'warp' || viewport.mode === 'pan') return;
+    // 中键平移：早退让事件冒到 stage 上那个 pan 处理器，别在这儿把它当一笔吃掉
+    if (mode !== 'warp' || viewport.mode === 'pan' || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
     ev.preventDefault();
     ev.stopPropagation();
     const rect = layer.getBoundingClientRect();
@@ -539,7 +557,13 @@ export function createAdjust(deps) {
     paintDiscAt(p);
   });
   layer.addEventListener('pointermove', ev => {
-    if (!stroke || mode !== 'warp') return;
+    if (mode !== 'warp') return;
+    if (!stroke) {
+      // 没下笔也要给盘：盘子多大得先看见才敢拖。平移中不显示，否则盘跟着视图一起飘
+      if (viewport.mode === 'pan' || ev.buttons > 1) return;
+      paintDiscAt(toFrame(ev, layer.getBoundingClientRect()));
+      return;
+    }
     const p = toFrame(ev, stroke.rect);
     const nx = p.x / frame.w, ny = p.y / frame.h;
     const tail = stroke.pts[stroke.pts.length - 1];
@@ -555,8 +579,8 @@ export function createAdjust(deps) {
     if (stroke.raf) cancelAnimationFrame(stroke.raf);
     const pts = stroke.pts;
     stroke = null;
-    disc.hidden = true;
     warpCanvas.hidden = true;
+    // 盘故意不藏：指针还停在画面上，接着亮才是连续的反馈；移出去了由 pointerleave 收
     if (pts.length < 2) { line('这一笔没拖出轨迹，没有记进来'); return; }
     const unit = Math.sqrt(frame.w * frame.h) || 1;
     ops.warp.strokes.push({ tool, points: pts, radius: clamp(brushPx / unit, 0.002, 0.5), strength: pressure });
@@ -565,6 +589,7 @@ export function createAdjust(deps) {
   };
   layer.addEventListener('pointerup', endStroke);
   layer.addEventListener('pointercancel', endStroke);
+  layer.addEventListener('pointerleave', () => { if (!stroke) disc.hidden = true; });
 
   function paintDiscSize() {
     disc.style.width = `${brushPx * 2}px`;
