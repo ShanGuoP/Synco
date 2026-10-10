@@ -283,7 +283,7 @@ Needs Rust 1.99 or newer (`rust-version` is declared in `Cargo.toml`).
 git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # gives you synco.exe / synco-tools.exe / synco-desktop.exe
-npx @tauri-apps/cli build    # gives you the NSIS installer target/release/bundle/nsis/Synco_0.3.1_x64-setup.exe
+npx @tauri-apps/cli build    # gives you the NSIS installer target/release/bundle/nsis/Synco_<version>-setup.exe (the version comes from Cargo.toml)
 ```
 
 Just want a look, no packaging:

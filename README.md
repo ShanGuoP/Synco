@@ -262,7 +262,7 @@ PNG ≈ 21 MB，历史堆不起。无损原件由三样拼回来：模型回来�
 git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # 得到 synco.exe / synco-tools.exe / synco-desktop.exe
-npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_0.3.1_x64-setup.exe
+npx @tauri-apps/cli build    # 得到 NSIS 安装包 target/release/bundle/nsis/Synco_<版本号>_x64-setup.exe（版本号读自 Cargo.toml）
 ```
 
 只想跑起来看看，不用打包：
