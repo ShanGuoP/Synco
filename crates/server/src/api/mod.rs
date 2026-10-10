@@ -66,6 +66,7 @@ pub fn router() -> Router<Shared> {
         .route("/api/results/{id}", get(results::result_get).delete(results::result_delete))
         .route("/api/results/{id}/interrupt", post(results::interrupt_post))
         .route("/api/results/{id}/fork", post(results::fork_post))
+        .route("/api/results/{id}/lossless", get(results::lossless_get))
         .route("/api/setup", get(setup::setup_get))
         .route("/api/setup/progress", get(setup::setup_progress))
         .route("/api/setup/root", post(setup::setup_root))

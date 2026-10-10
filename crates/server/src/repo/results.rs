@@ -126,6 +126,17 @@ pub fn set_files_done(ctx: &Ctx, id: i64, final_rel: &str, crop_rel: Option<&str
     Ok(n == 1)
 }
 
+/// 记下"这一行重算得出无损那一张"的三样：窗口原图、当时那份遮罩、参数快照。
+/// 只在行已落定之后写——落定失败时文件已经被清掉，指针留着就是指向空气。
+pub fn set_recompute(ctx: &Ctx, id: i64, raw_rel: &str, mask_snap_rel: Option<&str>, snap_json: &str) -> Result<()> {
+    repo::run(
+        ctx,
+        "UPDATE results SET raw_path=?, mask_snap_path=?, snap_json=? WHERE id=?",
+        &[repo::s(raw_rel), repo::si(mask_snap_rel), repo::s(snap_json), repo::i(id)],
+    )?;
+    Ok(())
+}
+
 /// 同 [`set_files_done`]：只在行还是 running 时才落定，返回这次是不是我落的定。
 pub fn set_done(ctx: &Ctx, id: i64, final_rel: &str, thumb_rel: Option<&str>) -> Result<bool> {
     let n = if thumb_rel.is_some() {
@@ -208,17 +219,19 @@ pub fn delete(ctx: &Ctx, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// 把这些行记着的五类 PNG 路径取出来。**只查不删**：调用方先删行、再按这份清单删文件。
+/// 一行名下的所有落盘文件列。`SELECT` 与读键共用这一份，删行、删图、删项目都从它取清单——
+/// 加了新列而某条删除路径忘了它，留下的是没人认领的文件，而且一句错都不报。
+const FILE_COLS: [&str; 7] = ["final_path", "crop_path", "maskoverlay_path", "thumb_path", "sketch_path", "raw_path", "mask_snap_path"];
+
+/// 把这些行记着的文件路径取出来。**只查不删**：调用方先删行、再按这份清单删文件。
 /// 顺序反过来的话一旦断在中途，库里就挂着指向空气的记录（卡片在、点开是空的）——
 /// 而这样最多多留几个没人认领的文件，盘上多一张照片不会骗人。
-fn paths_matching(ctx: &Ctx, where_sql: &str, arg: repo::SqlValue) -> Result<Vec<String>> {
+/// 窗口原图与遮罩快照也在内：它们是无损重算的原料，但跟着这一行一起消失才对。
+fn rows_paths(ctx: &Ctx, where_sql: &str, args: &[repo::SqlValue]) -> Result<Vec<String>> {
+    let select = FILE_COLS.join(", ");
     let mut out: Vec<String> = Vec::new();
-    for r in repo::all(
-        ctx,
-        &format!("SELECT final_path, crop_path, maskoverlay_path, thumb_path, sketch_path FROM results WHERE {where_sql}"),
-        &[arg],
-    )? {
-        for k in ["final_path", "crop_path", "maskoverlay_path", "thumb_path", "sketch_path"] {
+    for r in repo::all(ctx, &format!("SELECT {select} FROM results WHERE {where_sql}"), args)? {
+        for k in FILE_COLS {
             if let Some(rel) = r.get(k).and_then(|v| v.as_str()).filter(|x| !x.is_empty()) {
                 out.push(rel.to_string());
             }
@@ -227,14 +240,19 @@ fn paths_matching(ctx: &Ctx, where_sql: &str, arg: repo::SqlValue) -> Result<Vec
     Ok(out)
 }
 
-/// 一张图名下的五类产物路径
-pub fn paths_for_image(ctx: &Ctx, image_id: i64) -> Result<Vec<String>> {
-    paths_matching(ctx, "image_id=?", repo::i(image_id))
+/// 一条记录名下的文件清单（删那一行时用）
+pub fn paths_for_row(ctx: &Ctx, id: i64) -> Result<Vec<String>> {
+    rows_paths(ctx, "id=?", &[repo::i(id)])
 }
 
-/// 一个项目名下的五类产物路径
+/// 一张图名下的全部产物路径
+pub fn paths_for_image(ctx: &Ctx, image_id: i64) -> Result<Vec<String>> {
+    rows_paths(ctx, "image_id=?", &[repo::i(image_id)])
+}
+
+/// 一个项目名下的全部产物路径
 pub fn paths_for_project(ctx: &Ctx, project_id: i64) -> Result<Vec<String>> {
-    paths_matching(ctx, "project_id=?", repo::i(project_id))
+    rows_paths(ctx, "project_id=?", &[repo::i(project_id)])
 }
 
 pub fn delete_for_image(ctx: &Ctx, image_id: i64) -> Result<()> {

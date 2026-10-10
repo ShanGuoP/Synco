@@ -5,6 +5,7 @@ use crate::service::workflow as cfg;
 use crate::error::{AppError, Result};
 use crate::repo::{images as rimg, results as rres, settings as rset};
 use crate::service::backend;
+use crate::service::queue;
 use crate::state::Shared;
 use crate::util;
 use axum::body::Bytes;
@@ -191,7 +192,6 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
             out.push(serde_json::json!({ "id": id, "skipped": true, "reason": "srv.settings.noResultFile" }));
             continue;
         }
-        let final_src = final_src.unwrap();
         let iid = r.get("image_id").and_then(|v| v.as_i64()).unwrap_or(0);
         let name = rimg::name_and_size(&ctx, iid)?.map(|(n, _, _)| n).unwrap_or_else(|| "photo".to_string());
         let stem: String = {
@@ -201,13 +201,29 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
                 .collect();
             util::clip(&if cleaned.is_empty() { "photo".to_string() } else { cleaned }, 60)
         };
+        /* 导出要的是无损那一张：按这一行的快照把当年那次缝合重算一遍（同一批纯函数、同一份参数）。
+           重算不成才交成图那一档 q95，并把原因随这一条带回——批处理里一张降级不该让整批停下，
+           但也不能不给个说法：用户会以为手里那张 PNG 与屏幕上是同一回事 */
+        let row = crate::models::entity::ResultRow::from_value(&r);
+        let ctx2 = ctx.clone();
+        let got = match util::blocking(move || queue::lossless_bytes(&ctx2, &row)).await {
+            Ok(g) => g,
+            Err(e) => {
+                out.push(serde_json::json!({ "id": id, "skipped": true, "reason": e.text().chars().take(120).collect::<String>() }));
+                continue;
+            }
+        };
+        let ext = got.ext;
+        let bytes = got.bytes;
+        let lossless = got.lossless;
+        let why = got.why;
         /* 名字用 create_new 原子占，不再"先看存在不存在再复制"：两个导出请求同时看到没这个名字，
            就会都挑第一个，后落的那个把前一个覆盖掉。
-           挑名与复制都是同步磁盘活（一张成图 20–33MB，一次最多 500 张），整段过阻塞池 */
+           挑名与写盘都是同步磁盘活（一次最多 500 张），整段过阻塞池 */
         let copied = {
             let p = p.clone();
             util::blocking(move || -> Result<String> {
-                let mut file = format!("{stem}_#{id}.png");
+                let mut file = format!("{stem}_#{id}.{ext}");
                 let mut n = 2;
                 loop {
                     let cand = p.join(&file);
@@ -217,19 +233,19 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
                             if n >= 1000 {
                                 return Err(AppError::fail_args("srv.settings.nameTaken", json!({ "file": file, "n": n })));
                             }
-                            file = format!("{stem}_#{id}({n}).png");
+                            file = format!("{stem}_#{id}({n}).{ext}");
                             n += 1;
                         }
                         Err(e) => return Err(AppError::Fail(e.to_string())),
                     }
                 }
-                std::fs::copy(&final_src, &p.join(&file)).map_err(|e| AppError::Fail(e.to_string()))?;
+                std::fs::write(&p.join(&file), &bytes).map_err(|e| AppError::Fail(e.to_string()))?;
                 Ok(file)
             })
             .await
         };
         match copied {
-            Ok(file) => out.push(serde_json::json!({ "id": id, "file": file })),
+            Ok(file) => out.push(serde_json::json!({ "id": id, "file": file, "lossless": lossless, "why": why })),
             Err(e) => out.push(serde_json::json!({
                 "id": id, "skipped": true,
                 "reason": e.to_string().chars().take(120).collect::<String>()

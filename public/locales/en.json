@@ -1196,6 +1196,15 @@
       "copyFail": "Copy failed: {msg}",
       "respFail": "Could not build the response"
     },
+    "lossless": {
+      "noSnap": "This record has no snapshot to recompute from (an older build made it), so only the stored result is available",
+      "rawGone": "The window image the model returned is gone, so the lossless one cannot be recomputed",
+      "maskGone": "The mask snapshot from that submission can’t be read, so the lossless one cannot be recomputed",
+      "origGone": "The original photo is no longer on disk, so the lossless one cannot be recomputed",
+      "imageGone": "This image’s record is gone, so there is nothing to recompute from",
+      "rulesChanged": "The stitching rules changed version since this was made, so a recompute would no longer be the same image — only the stored one is offered",
+      "readFail": "Could not read the files needed to recompute: {msg}"
+    },
     "backend": {
       "noAnswer": "no answer",
       "versionOld": "Unknown (old build without a version endpoint)",
@@ -1358,6 +1367,8 @@
       "cropUnfit": "The crop box's size or ratio is past what the cloud allows (max long edge 3840, max ratio 3:1, 0.655M~8.29M pixels)",
       "byHand": "Interrupted by hand — this one's result is no longer used",
       "finalWrite": "Could not write the finished image: {msg}",
+      "rawWrite": "Could not write the window image: {msg}",
+      "msnapWrite": "Could not keep the mask this submission used: {msg}",
       "canvasPanic": "The canvas thread crashed: {msg}",
       "refReadPanic": "The reference-image read never finished: {msg}",
       "diskPanic": "The save-to-disk thread crashed: {msg}",

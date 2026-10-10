@@ -15,7 +15,7 @@ const http = require('http');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const RUST_BIN = path.join(ROOT, 'target', 'debug', 'synco.exe');
+const RUST_BIN = process.env.SYNCO_BIN || path.join(ROOT, 'target', 'debug', 'synco.exe');
 const W = 4000, H = 6000;                      // 就是你 data/ 里那个规格
 const INK = { cx: 2000, cy: 3000, r: 420 };    // 涂抹区（原图坐标）
 const SAFE_R = INK.r + 1400;                   // 裁切框 = 涂抹外扩 + 上下文留白，取样一律避开
@@ -144,10 +144,10 @@ function boot(dataDir) {
   });
 }
 
-async function req(base, method, p, body) {
+async function req(base, method, p, body, ms = 15000) {
   const r = await fetch(base + p, body === undefined
-    ? { method, signal: AbortSignal.timeout(15000) }
-    : { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+    ? { method, signal: AbortSignal.timeout(ms) }
+    : { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
   const ct = r.headers.get('content-type') || '';
   return { status: r.status, body: ct.includes('json') ? await r.json().catch(() => null) : Buffer.from(await r.arrayBuffer()) };
 }
@@ -246,8 +246,27 @@ async function main() {
   check('这一枪按 2048 档出图（edge 落到请求上）', stEdge[0] === 'done' && parseInt(String(sizes[sizes.length - 1])) > parseInt(String(baseSize)),
     `默认 ${baseSize} → edge=2048 ${sizes.join(',')}`);
   check('没带 edge 的请求仍按设置里的 stitch_edge', String(baseSize || '').startsWith('1024'), JSON.stringify(baseSize));
-  const finalBuf = (await req(srv.base, 'GET', done.final_url)).body;
+  /* 0.3.2 起盘上那一档成图是 q95（预览与对比用）：蒙版外逐位相同这条承诺落在**无损口**上，
+     所以这里取的是 /lossless（按这一行的快照重算），不是存着的那份。
+     存的确实降了档，另外两条断言把这件事钉住：final_url 是 .jpg、无损口回的是 PNG */
+  const tL = Date.now();
+  const ls = await req(srv.base, 'GET', `/api/results/${done.id}/lossless`, undefined, 90000);
+  const finalBuf = ls.body;
+  console.log(`  · 一次无损重算 ${Date.now() - tL} ms（${W}×${H}，跑的是 ${path.basename(path.dirname(RUST_BIN))} 档）`);
+  check('存盘的成图那档已降到 q95（历史堆不起 21MB 一张）', String(done.final_url || '').endsWith('.jpg'), String(done.final_url));
+  check('无损口回的是 PNG 原件（重算）', finalBuf[0] === 0x89 && finalBuf.subarray(1, 4).toString() === 'PNG', finalBuf.subarray(0, 4).toString('hex'));
   check('成图尺寸与原图一致', pngSize(finalBuf).w === W && pngSize(finalBuf).h === H, JSON.stringify(pngSize(finalBuf)));
+
+  /* 交付口也钉一条：导出必须给无损那一张（文件名 .png + lossless=true），
+     只有原图被手动删过的行才允许落到 .jpg 并附原因 */
+  const outDir = path.join(data, 'out');
+  fs.mkdirSync(outDir, { recursive: true });
+  await req(srv.base, 'POST', '/api/export/dir', { dir: outDir });
+  const exRun = (await req(srv.base, 'POST', '/api/export/run', { result_ids: [done.id] })).body;
+  const exFile = (exRun?.files || [])[0] || {};
+  const exHead = (() => { try { return fs.readFileSync(path.join(outDir, exFile.file)).subarray(0, 4).toString('hex'); } catch (e) { return String(e).slice(0, 40); } })();
+  check('导出交出去的是重算的无损 PNG', exFile.lossless === true && String(exFile.file).endsWith('.png') && exHead === '89504e47',
+    JSON.stringify({ file: exFile.file, lossless: exFile.lossless, why: exFile.why, head: exHead }));
 
   // 零漂移：两个 PNG 交给 System.Drawing 逐点比，取样全在涂抹与裁切留白之外
   const f1 = path.join(data, 'orig.png'), f2 = path.join(data, 'final.png');
@@ -285,8 +304,8 @@ async function main() {
   const invHit = mock.hits[mock.hits.length - 1];
   check('反向那次仍带遮罩（涂了就有保留区）', !!invHit && invHit.hasMask === true, JSON.stringify(invHit));
   if (stInv[0] === 'done') {
-    const inv = (await req(srv.base, 'GET', `/api/results/${ridInv}`)).body;
-    const invBuf = (await req(srv.base, 'GET', inv.final_url)).body;
+    // 同上：反向那一条也按无损口取样，盘上那档是 q95
+    const invBuf = (await req(srv.base, 'GET', `/api/results/${ridInv}/lossless`, undefined, 90000)).body;
     const f3 = path.join(data, 'invert.png');
     fs.writeFileSync(f3, invBuf);
     const psInv = [

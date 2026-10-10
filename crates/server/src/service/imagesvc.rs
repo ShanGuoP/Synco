@@ -20,6 +20,10 @@ pub const DEFAULT_PROXY_EDGE: usize = 3072;
 const THUMB_Q: u8 = 82;
 const PROXY_Q: u8 = 88;
 const TILE_Q: u8 = 88;
+/// 成图存盘的档位。这一份只当预览与对比用——无损那一张不再整张留盘（24MP 一张 PNG ≈ 21 MB），
+/// 导出、下载、另存都从"窗口原图 + 遮罩快照 + 参数快照"重算，见 `queue::lossless_bytes`。
+/// 所以这里的 95 是"看着与成图无差别"的选择，不是"作品保真"的选择。
+pub const FINAL_Q: u8 = 95;
 /// 长边不到两个瓦片就不切：省一次全图重编码，查看器对这种图直接用整图
 const TILE_MIN: usize = 1024;
 

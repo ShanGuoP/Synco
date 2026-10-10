@@ -14,7 +14,7 @@ const path = require('path');
 const zlib = require('zlib');
 
 const ROOT = path.join(__dirname, '..');
-const BIN = path.join(ROOT, 'target', 'debug', 'synco.exe');
+const BIN = process.env.SYNCO_BIN || path.join(ROOT, 'target', 'debug', 'synco.exe');
 const fails = [];
 const ok = (name, cond, detail) => {
   console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond ? '' : '：' + String(detail).slice(0, 300)}`);

@@ -122,7 +122,8 @@ export function createCompare({ onClose, onRestore, onFork, onUseSketch, copy })
         html: icon('copy', { cls: 'icon icon--sm' }) + `<span>${t('compare.fork')}</span>`, onclick: () => onFork(result) }) : null,
       dl(cropUrl, t('compare.crop')),
       dl(overlayUrl, t('compare.overlay')),
-      dl(resultUrl, t('compare.download')),
+      // 无损优先：走重算那道口。成图那一档现在是 q95，直链下去拿到的就不是原件了
+      dl(result?.id ? `/api/results/${result.id}/lossless` : resultUrl, t('compare.download')),
       el('button.btn.btn--primary.btn--sm', { type: 'button', html: icon('close', { cls: 'icon icon--sm' }) + `<span>${t('compare.back')}</span>`, onclick: () => hide() }),
     );
     node.classList.add('is-on');

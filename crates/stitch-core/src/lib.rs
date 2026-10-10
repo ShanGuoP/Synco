@@ -18,4 +18,4 @@ pub use geom::{fit_size, fit_size_from_setting, long_edge, Fit};
 pub use mask::{dilate, ink_bbox, paste_alpha};
 pub use pyramid::{pyramid_blend, pyramid_blend_boxed};
 pub use resize::{crop_scale_alpha, crop_scale_rgba, half_alpha, half_rgba, resize_alpha, resize_rgba};
-pub use stitch::{build_crop_payload, paste_weights, stitch_crop, stitch_crop_boxed, Build, CropPayload, StitchParams, DEFAULT_CONTEXT, DEFAULT_CROP_EDGE, DEFAULT_EXPAND, DEFAULT_FEATHER, DEFAULT_LEVELS};
+pub use stitch::{build_crop_payload, paste_weights, stitch_crop, stitch_crop_boxed, Build, CropPayload, StitchParams, DEFAULT_CONTEXT, DEFAULT_CROP_EDGE, DEFAULT_EXPAND, DEFAULT_FEATHER, DEFAULT_LEVELS, RULES_V};

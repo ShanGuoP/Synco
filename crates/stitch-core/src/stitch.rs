@@ -15,6 +15,11 @@ pub const DEFAULT_CONTEXT: f64 = 0.35;
 pub const DEFAULT_FEATHER: f64 = 48.0;
 pub const DEFAULT_LEVELS: usize = 4;
 
+/// 缝合的**规则版本**：`stitch_crop` 是纯函数，同样的入参在这段代码没改过的前提下逐位相同。
+/// 一旦改了取值条件（外扩/羽化/层数）、取整口径或金字塔的锚点约定，旧结果行"按当时那套参数重算"
+/// 就不再等于"当年那一张"——所以这个号要跟着 +1，落库的那份快照只在号相同的时候才允许重算无损。
+pub const RULES_V: u32 = 1;
+
 #[derive(Clone, Copy, Debug)]
 pub struct StitchParams {
     /// 蒙版外扩（原图 px）：模型重绘范围比涂抹大多少，接缝落在这里面

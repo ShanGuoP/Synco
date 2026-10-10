@@ -89,6 +89,11 @@ pub struct ResultRow {
     /// 提交那一刻的参数快照。云端队列按这一行的 `edge`/`invert` 出图，
     /// 而不是按跑到的那一刻的全局设置——设置改在两张中间不该让后一张变样。
     pub settings_json: Option<String>,
+    /// 无损重算的原料：模型回来的窗口原图、这一枪实际用的那份遮罩、当时的缝合与调整参数。
+    /// 缺任一件，这一行就只能给成图那一档（0.3.1 以前的行本来就存无损 PNG，不需要重算）
+    pub raw_path: Option<String>,
+    pub mask_snap_path: Option<String>,
+    pub snap_json: Option<String>,
 }
 
 impl ResultRow {
@@ -108,7 +113,18 @@ impl ResultRow {
             // 老行没这一列时按本机链路解释，历史云端结果才不会被拿步数/种子去说明
             backend: own(v.get("backend")).unwrap_or_else(|| "comfyui".into()),
             settings_json: v.get("settings_json").and_then(|x| x.as_str()).map(str::to_string),
+            raw_path: own(v.get("raw_path")),
+            mask_snap_path: own(v.get("mask_snap_path")),
+            snap_json: v.get("snap_json").and_then(|x| x.as_str()).map(str::to_string),
         }
+    }
+
+    /// 无损重算的参数快照；坏 JSON 与没存过都当 `Null`，调用方按"重算不成"处理
+    pub fn snap(&self) -> Value {
+        self.snap_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            .unwrap_or(Value::Null)
     }
 
     /// 这一行提交时的参数快照；坏 JSON 与没存过都当空对象

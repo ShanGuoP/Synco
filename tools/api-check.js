@@ -13,7 +13,7 @@ const path = require('path');
 const assert = require('assert');
 
 const ROOT = path.join(__dirname, '..');
-const BIN = path.join(ROOT, 'target', 'debug', 'synco.exe');
+const BIN = process.env.SYNCO_BIN || path.join(ROOT, 'target', 'debug', 'synco.exe');
 
 function tmpData() {
   const d = path.resolve(os.tmpdir(), `synco-check-${Date.now()}`);

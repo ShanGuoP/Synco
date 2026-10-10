@@ -900,7 +900,10 @@ async function exportCurrent() {
     busy.close();
     const one = r.files?.[0];
     if (!one || one.skipped) { toastErr(t('ed.exportFail'), one?.reason || t('ed.unknown')); return; }
-    toastOk(t('ed.exported'), `${r.dir}\\${one.file}`);
+    // 重算不成时交出去的是 q95 那一档（后缀也跟着变成 .jpg）——必须说出来，
+    // 不能让人以为手里那张与屏幕上看到的是同一份保真度
+    const note = one.lossless === false ? ` · ${dx(one.why || 'srv.lossless.noSnap')}` : '';
+    toastOk(t('ed.exported'), `${r.dir}\\${one.file}${note}`);
   } catch (e) {
     busy.close();
     const m = String(e.message || e);

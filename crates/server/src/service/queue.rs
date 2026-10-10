@@ -220,7 +220,7 @@ async fn run_inner(ctx: &Shared, row: &entity::ResultRow) -> Result<()> {
     .await?;
     let ctx2 = ctx.clone();
     let id = row.id;
-    tokio::task::spawn_blocking(move || compose(&ctx2, id, &img, pre, &bytes))
+    tokio::task::spawn_blocking(move || compose(&ctx2, id, &img, &pre, &bytes))
         .await
         .map_err(|e| AppError::fail_detail("srv.queue.stitchPanic", e))?
 }
@@ -242,6 +242,32 @@ struct Prepared {
     alpha: stitch_core::Alpha,
     crop_box: stitch_core::Box2,
     params: StitchParams,
+    /// 这一枪实际用的遮罩文件字节（原样，供重算时复制落盘）。没有遮罩时是空的
+    mask_png: Vec<u8>,
+    /// 重算无损所需的最小快照：缝合参数 + 几何与调整参数 + 规则版本
+    snap: Value,
+}
+
+/// 由"这一枪要用的那两张图"折出裁切载荷。`prepare`（提交）与 `lossless_bytes`（导出重算）
+/// 必须共用这一段——重算要逐位等于当年那一张，就不能另写一份几何。
+fn build_prepared(photo: stitch_core::Rgba, mask_alpha: stitch_core::Alpha, params: &StitchParams) -> Result<Prepared> {
+    match build_crop_payload(&photo, &mask_alpha, params) {
+        Build::Payload(p) => Ok(Prepared {
+            // 云端按 fit 后的档位收图，所以 size 由裁切区自己说了算
+            crop: codec::encode_png(&p.image),
+            mask: codec::encode_png(&p.mask),
+            no_mask: p.no_mask,
+            size: format!("{}x{}", p.image.w, p.image.h),
+            base: photo,
+            alpha: mask_alpha,
+            crop_box: p.crop,
+            params: *params,
+            mask_png: Vec::new(),
+            snap: Value::Null,
+        }),
+        Build::NoInk => Err(AppError::bad("srv.queue.noInk")),
+        Build::Unfit => Err(AppError::bad("srv.queue.cropUnfit")),
+    }
 }
 
 /// 读原图 + 蒙版，折出裁切区。全程在原图分辨率上做，浏览器只需要交出 proxy 分辨率的涂抹层。
@@ -263,39 +289,80 @@ fn prepare(ctx: &Shared, img: &Image, settings: &Value) -> Result<Prepared> {
     // 云端吃的也是"调整后"的那一张（拍板 4）
     let ops = crate::service::adjust::load_ops(ctx, img.id);
     let photo = crate::service::adjust::photo_with(ctx, img, &ops)?;
-    // 反向涂抹且没存过遮罩 = 一笔没保 = 整幅重绘，这时没有遮罩文件是合法输入；正向仍然要拦
-    let mask_alpha = match img.mask_path.as_deref().and_then(|m| util::data_file(&ctx.data, m)) {
+    // 反向涂抹且没存过遮罩 = 一笔没保 = 整幅重绘，这时没有遮罩文件是合法输入；正向仍然要拦。
+    // 遮罩文件的字节也原样留着：无损重算要的是"这一枪实际发出去的那份笔迹"，而提交之后遮罩
+    // 还能接着涂——事后按库里那条路径再读一次，拿到的就不是当年那一份了
+    let (mask_alpha, mask_png) = match img.mask_path.as_deref().and_then(|m| util::data_file(&ctx.data, m)) {
         Some(p) => {
-            let a = codec::decode(&std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.maskRead", e))?)?.alpha();
+            let bytes = std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.maskRead", e))?;
+            let a = codec::decode(&bytes)?.alpha();
             // 笔迹活在**源图域**（带着裁切/旋转时画笔是锁住的），而 photo 是几何段之后那张。
             // 不带着遮罩一起过这一段，下游那个 `k = 图宽 / 遮罩宽` 就把源图的比例硬套到转过的画幅上：
             // 0.3.0 实测转 90° 提交，发出去的裁切区还是横长的一格，重绘落在别处，而这一行照样落 done
-            photoedit_core::geometry::apply_alpha(&a, &ops.geometry)
+            (photoedit_core::geometry::apply_alpha(&a, &ops.geometry), bytes)
         }
         // 按**已解码的真实尺寸**开这张空笔迹缓冲：库里那对 w/h 是导入时客户端自报的（只夹到 3 万），
         // 跟着它开就是 30000×30000 = 900MB，dilate 再 clone 一份，ink_bbox 单线程扫 9 亿个点
-        None if params.invert => stitch_core::Alpha::new(photo.w, photo.h),
+        None if params.invert => (stitch_core::Alpha::new(photo.w, photo.h), Vec::new()),
         None => return Err(AppError::bad("srv.queue.noInk")),
     };
-    match build_crop_payload(&photo, &mask_alpha, &params) {
-        Build::Payload(p) => Ok(Prepared {
-            // 云端按 fit 后的档位收图，所以 size 由裁切区自己说了算
-            crop: codec::encode_png(&p.image),
-            mask: codec::encode_png(&p.mask),
-            no_mask: p.no_mask,
-            size: format!("{}x{}", p.image.w, p.image.h),
-            base: photo,
-            alpha: mask_alpha,
-            crop_box: p.crop,
-            params,
-        }),
-        Build::NoInk => Err(AppError::bad("srv.queue.noInk")),
-        Build::Unfit => Err(AppError::bad("srv.queue.cropUnfit")),
-    }
+    let mut pre = build_prepared(photo, mask_alpha, &params)?;
+    pre.mask_png = mask_png;
+    // `expand`/`feather`/`crop_edge` 是全局设置里的缝合参数：改在两张中间，后一张就跟着变，
+    // 而重算无损要的是"这一枪当时那一套"，所以连它们一起进快照，不事后从设置里读
+    pre.snap = stitch_snapshot(&params, &ops);
+    Ok(pre)
 }
 
-/// 云端回来的图贴回原图并落盘：一次写完成图 + 320 缩略图，前端不用再回传任何东西
-fn compose(ctx: &Shared, id: i64, img: &Image, pre: Prepared, bytes: &[u8]) -> Result<()> {
+/// 无损重算的全部前提：缝合参数、几何与调整参数、缝合代码的规则版本。
+/// 规则版本对不上就不许重算——那段代码改过取值条件之后，"重算"出来的已经不是当年那一张。
+fn stitch_snapshot(params: &StitchParams, ops: &photoedit_core::EditOps) -> Value {
+    serde_json::json!({
+        "v": 1,
+        "rules": stitch_core::RULES_V,
+        "stitch": {
+            "expand": params.expand, "context": params.context, "crop_edge": params.crop_edge,
+            "feather": params.feather, "levels": params.levels, "invert": params.invert,
+        },
+        "ops": serde_json::from_str::<Value>(&ops.to_json()).unwrap_or(Value::Null),
+    })
+}
+
+/// 把这一枪的前提按快照原样摆回来。少一个字段就当不能重算，不猜默认值——
+/// 猜出来的那一张看着也正常，其实与用户当年看到的那张不是同一个东西
+fn prepared_from_snapshot(ctx: &Shared, img: &Image, snap: &Value, mask_png: Option<&[u8]>) -> Result<Prepared> {
+    let sp = snap.get("stitch").and_then(Value::as_object).ok_or_else(|| AppError::bad("srv.lossless.noSnap"))?;
+    let num = |k: &str| sp.get(k).and_then(Value::as_f64).ok_or_else(|| AppError::bad("srv.lossless.noSnap"));
+    let params = StitchParams {
+        expand: num("expand")?,
+        context: num("context")?,
+        crop_edge: num("crop_edge")? as u32,
+        feather: num("feather")?,
+        levels: num("levels")? as usize,
+        invert: sp.get("invert").and_then(Value::as_bool).unwrap_or(false),
+    };
+    let ops: photoedit_core::EditOps = serde_json::from_value(snap.get("ops").cloned().unwrap_or(Value::Null))
+        .map_err(|_| AppError::bad("srv.lossless.noSnap"))?;
+    let photo = crate::service::adjust::photo_with(ctx, img, &ops)?;
+    // 与 prepare 同一套分岔：反向涂抹且一笔没保 = 没有遮罩文件也是合法输入
+    let mask_alpha = match mask_png {
+        Some(b) => photoedit_core::geometry::apply_alpha(&codec::decode(b)?.alpha(), &ops.geometry),
+        None if params.invert => stitch_core::Alpha::new(photo.w, photo.h),
+        None => return Err(AppError::bad("srv.lossless.noSnap")),
+    };
+    build_prepared(photo, mask_alpha, &params)
+}
+
+/// 云端回来的图贴回原图并落盘：成图 + 320 缩略 + **重算无损用的那两份**。
+///
+/// 无损那一张不再整张存盘（24MP 一张 PNG ≈ 21 MB，他库里 37 张就 785 MB）：留下的是模型回来的
+/// 那串字节**原样**（窗口大小、未经二次编码，实测均值 1.7 MB）与这一枪实际用的那份遮罩，
+/// 再加上参数快照 `pre.snap`。导出、下载、另存都从这三样重算，见 `lossless_bytes`。
+/// 少任何一件就给不出无损——那时候界面必须说清给的是哪一档，不许默默降质。
+///
+/// 只有"裁切—缝合"这条路降档：画布与整图重绘那两条回来的就是全图、也没有可重算的几何，
+/// 它们继续存 PNG（本来就是唯一那一份，不是副本）。
+fn compose(ctx: &Shared, id: i64, img: &Image, pre: &Prepared, bytes: &[u8]) -> Result<()> {
     if ctx.job_cancelled(id) {
         return Err(AppError::fail("srv.queue.byHand"));
     }
@@ -303,18 +370,94 @@ fn compose(ctx: &Shared, id: i64, img: &Image, pre: Prepared, bytes: &[u8]) -> R
     let final_img = stitch_crop(&pre.base, &pre.alpha, pre.crop_box, &model, &pre.params);
     let dir = ctx.data.join("projects").join(img.project_id.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| AppError::fail_detail("srv.common.mkdirFail", e))?;
-    let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), format!("r{id}_{}_final.png", util::now_ms())]);
-    std::fs::write(ctx.data.join(&rel), codec::encode_png(&final_img)).map_err(|e| AppError::fail_detail("srv.queue.finalWrite", e))?;
+    let ts = util::now_ms();
+    let rel = |kind: &str, ext: &str| util::rel_path(&["projects".into(), img.project_id.to_string(), format!("r{id}_{ts}_{kind}.{ext}")]);
+    let fin = rel("final", "jpg");
+    std::fs::write(ctx.data.join(&fin), codec::encode_jpeg(&final_img, imagesvc::FINAL_Q)).map_err(|e| AppError::fail_detail("srv.queue.finalWrite", e))?;
+    // 这两份必须是原样字节：重编码一次就把"当年那一张"换成"这一次的又一张"
+    let raw = rel("raw", "png");
+    std::fs::write(ctx.data.join(&raw), bytes).map_err(|e| AppError::fail_detail("srv.queue.rawWrite", e))?;
+    let msnap = if pre.mask_png.is_empty() {
+        None
+    } else {
+        let p = rel("msnap", "png");
+        std::fs::write(ctx.data.join(&p), &pre.mask_png).map_err(|e| AppError::fail_detail("srv.queue.msnapWrite", e))?;
+        Some(p)
+    };
     // 缩略图失败不影响这一张成图：历史列回落到 final_url 就行
-    let thumb = imagesvc::result_thumb(ctx, id, img.project_id, &rel);
-    if !rres::set_done(ctx, id, &rel, thumb.as_deref())? {
-        // 这几秒里那一行被中断或删掉了：成图与缩略档都不该留在盘上指着空气
-        let _ = std::fs::remove_file(ctx.data.join(&rel));
-        if let Some(t) = thumb.as_deref() {
-            let _ = std::fs::remove_file(ctx.data.join(t));
+    let thumb = imagesvc::result_thumb(ctx, id, img.project_id, &fin);
+    if !rres::set_done(ctx, id, &fin, thumb.as_deref())? {
+        // 这几秒里那一行被中断或删掉了：刚落盘的四份都不该留在盘上指着空气
+        for p in [&fin, &raw].into_iter().chain(msnap.iter()).chain(thumb.iter()) {
+            let _ = std::fs::remove_file(ctx.data.join(p));
+        }
+        return Ok(());
+    }
+    // 落定之后才写快照：那一行还不是 done 的时候，指针指向空气比缺快照更难查
+    rres::set_recompute(ctx, id, &raw, msnap.as_deref(), &pre.snap.to_string())?;
+    Ok(())
+}
+
+/// 交出去的那一张成图：字节、扩展名，以及**它是不是无损的**。
+/// 三条出口，调用方必须让用户知道自己拿到的是哪一条：
+/// - 重算（`lossless = true`）：按快照把当年那一次缝合重跑一遍——同样的入参、同一段纯函数，逐位相同；
+/// - 原件（`lossless = true`）：改造以前的行本来就存着无损 PNG，直接给那一份；
+/// - 次档（`lossless = false`，带 `why`）：重算的前提缺了一件半件（原图被手动删过、窗口原图没留、
+///   缝合代码改过规则），只能给成图那一档 q95。默默降质是最坏的结局：用户会以为手里那张就是原件。
+pub struct OutImage {
+    pub bytes: Vec<u8>,
+    pub ext: &'static str,
+    pub lossless: bool,
+    pub why: Option<&'static str>,
+}
+
+/// 取这一行的无损成图。成图那一档现在存的是 q95（24MP 一张 PNG ≈ 21 MB，历史堆不起），
+/// 原件由「窗口原图 + 当时那份遮罩 + 参数快照」重算出来——所以前提一旦不在，就必须说清给的是次档。
+pub fn lossless_bytes(ctx: &Shared, row: &entity::ResultRow) -> Result<OutImage> {
+    /// 次档：把成图文件本身交出去，附上"为什么给不出无损"
+    fn degraded(ctx: &Shared, row: &entity::ResultRow, why: &'static str) -> Result<OutImage> {
+        let p = row.final_path.as_deref().and_then(|x| util::data_file(&ctx.data, x)).filter(|p| p.is_file());
+        match p {
+            Some(p) => Ok(OutImage { bytes: std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.lossless.readFail", e))?, ext: "jpg", lossless: false, why: Some(why) }),
+            // 连次档都没有：这一行本来就没成图，上层按"没有可导出的成图"处理
+            None => Err(AppError::bad("srv.submit.noCopyable")),
         }
     }
-    Ok(())
+    // 老行没有 raw_path：它那份 final 就是无损原件，不用重算也不许重算
+    let snap = row.snap();
+    if row.raw_path.is_none() || snap.is_null() {
+        return match row.final_path.as_deref().and_then(|p| util::data_file(&ctx.data, p)) {
+            Some(p) if p.extension().map(|e| e.to_ascii_lowercase()) == Some("png".into()) => {
+                Ok(OutImage { bytes: std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.lossless.readFail", e))?, ext: "png", lossless: true, why: None })
+            }
+            _ => degraded(ctx, row, "srv.lossless.noSnap"),
+        };
+    }
+    if snap.get("rules").and_then(Value::as_u64).unwrap_or(0) as u32 != stitch_core::RULES_V {
+        return degraded(ctx, row, "srv.lossless.rulesChanged");
+    }
+    let raw = match row.raw_path.as_deref().and_then(|p| util::data_file(&ctx.data, p)).filter(|p| p.is_file()) {
+        Some(p) => p,
+        None => return degraded(ctx, row, "srv.lossless.rawGone"),
+    };
+    let img = match rimg::by_id(ctx, row.image_id)? {
+        Some(i) => i,
+        None => return degraded(ctx, row, "srv.lossless.imageGone"),
+    };
+    if !util::file_alive(&ctx.data, &Value::String(img.orig_path.clone())) {
+        return degraded(ctx, row, "srv.lossless.origGone");
+    }
+    let mask = row.mask_snap_path.as_deref().and_then(|p| util::data_file(&ctx.data, p)).filter(|p| p.is_file());
+    let mask_png = match mask.as_ref().map(|p| std::fs::read(p)) {
+        Some(Ok(b)) => Some(b),
+        Some(_) => return degraded(ctx, row, "srv.lossless.maskGone"),
+        None => None,
+    };
+    let pre = prepared_from_snapshot(ctx, &img, &snap, mask_png.as_deref())
+        .map_err(|_| AppError::bad("srv.lossless.noSnap"))?;
+    let model = codec::decode(&std::fs::read(&raw).map_err(|e| AppError::fail_detail("srv.lossless.readFail", e))?)?;
+    let out = stitch_crop(&pre.base, &pre.alpha, pre.crop_box, &model, &pre.params);
+    Ok(OutImage { bytes: codec::encode_png(&out), ext: "png", lossless: true, why: None })
 }
 
 /// 画布的一次生成：画稿拍到白底当输入图，**不带遮罩**，回来的图直接是成图。
@@ -500,6 +643,84 @@ fn compose_whole(ctx: &Shared, id: i64, img: &Image, bytes: &[u8], prefix: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 导出重算出来的那一张，必须与当年落盘那一张**逐位相同**——不然"无损导出"是句空话：
+    /// 用户拿到一张看着一样、像素不一样的图，而文件名后缀还写着 .png。
+    /// 顺手钉住另外两条：成图落盘改 q95 后原件靠 raw + 遮罩快照 + 参数快照三样拼回来；
+    /// 遮罩在提交之后被人改过笔迹，也不得把重算的那一张带跑。
+    #[test]
+    fn 重算无损与当时那一张逐位相同() {
+        let dir = std::env::temp_dir().join(format!("synco-lossless-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::state::Ctx::new(dir.clone(), dir.clone(), crate::repo::db::open(&dir).unwrap());
+        let pid = crate::repo::projects::create(&ctx, "无损").unwrap();
+        let proj = dir.join("projects").join(pid.to_string());
+        std::fs::create_dir_all(&proj).unwrap();
+        let mut orig = stitch_core::Rgba::new(400, 300);
+        for y in 0..300usize {
+            for x in 0..400usize {
+                let o = (y * 400 + x) * 4;
+                orig.px[o] = x as u8;
+                orig.px[o + 1] = y as u8;
+                orig.px[o + 2] = 128;
+                orig.px[o + 3] = 255;
+            }
+        }
+        std::fs::write(proj.join("a.png"), codec::encode_png(&orig)).unwrap();
+        let mut mask = stitch_core::Rgba::new(400, 300);
+        for y in 100..180usize {
+            for x in 120..260usize {
+                mask.px[(y * 400 + x) * 4 + 3] = 255;
+            }
+        }
+        std::fs::write(proj.join("a_mask.png"), codec::encode_png(&mask)).unwrap();
+        let iid = crate::repo::images::insert(&ctx, pid, "a.png", &format!("projects/{pid}/a.png"), 400, 300).unwrap();
+        crate::repo::images::set_mask(&ctx, iid, Some(&format!("projects/{pid}/a_mask.png"))).unwrap();
+        let img = rimg::by_id(&ctx, iid).unwrap().unwrap();
+        let settings = serde_json::json!({ "edge": 512, "invert": false });
+        let pre = prepare(&ctx, &img, &settings).unwrap();
+        // 模型回来的那张：拿发出去的裁切图反一次色，字节确定
+        let mut model = codec::decode(&pre.crop).unwrap();
+        for p in model.px.chunks_exact_mut(4) {
+            let (a, b, c) = (p[0], p[1], p[2]);
+            p[0] = 255 - a;
+            p[1] = 255 - b;
+            p[2] = 255 - c;
+        }
+        let model_png = codec::encode_png(&model);
+        let want = codec::encode_png(&stitch_crop(&pre.base, &pre.alpha, pre.crop_box, &model, &pre.params));
+        let rid = rres::insert_cloud(&ctx, iid, pid, "p", &settings.to_string(), "m", None).unwrap();
+        compose(&ctx, rid, &img, &pre, &model_png).unwrap();
+        let row = rres::by_id(&ctx, rid).unwrap().unwrap();
+        assert!(row.raw_path.as_deref().unwrap_or("").ends_with("_raw.png"), "窗口原图没落盘");
+        assert!(row.mask_snap_path.is_some(), "遮罩快照没落盘");
+        assert!(row.final_path.as_deref().unwrap_or("").ends_with(".jpg"), "成图那一份该是 q95");
+        let got = lossless_bytes(&ctx, &row).unwrap();
+        assert!(got.lossless, "重算这一条该报无损：{}", got.why.unwrap_or(""));
+        assert_eq!(got.ext, "png");
+        assert_eq!(got.bytes, want, "重算的那一张与当时落盘的逐位不同");
+
+        // 提交之后又涂了一笔：重算必须还按当时那份快照走
+        let mut later = mask.clone();
+        for y in 0..40usize {
+            for x in 0..40usize {
+                later.px[(y * 400 + x) * 4 + 3] = 255;
+            }
+        }
+        std::fs::write(proj.join("a_mask.png"), codec::encode_png(&later)).unwrap();
+        let again = lossless_bytes(&ctx, &row).unwrap();
+        assert_eq!(again.bytes, want, "遮罩漂移把重算的那一张带跑了");
+
+        // 原图被手动删过：给不出无损，必须明说为什么，并把 q95 那一份照交
+        std::fs::remove_file(proj.join("a.png")).unwrap();
+        let deg = lossless_bytes(&ctx, &row).unwrap();
+        assert!(!deg.lossless);
+        assert_eq!(deg.ext, "jpg");
+        assert_eq!(deg.why, Some("srv.lossless.origGone"));
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// 并发从 3 下调到 1 时若还有 3 张在飞：增量式调整一个许可也削不掉，
     /// 等它们跑完 available 会回到 3（设置写串行、实际同发 3 张），再往上调还能冲破上限。

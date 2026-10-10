@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_results_project ON results(project_id);
 /// 旧库补列：前五条是历史库里已有的列，中间三条是 M3 图像服务化要读的派生档，
 /// 再后面分别是提示词短语分桶、画稿/照片分桶，和这一批的**派生谱系 + 画稿快照**。
 /// 逐条按"列在不在"判重，所以老库直接升上来就行，不需要重建。
-const MIGRATIONS: [(&str, &str, &str); 14] = [
+const MIGRATIONS: [(&str, &str, &str); 17] = [
     ("results", "prompt_id", "ALTER TABLE results ADD COLUMN prompt_id TEXT"),
     ("results", "settings_json", "ALTER TABLE results ADD COLUMN settings_json TEXT"),
     ("results", "rerun_of", "ALTER TABLE results ADD COLUMN rerun_of INTEGER"),
@@ -71,6 +71,12 @@ const MIGRATIONS: [(&str, &str, &str); 14] = [
     // 报错不再把某一语言的句子焊进库：error 存钥匙、这一列存参数，界面按当前语言查字典。
     // 老行的 error 本身就是一句话，查不到钥匙就原样显示，所以不需要回填。
     ("results", "error_args", "ALTER TABLE results ADD COLUMN error_args TEXT"),
+    // 无损成图不再整张存盘（24MP 一张 PNG ≈ 21 MB）。这三样是"能把那一张重算出来"的最小集：
+    // 模型回来的窗口原图（未经任何二次编码）、这一行提交那一刻的遮罩、当时那套缝合与调整参数
+    // （里面带着 `stitch_core::RULES_V`）。缺任一件就重算不出——那一行就保住它现有的那一份。
+    ("results", "raw_path", "ALTER TABLE results ADD COLUMN raw_path TEXT"),
+    ("results", "mask_snap_path", "ALTER TABLE results ADD COLUMN mask_snap_path TEXT"),
+    ("results", "snap_json", "ALTER TABLE results ADD COLUMN snap_json TEXT"),
 ];
 
 fn has_column(db: &Connection, table: &str, col: &str) -> rusqlite::Result<bool> {

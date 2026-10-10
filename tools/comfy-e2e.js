@@ -12,7 +12,7 @@ const http = require('http');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const BIN = path.join(ROOT, 'target', 'debug', 'synco.exe');
+const BIN = process.env.SYNCO_BIN || path.join(ROOT, 'target', 'debug', 'synco.exe');
 const PNG1 = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64'

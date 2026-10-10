@@ -183,8 +183,14 @@ Liquify: pick a brush, then "Start shaping"; every stroke is recorded in the par
 another image in the project carrying those parameters, while the source keeps its own.
 
 **Export**: set a local folder under Settings → Export folder (it's created if missing), then press "Export" in the
-retouch page's top bar — the current result is copied there as `<origname_#result>` (`.png`), with `(2)(3)` appended
-on a name clash. The compare view has direct links for "Download result / crop / mask overlay".
+retouch page's top bar — the current result is handed over as `<origname_#result>.png`, with `(2)(3)` appended
+on a name clash. The compare view has direct links for "Download result / crop / mask overlay"; the first of those
+is lossless too. What you get was **recomputed from that submission's own parameters**: the result kept on disk is
+q95 — a lossless PNG of a 24MP frame is ≈21 MB and history can't afford that. The original is rebuilt from three
+things: the window image the model returned (byte-for-byte, 1–3 MB in practice), the mask that submission used,
+and its stitching plus retouch parameters. If any of them is missing (usually the original photo was deleted by
+hand), the exported name keeps a `.jpg` and the message says why lossless wasn't possible — a second-tier file is
+never handed over as the original.
 
 ---
 
@@ -198,6 +204,10 @@ Settings → Data folder can point anywhere, and there's "Copy the data to a new
 Inside it: `app.db` is the database, `projects/<id>/` holds originals, masks, results and every thumbnail level,
 and `runtime/` holds the lock and logs (everything process-private is kept in there, not spread across the root) —
 **to back up, take the whole folder**; only `runtime/` can be left out.
+The stored result is the q95 preview (`r#_…_final.jpg`), with two small files beside it: `_raw.png` (the window
+image the model returned) and `_msnap.png` (the mask that submission used). They're the ingredients for
+recomputing the lossless one, not another copy of the result — deleting a record, an image or a project takes
+them along, so nothing unclaimed is left behind.
 
 **Don't sync it to cloud storage.** The database holds your cloud API key in plaintext, and on-demand fetching /
 placeholder files from cloud drives corrupt SQLite's WAL. To move machines, use "Copy the data to a new folder"
@@ -239,6 +249,14 @@ preview or mask preview, leave those two optional roles empty and keep only "Sav
 **I mask very finely — does the output come out soft?**
 No. You paint on the scaled level, but the mask written to disk is restored to original resolution before repainting
 and stitching.
+
+**Why did my export come out as `.jpg`?**
+That record is missing one of the prerequisites for a lossless recompute: the original photo was deleted by hand,
+or the window image / mask snapshot is gone, or the stitching rules have since moved to a new version (after such a
+change a recompute would no longer be the image you saw, so we'd rather not). The message names which one. The
+result on disk is a q95 preview anyway, so **export early** — while the window image and mask snapshot are there,
+the lossless one is always recoverable. A 24MP recompute measured about 0.5 s (release build; `cloud-e2e` prints
+the number), so waiting for the lossless one is not waiting on a batch job.
 
 **How many can I drop at once?**
 No hard cap; imports upload themselves in batches. For originals in the tens of MB, compress first.
