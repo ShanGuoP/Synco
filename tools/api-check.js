@@ -105,7 +105,7 @@ const SWEEP = [
     r => (r.status === 200 ? (r.body?.ops?.color?.exposure === 0 ? '' : '字段类型不对却没退默认') : '')],
   ['LUT 名字带穿越被拒', 'POST', '/api/images/1/adjust', { ops: { lut: { name: '../../app', strength: 50 } } }, [400]],
   ['预览带 inline 参数（不落库）', 'POST', '/api/images/1/adjust/preview', { ops: { color: { temp: 40 } } }, [200],
-    r => (/_adjprev[0-9a-f]{8}\.jpg$/.test(r.body?.preview_url || '') && r.body?.w > 0 ? '' : `预览形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
+    r => (/\/cache\/s\/\d+\/adjprev[0-9a-f]{8}\.jpg$/.test(r.body?.preview_url || '') && r.body?.w > 0 ? '' : `预览形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
   /* 上一条把整条参数链换成了全默认（保存就是整体替换，这是契约的一部分），
      所以这里要重新存一组真参数再落盘——不然测到的是"没参数时拒绝落盘"那条守卫。 */
   ['再存一组真参数（整体替换）', 'POST', '/api/images/1/adjust', { ops: { color: { exposure: 30, clarity: 20 } } }, [200],
@@ -113,7 +113,7 @@ const SWEEP = [
   ['调整视图的瓦片清单（放大要看真像素）', 'GET', '/api/images/1/adjust/tiles', undefined, [200],
     r => (String(r.body?.url || '').startsWith('/') && r.body?.w > 0 && r.body?.h > 0 && Array.isArray(r.body?.levels) ? '' : `瓦片形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
   ['成图落盘并回报真实宽高', 'POST', '/api/images/1/adjust/render', {}, [200],
-    r => (/_adjusted[0-9a-f]{8}\.jpg$/.test(r.body?.url || '') && r.body?.w > 0 ? '' : `成图形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
+    r => (/\/cache\/s\/\d+\/adjusted[0-9a-f]{8}\.jpg$/.test(r.body?.url || '') && r.body?.w > 0 ? '' : `成图形状不对：${JSON.stringify(r.body).slice(0, 140)}`)],
   ['另存为新图挂着父子关系', 'POST', '/api/images/1/adjust/fork', {}, [200],
     r => (r.body?.image_id > 0 && r.body?.derived_from === 1 ? '' : `没挂上父子：${JSON.stringify(r.body).slice(0, 120)}`)],
   ['新图参数起始为空', 'GET', '/api/images/2/adjust', undefined, [200],
@@ -277,6 +277,27 @@ async function m3SelfCheck(base, dataDir) {
   ok('档位越界被夹回下限', edge2.body.proxy_edge === 1024, JSON.stringify(edge2.body));
   const st = await req(base, 'GET', '/api/settings');
   ok('设置接口回显当前档位', st.body.proxy_edge === 1024, JSON.stringify(st.body).slice(0, 160));
+
+  /* ---- 可再生档那一层：清理只准碰 runtime/cache，projects/ 一个字节都不动。
+     这条界越过去就是数据事故（丢的是回不来的那一份），所以逐张验"清完还在"。 ---- */
+  const c0 = await req(base, 'GET', '/api/cache');
+  ok('缓存体检回占用与上限', c0.status === 200 && typeof c0.body?.bytes === 'number' && typeof c0.body?.cap_mb === 'number', JSON.stringify(c0.body));
+  const cClamp = await req(base, 'POST', '/api/cache/cap', { mb: 999999 });
+  ok('缓存上限越界被夹住', cClamp.body?.cap_mb === 65536, JSON.stringify(cClamp.body));
+  const cZero = await req(base, 'POST', '/api/cache/cap', { mb: 0 });
+  ok('上限 0 = 不限并回显', cZero.body?.cap_mb === 0, JSON.stringify(cZero.body));
+  const cleared = await req(base, 'POST', '/api/cache/clear', {});
+  ok('清一次报出删了几处与多少字节', cleared.status === 200 && typeof cleared.body?.removed === 'number' && typeof cleared.body?.bytes === 'number', JSON.stringify(cleared.body));
+  const afterClear = await req(base, 'GET', '/api/cache');
+  ok('清完占用归零', afterClear.body?.bytes === 0, JSON.stringify(afterClear.body));
+  for (const [label, u] of [['原图', img.orig_url], ['320 档', img.thumb_url], ['蒙版', img.mask_url]]) {
+    const r = u ? await req(base, 'GET', u) : { status: 0 };
+    ok(`清理没碰${label}（projects/ 里那张还在）`, r.status === 200, `${r.status} ${u || '（没有这条 URL）'}`);
+  }
+  const tiles3 = await req(base, 'GET', `/api/images/${iid}/tiles`);
+  ok('瓦片被清掉后现切回来（清单与清之前同一个数）', tiles3.status === 200 && JSON.stringify(tiles3.body) === JSON.stringify(tiles.body), JSON.stringify(tiles3.body).slice(0, 160));
+  const cBack = await req(base, 'POST', '/api/cache/cap', { mb: 4096 });
+  ok('上限改回默认 4096', cBack.body?.cap_mb === 4096, JSON.stringify(cBack.body));
 
   /* ---- 界面语言：库里那份是唯一真相（跟着 app_settings 走，重装不丢），坏值夹回 zh 并回显 ---- */
   const langEn = await req(base, 'POST', '/api/settings/lang', { lang: 'en' });

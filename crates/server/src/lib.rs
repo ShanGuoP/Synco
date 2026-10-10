@@ -182,6 +182,31 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     imagesvc::spawn_backfill(&ctx);
     // 在飞行的状态由服务端推进（前端只读），关页面不该让已经出图的那张永远挂着
     service::reclaim::spawn_advancer(&ctx);
+    // 缓存层这两笔后台活：先收旧家的孤儿（派生档这一版挪进了 `runtime/cache/`，`projects/` 里那份
+    // 不会再被读到），再按上限压缓存层。被库里的行指着的那些都不在名单上，见 imagesvc 那两条注释。
+    {
+        let c = ctx.clone();
+        tokio::spawn(async move {
+            let job = tokio::task::spawn_blocking(move || {
+                let legacy = imagesvc::sweep_legacy_view_files(&c);
+                let cap = imagesvc::cache_cap(&c);
+                (legacy, if cap == 0 { (0, 0) } else { imagesvc::cache_sweep(&c, cap) })
+            })
+            .await;
+            match job {
+                Ok(((ln, lb), (sn, sb))) => {
+                    // MB 带一位小数：整除会把"收了 800 字节"报成 0 MB，看着像没干活
+                    if ln > 0 {
+                        println!("  收掉旧位置的派生档 {ln} 处（{:.1} MB）：新家会现切现渲，不丢像素", lb as f64 / 1048576.0);
+                    }
+                    if sn > 0 {
+                        println!("  可再生档超了上限，丢掉最久没重切的 {sn} 处（{:.1} MB）", sb as f64 / 1048576.0);
+                    }
+                }
+                Err(e) => eprintln!("  缓存清理没跑完：{e}"),
+            }
+        });
+    }
 
     let server = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {

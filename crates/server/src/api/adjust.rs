@@ -111,7 +111,7 @@ pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, r
     Ok(ok(out))
 }
 
-/// 成图：原分辨率落 `_adjusted<指纹>.jpg`（immutable）。同步返回，实测超 3 秒再考虑挪进任务队列。
+/// 成图：原分辨率落 `runtime/cache/s/<图号>/adjusted<指纹>.jpg`（immutable）。同步返回，实测超 3 秒再考虑挪进任务队列。
 pub async fn render_post(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
     let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };

@@ -237,7 +237,8 @@ fn copy_data_to(to: String, state: State<'_, Shell>, ctx: State<'_, synco_server
     Ok(serde_json::json!({ "dir": next.info(ctx.inner()), "copied": { "files": files, "bytes": bytes } }))
 }
 
-/// 逐条复制：跳过 runtime/（锁与日志）这类进程私有的东西，任何一步失败把错误原文带出去
+/// 逐条复制：跳过 runtime/（锁、日志与可再生档那一层）这类进程私有的东西，任何一步失败把错误原文带出去。
+/// 缓存不跟着走是对的：新目录里第一次看那张图会现切，而锁与旧日志跟着拷就是把别的实例的状态搬过去。
 fn copy_tree(from: &Path, to: &Path) -> std::result::Result<(usize, u64), String> {
     let mut n = (0usize, 0u64);
     for e in fs::read_dir(from).map_err(|e| why("srv.shell.dirReadFail", serde_json::json!({ "path": from.display().to_string(), "msg": e.to_string() })))? {

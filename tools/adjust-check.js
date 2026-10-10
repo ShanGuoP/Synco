@@ -1,8 +1,8 @@
 // 0.3「本地调整」端到端：起一个隔离实例（临时 DATA + 随机端口），导一张真的图进去，
 // 把七个动作逐个跑一遍并断言产物：存参数 / 预览 / 成图 / 另存为新图 / 提交输入 / 删图清理。
 //
-// 为什么非要自己起实例：这条链会往磁盘写派生档，跑在你正在用的那个 DATA 上
-// 就会在你的项目目录里留下真的 _adjprev/_adjusted 文件。
+// 为什么非要自己起实例：这条链会往磁盘写派生档（缓存层 `runtime/cache/`，加上提交记录那一张
+// 落在项目目录），跑在你正在用的那个 DATA 上就会把它的缓存搅进测试的缓存。
 //
 //   node tools/adjust-check.js            # 跑完删掉临时 DATA
 //   node tools/adjust-check.js --keep     # 留着临时 DATA 便于复查产物
@@ -166,7 +166,7 @@ async function main() {
     await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { color: { exposure: 60, clarity: 30 } } });
     const p1 = await req(base, 'POST', `/api/images/${imgId}/adjust/preview`, {});
     const prevRel = (p1.body?.preview_url || '').replace('/file/', '');
-    ok('预览返回 URL 与宽高', p1.status === 200 && prevRel.includes('_adjprev') && p1.body.w === dims.w, JSON.stringify(p1.body).slice(0, 200));
+    ok('预览返回 URL 与宽高', p1.status === 200 && /\/cache\/s\/\d+\/adjprev[0-9a-f]{8}\.jpg$/.test(prevRel) && p1.body.w === dims.w, JSON.stringify(p1.body).slice(0, 200));
     const prevFile = path.join(data, prevRel);
     ok('预览档真的在盘上', fs.existsSync(prevFile), prevFile);
     // 分开验两件事：接口报的是**成图**尺寸，盘上那张确实还是 proxy 分辨率。
@@ -189,7 +189,7 @@ async function main() {
     const t1 = await req(base, 'GET', `/api/images/${imgId}/adjust/tiles`);
     const turl = t1.body?.url || '';
     ok('调整瓦片报成图尺寸（与画幅同一个数）', t1.status === 200 && t1.body?.w === dims.w && t1.body?.h === dims.h, JSON.stringify(t1.body).slice(0, 200));
-    ok('瓦片目录按参数指纹归位', /\/tiles\/\d+\/adj[0-9a-f]{8}$/.test(turl.split('/{z}/')[0]), turl);
+    ok('瓦片目录按参数指纹归位', /\/cache\/t\/\d+\/adj[0-9a-f]{8}$/.test(turl.split('/{z}/')[0]), turl);
     const lv = t1.body?.levels || [];
     ok('成图切出了金字塔', t1.body?.tile === 512 && lv.length > 1, JSON.stringify(lv).slice(0, 160));
     if (lv.length) {
@@ -250,7 +250,7 @@ async function main() {
     await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { beauty: { smooth: 40, texture: 30, blemish: 60, even_tone: 50, de_shine: 45, by_mask: true } } });
     const pMask = await req(base, 'POST', `/api/images/${imgId}/adjust/preview`, {});
     const rNew = await req(base, 'POST', `/api/images/${imgId}/adjust/render`, {});
-    ok('四根新杆一起开也出得了预览与成图', pMask.status === 200 && rNew.status === 200 && (rNew.body?.url || '').includes('_adjusted'), `${pMask.status}/${JSON.stringify(rNew.body).slice(0, 140)}`);
+    ok('四根新杆一起开也出得了预览与成图', pMask.status === 200 && rNew.status === 200 && /\/cache\/s\/\d+\/adjusted[0-9a-f]{8}\.jpg$/.test(rNew.body?.url || ''), `${pMask.status}/${JSON.stringify(rNew.body).slice(0, 140)}`);
     const tiled = await req(base, 'GET', `/api/images/${imgId}/adjust/tiles`);
     ok('新算子那版也能切真像素瓦片', tiled.status === 200 && tiled.body?.w === dims.w, JSON.stringify(tiled.body).slice(0, 160));
 
@@ -289,6 +289,12 @@ async function main() {
     ok('删图成功', del.status === 200, JSON.stringify(del.body));
     const dirNow = fs.readdirSync(path.join(data, 'projects', '1'));
     ok('调整档随图清掉', !dirNow.some(n => /_adj(prev|usted|thumb|input)/.test(n)), dirNow.filter(n => /_adj/.test(n)).join(','));
+    // 缓存层按 image_id 归位：整目录请走之后不该再留这张图的瓦片与渲染档
+    ok('缓存层里这张图的两处跟着没了',
+      !fs.existsSync(path.join(data, 'runtime', 'cache', 's', String(imgId))) && !fs.existsSync(path.join(data, 'runtime', 'cache', 't', String(imgId))),
+      path.join(data, 'runtime', 'cache'));
+    const kidFile = path.join(data, String(kidInfo?.orig_url || '').replace('/file/', ''));
+    ok('删父图没碰子图的原图', !!kidInfo?.orig_url && fs.existsSync(kidFile), kidFile);
     ok('附属行跟着没了（再读参数=全默认）', (await req(base, 'GET', `/api/images/${imgId}/adjust`)).status === 404);
     console.log(`\n删图后项目目录剩 ${dirNow.length} 个条目`);
   } catch (e) {

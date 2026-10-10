@@ -88,8 +88,8 @@ pub async fn image_delete(State(ctx): State<Shared>, APath(id): APath<String>) -
         // 否则「派生查看」的计数会指向一个已经不存在的 id
         rimg::clear_derived_refs(&ctx, iid)?;
         imagesvc::purge(&ctx, &i);
-        // `_adjprev` / `_adjusted` / `_adjthumb` / `_adjinput` 都是按父图名拼出来的，
-        // 库里不留引用，只能按前缀扫一遍目录请走
+        // 缓存层那三张按 image_id 归位，整目录请走；提交记录 `<名>_adjinput…` 在 projects/ 里，
+        // 库里只有指向它的结果行、没有文件清单，所以由 purge_all 按 stem 前缀扫一遍
         adjust::purge_all(&ctx, &i);
         // 画布的参考图槽位是存在设置里的一串 rel：行没了要连着清，不然键与文件都留在库里当孤儿
         if i.is_sketch() {

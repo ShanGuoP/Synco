@@ -202,8 +202,15 @@ machine and the library comes with it (portable mode). Installed somewhere witho
 Settings → Data folder can point anywhere, and there's "Copy the data to a new folder…".
 
 Inside it: `app.db` is the database, `projects/<id>/` holds originals, masks, results and every thumbnail level,
-and `runtime/` holds the lock and logs (everything process-private is kept in there, not spread across the root) —
-**to back up, take the whole folder**; only `runtime/` can be left out.
+`runtime/` holds the lock and logs (everything process-private is kept in there, not spread across the root),
+and `runtime/cache/` holds the **regenerable files** — the zoom tiles, plus the previews and full-size renders
+the Local edit pass produces. Nothing in that layer is irreplaceable: the next time you look at that image it
+gets re-cut (about half a second for 24MP). Settings → Image levels lets you cap it (4 GB by default, 0 = no limit);
+over the cap, the least recently re-cut image goes first, and there's a button to clear the whole layer.
+**To back up, take the whole folder**; only `runtime/` can be left out.
+Older builds kept those files under `projects/<id>/tiles/` and next to the originals — the first launch recognises
+that family of old file names and clears it (tiles and preview/full-size renders only; anything a database record
+still points at stays).
 The stored result is the q95 preview (`r#_…_final.jpg`), with two small files beside it: `_raw.png` (the window
 image the model returned) and `_msnap.png` (the mask that submission used). They're the ingredients for
 recomputing the lossless one, not another copy of the result — deleting a record, an image or a project takes

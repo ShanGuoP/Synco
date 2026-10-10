@@ -8,7 +8,7 @@ import { MODES, apply, mode, resolved, watch } from '../core/theme.js';
 import { osReduce, reduce, saved, set as setMotion, watch as watchMotion } from '../core/motion.js';
 import { dl, dx, flushForSwitch, getLang, t } from '../core/i18n.js';
 import { store } from '../state.js';
-import { modal } from './modal.js';
+import { modal, confirm } from './modal.js';
 import { toastOk, toastErr, toastBusy } from './toast.js';
 import { createBackendsPane } from './backends.js';
 import { createPresetsPane } from './presets.js';
@@ -483,7 +483,17 @@ function createExportPane() {
 /** 图像档位：编辑/查看用的 proxy 长边，加上服务端队列的实时快照 */
 function createImagePane() {
   const edgeInp = el('input.input', { type: 'number', min: '1024', max: '8192', step: '256' });
+  const capInp = el('input.input', { type: 'number', min: '0', max: '65536', step: '512' });
+  const cacheLine = el('span.muted');
   const state = el('div.set__state');
+
+  async function loadCache() {
+    try {
+      const c = await api.get('/api/cache');
+      capInp.value = String(c.cap_mb ?? 4096);
+      cacheLine.textContent = c.bytes ? t('settings.image.cacheNow', { mb: (c.bytes / 1048576).toFixed(1) }) : t('settings.image.cacheEmpty');
+    } catch (e) { cacheLine.textContent = `${t('settings.image.cacheFail')}：${e.message}`; }
+  }
 
   async function load() {
     try {
@@ -494,6 +504,7 @@ function createImagePane() {
         okRow(q.queued === 0, t('settings.image.queue'), t('settings.image.queueNote', { queued: q.queued, running: q.running, cap: q.concurrency })),
         okRow(null, t('settings.image.afterChange'), t('settings.image.afterChangeNote')));
     } catch (e) { fill(state, okRow(false, t('settings.image.readFail'), e.message)); }
+    loadCache();
   }
 
   async function save() {
@@ -502,12 +513,41 @@ function createImagePane() {
     catch (e) { busy.close(); toastErr(t('settings.image.saveFail'), e.message); }
   }
 
+  /* 上限改完服务端立刻按新上限扫一次，所以这里直接回显省了多少 */
+  async function saveCap() {
+    const busy = toastBusy(t('settings.image.busy'));
+    try {
+      const r = await api.post('/api/cache/cap', { mb: +capInp.value || 0 });
+      busy.close();
+      const mb = (r.bytes || 0) / 1048576;
+      toastOk(t('settings.image.capSaved'), mb > 0 ? t('settings.image.cacheSaved', { mb: mb.toFixed(1) }) : '');
+      loadCache();
+    } catch (e) { busy.close(); toastErr(t('settings.image.saveFail'), e.message); }
+  }
+
+  async function clearCache() {
+    if (!await confirm({ title: t('settings.image.cacheClearTitle'), text: t('settings.image.cacheClearText'), okLabel: t('settings.image.cacheClearBtn') })) return;
+    const busy = toastBusy(t('settings.image.busy'));
+    try {
+      const r = await api.post('/api/cache/clear', {});
+      busy.close();
+      toastOk(t('settings.image.cacheCleared'), t('settings.image.cacheSaved', { mb: ((r.bytes || 0) / 1048576).toFixed(1) }));
+      loadCache();
+    } catch (e) { busy.close(); toastErr(t('settings.image.saveFail'), e.message); }
+  }
+
   const node = el('div.dlg-flow', {},
     el('div', {}, el('h4.dlg-h4', { text: t('settings.image.title') }), edgeInp,
       el('p.muted', { text: t('settings.image.note') }),
       el('div', { style: { display: 'flex', gap: '8px', marginTop: '10px' } },
         el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('common.save'), onclick: save }),
         el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('settings.image.reload'), onclick: load }))),
+    el('div', {}, el('h4.dlg-h4', { text: t('settings.image.cache') }),
+      el('p.muted', { text: t('settings.image.cacheNote') }),
+      el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' } }, capInp, cacheLine),
+      el('div', { style: { display: 'flex', gap: '8px', marginTop: '10px' } },
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('common.save'), onclick: saveCap }),
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('settings.image.cacheClearBtn'), onclick: clearCache }))),
     state);
   load();
   return { node };

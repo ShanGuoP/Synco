@@ -50,6 +50,34 @@ pub async fn proxy_edge_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Res
     Ok(ok(serde_json::json!({ "proxy_edge": want })))
 }
 
+/// 可再生档那一层（`runtime/cache/`）的体检：现在占多少、上限多少。
+/// 数目录是磁盘活（一次可能上百个子目录、上千个文件），过阻塞池，别按住 worker
+pub async fn cache_get(State(ctx): State<Shared>) -> Result<Response> {
+    let c = ctx.clone();
+    let (bytes, cap) = util::blocking(move || {
+        Ok((crate::service::imagesvc::cache_bytes(&c), crate::service::imagesvc::cache_cap(&c)))
+    })
+    .await?;
+    Ok(ok(json!({ "bytes": bytes, "cap_mb": cap / 1048576 })))
+}
+
+/// 手动清一次。丢掉的随时能重算回来，所以这一颗按钮不需要"确认后再删"之外的犹豫
+pub async fn cache_clear(State(ctx): State<Shared>) -> Result<Response> {
+    let c = ctx.clone();
+    let (gone, freed) = util::blocking(move || Ok(crate::service::imagesvc::cache_clear(&c))).await?;
+    Ok(ok(json!({ "removed": gone, "bytes": freed })))
+}
+
+/// 上限（MB，0 = 不限）。夹住并回显，改完立刻扫一次——"调小就马上腾地方"才成立
+pub async fn cache_cap_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
+    let body = body_of(raw).await?;
+    let mb = util::clamp_round(body.get("mb"), 0, 65536, 4096);
+    rset::put(&ctx, "cache_cap_mb", &mb.to_string())?;
+    let c = ctx.clone();
+    let (gone, freed) = util::blocking(move || Ok(crate::service::imagesvc::cache_sweep(&c, mb as u64 * 1048576))).await?;
+    Ok(ok(json!({ "cap_mb": mb, "removed": gone, "bytes": freed })))
+}
+
 pub async fn workflow_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
     let p = cfg::set_workflow_path(&ctx, body.get("path").and_then(|v| v.as_str()).unwrap_or(""));

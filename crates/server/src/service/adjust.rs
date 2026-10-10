@@ -3,7 +3,8 @@
 //! axum 的解包全在 `api::adjust`，这一层只收已经拆好的值（分层纪律 R3 钉的就是这件事）。
 //! 所有同步重活（读盘、解码、算链、编码、写盘）都在这里，handler 那侧统一过阻塞池。
 //!
-//! 派生档命名：`<名>_adjprev<参数指纹>.jpg` / `<名>_adjusted<参数指纹>.jpg`。
+//! 派生档命名：缓存层 `runtime/cache/s/<图号>/adjprev<参数指纹>.jpg`（预览）、`adjusted…`（成图）、
+//! `adjthumb…`（成图的 320 档），只有提交给 AI 的那一张 `<名>_adjinput<参数指纹>.jpg` 留在 `projects/`。
 //! 指纹进名字是为了**换参数就换 URL**——新 URL 可以放心 immutable，
 //! 同名文件存在也就等价于"这套参数已经渲过了"，重复点预览直接复用而不重算。
 
@@ -80,10 +81,30 @@ fn label_stem(img: &Image) -> String {
     }
 }
 
-/// 调整档的路径族：与派生档同目录，命名规律一致
+/// 调整档住在缓存层（`runtime/cache/s/<图号>/`）：这三张全是"原图 + 库里那套参数"渲出来的，
+/// 删了下次重渲，一个像素都不会丢。文件名不再带父图名——按 image_id 归位，
+/// 删这张图时整目录请走，不用再去扫前缀。
 fn slot(ctx: &Ctx, img: &Image, kind: &str, hash: &str) -> (String, PathBuf) {
-    let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), format!("{}_{kind}{hash}.jpg", stem(img))]);
+    let rel = util::rel_path(&["runtime".into(), "cache".into(), "s".into(), img.id.to_string(), format!("{kind}{hash}.jpg")]);
     (rel.clone(), ctx.data.join(&rel))
+}
+
+/// 提交给 AI 的那一张是**记录**不是缓存，仍落 `projects/`：路径写进了结果行的 `orig_path`，
+/// 「对比原图」按它取图；而那套参数之后会被用户改掉，改完就再也渲不回当时发出去的那一张。
+/// 同一套参数只写一份（名字里有指纹），所以重复提交不会越长越多。
+fn input_slot(ctx: &Ctx, img: &Image, hash: &str) -> (String, PathBuf) {
+    let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), format!("{}_adjinput{hash}.jpg", stem(img))]);
+    (rel.clone(), ctx.data.join(&rel))
+}
+
+/// 这张图在缓存层里的那一个目录（`purge_all` 与单测共用同一个构造处，规则别写两遍）
+pub fn slots_dir(ctx: &Ctx, img: &Image) -> PathBuf {
+    imagesvc::cache_dir(ctx).join("s").join(img.id.to_string())
+}
+
+/// 提交记录的名字前缀：删这张图时按它扫项目目录，判"什么算这张图的"只用这一个口径
+pub fn input_prefix(img: &Image) -> String {
+    format!("{}_adjinput", stem(img)).to_lowercase()
 }
 
 /// 读库里的参数。JSON 坏了不报错而是退全默认并在标准输出说一声：
@@ -250,8 +271,9 @@ fn adj_tile_dir(ctx: &Ctx, img: &Image, hash: &str) -> PathBuf {
     imagesvc::tiles_dir(ctx, img).join(format!("adj{hash}"))
 }
 
+/// 调整档瓦片的 URL 根：跟着 `imagesvc::tiles_rel_root` 走，路径规则只有一处
 fn adj_tile_rel(img: &Image, hash: &str) -> String {
-    util::rel_path(&["projects".into(), img.project_id.to_string(), "tiles".into(), img.id.to_string(), format!("adj{hash}")])
+    format!("{}/adj{hash}", imagesvc::tiles_rel_root(img))
 }
 
 /// 只留当前这套参数的瓦片：一次要出上百张，换一根滑杆就再长一整目录，旧的没人引用
@@ -268,32 +290,36 @@ fn purge_adj_tiles(ctx: &Ctx, img: &Image, keep_hash: &str) {
     }
 }
 
-/// 清掉同一张图其它参数的预览档（只留当前这一份）
+/// 清掉同一张图、同一种档的旧参数版本（只留当前这一份）
 fn purge_old(ctx: &Ctx, img: &Image, kind: &str, keep_hash: &str) {
-    let Some(dir) = util::data_file(&ctx.data, &img.orig_path).and_then(|p| p.parent().map(|d| d.to_path_buf())) else { return };
-    let prefix = format!("{}_{kind}", stem(img)).to_lowercase();
+    let dir = slots_dir(ctx, img);
     // keep 必须是**整条文件名**：只比后半段会把刚写好的那一份也当成旧文件请走
-    let keep = format!("{}_{kind}{keep_hash}.jpg", stem(img)).to_lowercase();
+    let keep = format!("{kind}{keep_hash}.jpg");
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().to_lowercase();
-            if n.starts_with(&prefix) && n != keep && e.path().is_file() {
+            if n.starts_with(kind) && n != keep && e.path().is_file() {
                 let _ = std::fs::remove_file(e.path());
             }
         }
     }
 }
 
-/// 删图时清掉这张图的全部调整档（前缀扫一遍，指纹是几号不用知道）
+/// 删图时清掉这张图的全部调整档。缓存层那三张整目录请走就够了；
+/// 提交记录那张（`_adjinput`）在 `projects/` 里、名字按父图 stem 拼，库里只有指向它的结果行
+/// 而不留文件清单，只能按前缀扫一遍——前缀带着 stem，不会碰到同项目别的图。
 pub fn purge_all(ctx: &Ctx, img: &Image) {
-    let Some(dir) = util::data_file(&ctx.data, &img.orig_path).and_then(|p| p.parent().map(|d| d.to_path_buf())) else { return };
-    let s = stem(img).to_lowercase();
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for e in rd.flatten() {
-            let n = e.file_name().to_string_lossy().to_lowercase();
-            let hit = ["adjprev", "adjusted", "adjthumb", "adjinput"].iter().any(|k| n.starts_with(&format!("{s}_{k}")));
-            if hit && e.path().is_file() {
-                let _ = std::fs::remove_file(e.path());
+    let _ = std::fs::remove_dir_all(slots_dir(ctx, img));
+    let prefix = input_prefix(img);
+    // 目录从原图那条路径倒推，且必须过 data_file：库里躺着绝对路径或 `..`（被人改过的库）时不该扫到 data/ 外
+    let dir = util::data_file(&ctx.data, &img.orig_path).and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    if let Some(dir) = dir {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() && e.file_name().to_string_lossy().to_lowercase().starts_with(&prefix) {
+                    let _ = std::fs::remove_file(p);
+                }
             }
         }
     }
@@ -346,7 +372,7 @@ pub fn submit_artifact(ctx: &Ctx, img: &Image) -> Result<(Vec<u8>, String)> {
         return Ok((std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.origRead", e))?, img.orig_path.clone()));
     }
     let bytes = codec::encode_png(&pixels(ctx, img, &ops, Grade::Full)?);
-    let (rel, abs) = slot(ctx, img, "adjinput", &ops_hash(&ops.to_json()));
+    let (rel, abs) = input_slot(ctx, img, &ops_hash(&ops.to_json()));
     if !abs.is_file() {
         imagesvc::write_bytes(&abs, &bytes)?;
     }
@@ -548,7 +574,9 @@ mod tests {
         radj::put(&ctx, img.id, &ops.to_json()).unwrap();
         let (bytes, rel) = submit_artifact(&ctx, &img).unwrap();
         assert_ne!(rel, img.orig_path);
-        assert!(rel.contains("adjinput"));
+        // 提交记录不进缓存层：它被结果行的 orig_path 指着，而这套参数之后会被改掉，删了就是真丢了
+        assert!(rel.starts_with(&format!("projects/{}/", img.project_id)), "提交记录不该离开项目目录：{rel}");
+        assert!(rel.to_lowercase().contains(&input_prefix(&img)), "名字没带前缀，删图时那条前缀扫描就捞不到它：{rel}");
         assert!(ctx.data.join(&rel).is_file(), "发出去那张要能在库里指着看");
         assert_eq!(&bytes[1..4], b"PNG", "本机那条要的是 PNG");
         assert!(adjusted(&ctx, &img));
@@ -563,21 +591,22 @@ mod tests {
         radj::put(&ctx, img.id, &ops.to_json()).unwrap();
         build_preview(&ctx, &img, &ops).unwrap();
         build_render(&ctx, &img, &ops).unwrap();
-        let files: Vec<String> = std::fs::read_dir(dir.join("projects").join("1"))
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.contains("adj"))
-            .collect();
+        // 提交记录那张不在缓存层（它被结果行指着），删图时得靠前缀扫把它一起带走
+        let (_, sent_rel) = submit_artifact(&ctx, &img).unwrap();
+        assert!(ctx.data.join(&sent_rel).is_file());
+        // 数的是缓存层里那一个目录，而且用生产那套路径构造器：规则再挪一次，这条测试要跟着动，
+        // 不该在自己身体里再抄一份路径
+        let slot_dir = || slots_dir(&ctx, &img);
+        let names = || -> Vec<String> {
+            std::fs::read_dir(slot_dir()).unwrap().flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string()).collect()
+        };
+        let files = names();
         assert!(files.len() >= 3, "预览/成图/缩略都该在：{files:?}");
         purge_all(&ctx, &img);
-        let left: Vec<String> = std::fs::read_dir(dir.join("projects").join("1"))
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.contains("adj"))
-            .collect();
+        let left = std::fs::read_dir(slot_dir()).map(|_| names()).unwrap_or_default();
         assert!(left.is_empty(), "调整档没清干净：{left:?}");
+        assert!(!ctx.data.join(&sent_rel).is_file(), "projects/ 里那张提交记录还在");
         radj::clear(&ctx, img.id).unwrap();
         assert!(radj::ops_of(&ctx, img.id).unwrap().is_none());
         cleanup(ctx, &dir);
@@ -755,21 +784,21 @@ mod tests {
         assert_eq!(m["h"].as_i64(), Some(1200));
         assert_eq!(m["tile"].as_i64(), Some(imagesvc::TILE as i64));
         let url = m["url"].as_str().unwrap_or_default().to_string();
-        assert!(url.contains(&format!("tiles/{}/adj", img.id)), "瓦片路径没带参数指纹：{url}");
+        assert!(url.contains(&format!("cache/t/{}/adj", img.id)), "瓦片路径没带参数指纹：{url}");
         let levels = m["levels"].as_array().cloned().unwrap_or_default();
         assert!(!levels.is_empty(), "长边 1600 该切出一套金字塔");
         // 末元素是最细一层（build_tiles_at 把顺序反转过）
         let z = levels[levels.len() - 1]["z"].as_i64().unwrap_or(-1);
         let hash = ops_hash(&ops.to_json());
-        let finest = dir.join("projects").join("1").join("tiles").join(img.id.to_string())
-            .join(format!("adj{hash}")).join(z.to_string()).join("0_0.jpg");
+        let root = imagesvc::tiles_dir(&ctx, &img);
+        let finest = root.join(format!("adj{hash}")).join(z.to_string()).join("0_0.jpg");
         assert!(finest.is_file(), "最细一层的第一格没落盘：{}", finest.display());
         // 换一套参数：新目录建起来，旧的那套要被请走——一次就是上百张，留着等于白堆
         let mut other = ops.clone();
         other.color.contrast = photoedit_core::Slider(30);
         let m2 = tiles(&ctx, &img, &other).unwrap();
         assert_ne!(m2["url"].as_str().unwrap_or_default(), url.as_str());
-        let root = dir.join("projects").join("1").join("tiles").join(img.id.to_string());
+        let root = imagesvc::tiles_dir(&ctx, &img);
         assert!(root.join(format!("adj{}", ops_hash(&other.to_json()))).is_dir());
         assert!(!root.join(format!("adj{hash}")).exists(), "旧参数的瓦片目录没清掉");
         cleanup(ctx, &dir);
