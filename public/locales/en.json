@@ -31,7 +31,18 @@
     "comfyEntry": "Settings · {host}",
     "statsLine": "{projects} projects · {images} images",
     "guideTitle": "Retouch flow",
-    "guideSub": "Import → mask → submit → compare"
+    "guideSub": "Import → mask → submit → compare",
+    "src": {
+      "env": "SYNCO_DATA environment variable",
+      "remembered": "The folder chosen last time",
+      "nearby": "A nearby existing library",
+      "cwd": "A library in the current directory",
+      "legacy": "The location used before the rename (LOCALAPPDATA\\PixFish)",
+      "portable": "Next to the exe (portable mode)",
+      "default": "Default location (no library yet)",
+      "picked": "The folder just chosen",
+      "copied": "The folder just copied into"
+    }
   },
   "settings": {
     "appearance": {
@@ -496,12 +507,12 @@
     "title": "Prompt phrases",
     "name": "Name",
     "content": "Content",
-    "namePh": "Chip label, e.g. Skin retouch",
+    "namePh": "Chip label, e.g. Skin texture",
     "textPh": "The sentence merged into the prompt",
     "needName": "Give it a name first",
     "emptyTitle": "Nothing in the body",
     "emptyBody": "A phrase has to add something to the prompt",
-    "intro": "Tap a chip to merge its sentence into the positive prompt, tap again to remove it — the rest of what you wrote stays. Seven defaults to start with.",
+    "intro": "Tap a chip to merge its sentence into the positive prompt, tap again to remove it — the rest of what you wrote stays. Ten defaults to start with; keep one chip to one target state.",
     "newOne": "New phrase",
     "count": "{n} phrases",
     "noneYet": "No phrases yet. Add one you use often and it will live in the right-hand column.",
@@ -519,7 +530,7 @@
   },
   "pre": {
     "summary": "{steps} steps · CFG{cfg} · LoRA {lora}",
-    "namePh": "e.g. Everyday skin retouch",
+    "namePh": "e.g. Everyday skin texture",
     "nameHint": "Stores prompt, negative, steps, CFG and the LoRA chain only; the seed never goes into a preset.",
     "newPh": "Describe what to change — one subject and one action per sentence",
     "negPh": "extra fingers, plastic skin, noise…",
@@ -1167,5 +1178,311 @@
     "delWarn": "Files on disk go too — this can’t be undone.",
     "deleted": "Project deleted",
     "delFail": "Delete failed"
+  },
+  "srv": {
+    "common": {
+      "bodyTooLarge": "Too many bytes in one request (got {got} MB, limit {cap} MB)",
+      "badJson": "The request body isn’t valid JSON: {why}",
+      "idNotNumber": "The id in the path isn’t a number",
+      "batchMax": "At most {cap} images per batch (this one has {got}) — split it into a few",
+      "mkdirFail": "Couldn’t create the folder: {msg}",
+      "nameEmpty": "The file name is empty",
+      "dataEmpty": "The image data is empty",
+      "writeFail": "Couldn’t write the file: {msg}",
+      "badDims": "Bad image dimensions (reported {w}×{h}) — try another file or re-export it",
+      "noProject": "That project doesn’t exist",
+      "noResult": "That record doesn’t exist",
+      "copyFail": "Copy failed: {msg}",
+      "respFail": "Could not build the response"
+    },
+    "backend": {
+      "noAnswer": "no answer",
+      "versionOld": "Unknown (old build without a version endpoint)",
+      "emptyAnswer": "Empty reply",
+      "notComfy": "It answered, but it isn't ComfyUI",
+      "timeout": "ComfyUI timed out ({url}): {msg}",
+      "connect": "Cannot reach ComfyUI ({url}): {msg}",
+      "send": "The ComfyUI request failed ({url}): {msg}",
+      "http": "ComfyUI HTTP {code}"
+    },
+    "canvas": {
+      "noImage": "That sketch doesn’t exist",
+      "refsGone": "A reference file is off disk ({missing}) — remove it before submitting",
+      "notSketch": "That isn’t a sketch",
+      "pngBadNoOverwrite": "The sketch isn’t a decodable PNG; the existing canvas was left alone",
+      "emptyNoOverwrite": "The sketch is empty; nothing was overwritten",
+      "needPrompt": "Canvas generation reads only the prompt — write what to generate",
+      "sketchGone": "The sketch file is off disk; draw another version before submitting",
+      "needCloud": "Canvas generation needs the cloud route: fill base_url, model name and API key under Settings → Cloud",
+      "wrongOwner": "That record doesn’t belong to this canvas",
+      "idsNumber": "image_ids must hold numeric ids",
+      "noRefsInVersion": "This version carried no references",
+      "noRefsGiven": "No references were named to add",
+      "capDropped": "At most {cap} references; the extras were dropped",
+      "capGiven": "At most {cap} references (this request has {got})",
+      "badPathNoOverwrite": "The sketch path in that row isn’t a valid relative path; nothing was overwritten",
+      "sketchGoneRaw": "The sketch file is off disk",
+      "needResultId": "result_id is required",
+      "noSnapshot": "This version kept no sketch snapshot (versions made before snapshots shipped have none)",
+      "snapGone": "The snapshot file is off disk",
+      "snapBadPng": "The snapshot isn’t a decodable PNG; the current canvas was left alone",
+      "snapEmpty": "The snapshot is empty; nothing was overwritten",
+      "mkdirFail": "Couldn’t create the folder: {msg}"
+    },
+    "cloud": {
+      "cantSubmit": "This image can’t be submitted",
+      "nothing": "No images to submit",
+      "promptEmpty": "The prompt is empty — the cloud would just trace the original",
+      "noBase": "The cloud base_url is not configured yet (Settings → Cloud)",
+      "noModel": "No model name filled in for the cloud",
+      "noKey": "No API key filled in for the cloud",
+      "fileOver": "One of the images to send is {mb} MB, past the {cap} MB per-file limit: use a smaller image or drop the size pill one notch",
+      "totalOver": "This request would send {mb} MB of images, past the {cap} MB total limit: drop some reference images",
+      "notJson": "The cloud reply is not JSON: {detail}",
+      "b64Empty": "The b64_json in the cloud reply is empty",
+      "urlFail": "The cloud gave a URL but the image cannot be fetched: HTTP {code}",
+      "noImage": "The cloud reply carries no image: {detail}",
+      "upstream": "Cloud HTTP {code}: {detail}",
+      "noUrl": "No base_url filled in yet",
+      "timeout": "The cloud request timed out ({url}): {msg}",
+      "connect": "Cannot reach the cloud ({url}): {msg}",
+      "send": "The cloud request failed ({url}): {msg}",
+      "probeFail": "The cloud probe failed: {msg}"
+    },
+    "preset": {
+      "needName": "Give the preset a name",
+      "needPhrase": "Give the phrase a name",
+      "dupName": "A preset with that name already exists",
+      "dupPhrase": "A phrase with that name already exists",
+      "phraseEmpty": "A phrase is merged into the instruction, so it can’t be saved empty",
+      "missing": "That preset doesn’t exist"
+    },
+    "export": {
+      "batchMax": "At most {cap} images per export (this one has {got}) — split it up"
+    },
+    "util": {
+      "poolDead": "That disk job died on the thread pool (the thread panicked or was cancelled)"
+    },
+    "reclaim": {
+      "cloudStalled": "That cloud run never finished (the request dropped or timed out); submit it again",
+      "lostTaskRetry": "ComfyUI no longer knows this task (it restarted, or “clear history” dropped it); submit again",
+      "lostTask": "ComfyUI no longer knows this task (it restarted, or “clear history” dropped it)",
+      "missingOut": "ComfyUI returned too little: {tags}",
+      "noFinal": "The final image was never written to disk",
+      "localStuck": "This local job has been unsettled for over 60 minutes (ComfyUI is probably stuck); submit again",
+      "restartNoComfy": "ComfyUI was unreachable when the studio restarted ({url})"
+    },
+    "result": {
+      "cancelled": "Cancelled: the cloud request can’t be recalled, its result is no longer used",
+      "noResult": "That result doesn’t exist",
+      "snapNotObject": "This row's settings snapshot isn't an object, so reference images can't be recorded"
+    },
+    "submit": {
+      "needIds": "project_id or image_id is required",
+      "imageGone": "That image no longer exists",
+      "isSketch": "That’s a sketch — press Generate in the canvas instead",
+      "fullNeedsCloud": "Full-frame repaint is cloud-only. For the local ComfyUI route, export a workflow without crop/stitch nodes as API and point it here",
+      "noMask": "No mask painted",
+      "origGone": "The original file is off disk (was data/projects cleaned?)",
+      "maskGone": "The mask file is off disk — paint it again before submitting",
+      "wfCannotTakeover": "Your workflow can’t take over submission: {errors}",
+      "comfyRejected": "ComfyUI refused: {msg}",
+      "settled": "That one has already settled",
+      "byHand": "Interrupted by hand",
+      "cancelNoNotify": "Marked cancelled, but ComfyUI wasn’t notified ({errs})",
+      "stillRunning": "Still generating — delete it once it settles",
+      "noCopyable": "This record has no result to copy"
+    },
+    "settings": {
+      "noWorkflowPath": "No workflow file path is set yet",
+      "exportAbsNeeded": "Enter an absolute path starting with a drive letter, e.g. D:\\exports\\results",
+      "exportNotWritable": "The folder isn’t writable: {msg}",
+      "noExportIds": "Nothing to export",
+      "exportUnset": "No export folder set (Settings → Export folder)",
+      "noResultFile": "This one has no result image",
+      "nameTaken": "{file} collided {n} times in a row — no room left"
+    },
+    "adjust": {
+      "sketchPath": "Sketches don’t use local retouch — that’s the canvas’s own route",
+      "lutOutside": "A LUT must be a file directly under data/luts",
+      "untouchedRender": "No slider has moved — adjust something before rendering",
+      "untouchedFork": "Nothing is adjusted yet, so saving a new image would be pointless",
+      "lutName": "Illegal LUT name: {name}",
+      "lutRead": "Could not read this LUT: {msg}",
+      "lutParse": "This LUT could not be parsed: {msg}",
+      "renderGone": "The rendered file is not inside the data directory",
+      "forkFail": "Could not save a copy: {msg}",
+      "badOpsJson": "The parameters are not valid JSON: {msg}"
+    },
+    "image": {
+      "rowBroken": "This image’s response couldn’t be built (the database row is broken)",
+      "maskBadPng": "The mask isn’t a decodable PNG; the existing mask was left alone",
+      "badFormat": "Unrecognised image format: {msg}",
+      "decoderFail": "Could not build a decoder: {msg}",
+      "dimsOut": "Image size is past what we can handle ({w}×{h}; max long edge {edge}, max pixels {px})",
+      "decodeFail": "Decode failed: {msg}",
+      "noParent": "The derived-file path has no parent directory",
+      "slotWrite": "Could not write {path}: {msg}",
+      "slotMove": "Could not move {path} into place: {msg}",
+      "origGone": "The original file is no longer on disk: {path}",
+      "origRead": "Could not read the original: {msg}",
+      "maskRead": "Could not read the mask: {msg}",
+      "refFold": "Reference {w}×{h} cannot be folded into the cloud's allowed box (max long edge {edge}, max ratio 3:1, 655360~8294400 pixels)",
+      "refNotInLib": "That image is no longer in the library",
+      "refNotOnDisk": "That image's file is no longer on disk: {name}",
+      "refRead": "Could not read that image: {msg}",
+      "refSnapGone": "This version's reference files are no longer on disk",
+      "refSnapRead": "Could not read the reference snapshot: {msg}",
+      "refFileGone": "The reference file is no longer on disk: {path}",
+      "refCopy": "Could not copy the reference image: {msg}",
+      "origOutside": "The original's path is not inside the data directory",
+      "proxyRead": "Could not read the proxy: {msg}",
+      "renderRead": "Could not read the rendered image: {msg}"
+    },
+    "project": {
+      "nameEmpty": "The project name can’t be empty"
+    },
+    "tile": {
+      "metaRead": "Could not read the tile manifest: {msg}",
+      "metaBad": "The tile manifest is corrupt: {msg}",
+      "slotClosed": "The tile throttle slots are closed",
+      "threadPanic": "The tile thread crashed: {msg}",
+      "levelMismatch": "Tile level maths broke: expected {w}×{h}, found {aw}×{ah}"
+    },
+    "queue": {
+      "imageGone": "That image is gone, so this one cannot run",
+      "cropPanic": "The crop thread crashed: {msg}",
+      "stitchPanic": "The stitch thread crashed: {msg}",
+      "noInk": "There is no usable stroke on the mask — paint somewhere and submit again",
+      "cropUnfit": "The crop box's size or ratio is past what the cloud allows (max long edge 3840, max ratio 3:1, 0.655M~8.29M pixels)",
+      "byHand": "Interrupted by hand — this one's result is no longer used",
+      "finalWrite": "Could not write the finished image: {msg}",
+      "canvasPanic": "The canvas thread crashed: {msg}",
+      "refReadPanic": "The reference-image read never finished: {msg}",
+      "diskPanic": "The save-to-disk thread crashed: {msg}",
+      "sketchUnread": "The sketch cannot be read: {path}",
+      "sketchRead": "Could not read the sketch: {msg}",
+      "canvasZero": "The canvas has zero size",
+      "canvasOut": "Canvas {w}×{h} is past the cloud's allowed range (max long edge {edge}, max ratio {ratio}:1, {min}~{max} pixels)",
+      "wholeFold": "The whole image {w}×{h} cannot be folded into the cloud's box (max long edge {edge}, max ratio {ratio}:1, {min}~{max} pixels)",
+      "origUnread": "The original cannot be read",
+      "cloudEmpty": "The image that came back from the cloud is empty",
+      "wholePanic": "The whole-image thread crashed: {msg}"
+    },
+    "comfy": {
+      "noSteps": "The request carried no sampling steps",
+      "noCfg": "The request carried no CFG",
+      "stepsBad": "Illegal step count ({n}): this path needs 1–200 steps. Cloud results carry none — fill one in after backfilling",
+      "cfgBad": "Illegal CFG ({n}): this path needs 0–30",
+      "timeout": "ComfyUI timed out ({url}): {msg}",
+      "connect": "Cannot reach ComfyUI ({url}): {msg}",
+      "send": "The ComfyUI request failed ({url}): {msg}",
+      "http": "ComfyUI HTTP {code}: {detail}",
+      "notJson": "ComfyUI's reply is not JSON (HTTP {code}): {detail}",
+      "download": "Could not download the finished image: HTTP {code}",
+      "roleNoNode": "Role \"{role}\" has no node assigned",
+      "roleNotInGraph": "The node {id} that role \"{role}\" points at is not in this graph",
+      "noInputs": "Node {id} has no inputs",
+      "noInput": "Node {id} has no input named {key}"
+    },
+    "wf": {
+      "readFail": "Cannot read the workflow: {msg}",
+      "badJson": "The workflow is not valid JSON: {msg}",
+      "unknownFormat": "This JSON has neither the UI export's nodes/links nor an API export node table (can't tell which workflow it is)",
+      "unknownFormatShort": "This JSON is neither a ComfyUI UI export nor an API export",
+      "roleMissing": "No node found for \"{role}\" (class {class})",
+      "roleNotInGraph": "Node {id} that \"{role}\" points at is not in this graph",
+      "roleNoInput": "\"{role}\" (node {id}) has no {input} input — Synco cannot fill it",
+      "cycle": "This graph has a cycle (a node's input loops back to itself); ComfyUI won't run it",
+      "stitchOrder": "The stitch node isn't wired after the crop node: the returned image won't be pasted back",
+      "outOfStitch": "The saved image doesn't come from the stitch node (it may store the sampler output directly): you'd get a repainted whole frame back — it looks fine but means something else",
+      "cropNoPhoto": "The crop node doesn't take the \"{role}\" input: the photo can't reach your graph at submit",
+      "cropNoMask": "The crop node doesn't take the \"{role}\" input: the mask can't reach your graph at submit",
+      "noPrompt": "The sampler isn't wired to the text encoder: what you type in the panel won't take effect",
+      "sameNode": "\"{a}\" and \"{b}\" point at the same node {id}: that path only returns one image",
+      "roleValue": "\"{role}\" must be a node-id string",
+      "roleClass": "\"{role}\" needs a {class} node; node {id} is {found}",
+      "uiExport": "This file is a UI export (or its node table can't be read), so it can't be submitted as a graph: use Save (API Format) in ComfyUI and point at that",
+      "fileGone": "The workflow file cannot be read ({path})",
+      "fileMissing": "The workflow file doesn't exist",
+      "cropShape": "The workflow's InpaintCropImproved widgets don't match the built-in baseline (built-in {want}, workflow {got}); crop parameters fall back to built-in",
+      "noParams": "Recognised a {kind} format, but the file carries none of the node parameters this pipeline knows (not one of UNETLoader / KSampler / TextEncodeQwenImage21)"
+    },
+    "app": {
+      "dataLocked": "Another Synco is already using this data directory: just go back to the window that's open (double-clicking the icon brings it forward)",
+      "taskPanic": "The server task crashed: {msg}"
+    },
+    "shell": {
+      "absNeeded": "Enter an absolute path starting with a drive letter, e.g. D:\\Retouch",
+      "absDirNeeded": "The target folder needs an absolute path",
+      "sameDir": "Source and target are the same folder",
+      "targetHasLibrary": "That folder already holds a library, so nothing was written over it: pick an empty folder, or clear it yourself first",
+      "mkdirFail": "Could not create the target folder: {msg}",
+      "confMkdirFail": "Could not create the settings folder: {msg}",
+      "writeFail": "Could not write {path}: {msg}",
+      "dirReadFail": "Could not read {path}: {msg}",
+      "copyFail": "Could not copy {path}: {msg}",
+      "browserFail": "The system browser could not be started: {msg}",
+      "urlTooLong": "This link is implausibly long",
+      "urlScheme": "Only http/https links can be opened",
+      "urlChars": "This link contains characters that shouldn't be there, so it wasn't opened",
+      "mkdirAt": "Could not create {path}: {msg}"
+    },
+    "url": {
+      "empty": "The address is empty",
+      "bad": "That address can't be parsed",
+      "scheme": "Only http and https are supported",
+      "credentials": "Don't put a username or password in the address",
+      "query": "Don't put query parameters in the address",
+      "baseEmpty": "base_url is empty",
+      "baseBad": "base_url can't be parsed",
+      "noHost": "base_url has no host",
+      "baseCredentials": "base_url must not carry a username or password",
+      "baseQuery": "base_url must not carry query parameters"
+    },
+    "release": {
+      "notList": "GitHub did not return a list",
+      "badBody": "Could not read GitHub's reply: {msg}",
+      "http": "GitHub replied {code}",
+      "connect": "Cannot reach GitHub: {msg}"
+    }
+  },
+  "wf": {
+    "role": {
+      "loadImage": "Load image",
+      "loadMask": "Load mask",
+      "textEncode": "Text encode",
+      "ksampler": "KSampler",
+      "crop": "Crop",
+      "stitch": "Stitch",
+      "outFinal": "Save image",
+      "outCrop": "Crop preview",
+      "maskViz": "Mask preview",
+      "outOverlay": "Overlay preview"
+    },
+    "format": {
+      "api": "API export",
+      "ui": "UI export"
+    }
+  },
+  "setup": {
+    "pack": {
+      "cropStitch": "Inpaint crop and stitch",
+      "kjNodes": "Mask overlay drawing"
+    },
+    "slot": {
+      "unet": "Main model",
+      "clip": "Text encoder"
+    }
+  },
+  "lut": {
+    "domainMin": "Line {line}: DOMAIN_MIN is not three numbers",
+    "domainMax": "Line {line}: DOMAIN_MAX is not three numbers",
+    "sizeNotInt": "Line {line}: the size is not a whole number",
+    "sizeRange": "Line {line}: size {value} is outside 2..256",
+    "noSize": "No LUT_1D_SIZE / LUT_3D_SIZE declaration",
+    "overflow": "Data from line {line} on exceeds the declared size",
+    "fewComponents": "The data has {got} components but the declaration needs {need}",
+    "domainOrder": "DOMAIN_MIN must be strictly below DOMAIN_MAX"
   }
 }

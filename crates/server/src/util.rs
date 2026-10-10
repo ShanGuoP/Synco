@@ -145,6 +145,24 @@ pub fn clip(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
+/// reqwest 的 Display 会把完整 URL 带进来（那条 URL 可能写着凭据），所以细节优先取错误链上的
+/// 下一层：连接被拒时露出的是 io 层的 os error。链上什么都没有才退回 Display。
+pub fn reqwest_detail(e: &reqwest::Error) -> String {
+    let mut detail = String::new();
+    let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(x) = src {
+        let t = x.to_string();
+        if !t.is_empty() && !t.contains("http") {
+            detail = t;
+        }
+        src = x.source();
+    }
+    if detail.is_empty() {
+        detail = clip(&e.to_string(), 180);
+    }
+    detail
+}
+
 /// `Number(x) || fallback`，其中 null/空串/空白/非数字都按 NaN 处理
 pub fn num_or(v: Option<&Value>, fb: f64) -> f64 {
     number_of(v).unwrap_or(fb)
@@ -272,7 +290,7 @@ pub fn stem_of(p: &str) -> String {
 pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> crate::error::Result<T> + Send + 'static) -> crate::error::Result<T> {
     tokio::task::spawn_blocking(f)
         .await
-        .unwrap_or_else(|_| Err(crate::error::AppError::Fail("线程池上那次磁盘活没跑完（线程崩了或被取消）".into())))
+        .unwrap_or_else(|_| Err(crate::error::AppError::fail("srv.util.poolDead")))
 }
 
 #[cfg(test)]
@@ -292,7 +310,8 @@ mod blocking_tests {
         .unwrap();
         assert_eq!(n, 7);
 
-        let e: Result<u8> = blocking(|| Err(AppError::bad("磁盘满了"))).await;
-        assert!(matches!(e, Err(AppError::Bad(_))));
+        let e: Result<u8> = blocking(|| Err(AppError::bad("srv.util.poolDead"))).await;
+        // 钥匙要能穿过 spawn_blocking 原样回来，前端才查得到字典
+        assert!(matches!(e, Err(AppError::Msg { status: 400, .. })), "{e:?}");
     }
 }

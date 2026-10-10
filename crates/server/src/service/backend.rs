@@ -1,5 +1,7 @@
 //! ComfyUI 后端注册表：扫描本机端口、登记自定义接口、决定当前生效地址（对齐 backend.js）。
 
+use crate::error::AppError;
+use serde_json::json;
 use crate::repo;
 use crate::state::Ctx;
 use crate::util::clip;
@@ -14,22 +16,22 @@ pub const PROBE_MS: u64 = 1500;
 pub const SCAN_PORTS: [u16; 13] = [8188, 8189, 8187, 8186, 8185, 8182, 8180, 8080, 8081, 8000, 8888, 18188, 18189];
 
 /// 只接受 http/https，允许带子路径（挂在反向代理后面时用得上）
-pub fn norm_url(raw: &str) -> Result<String, String> {
+pub fn norm_url(raw: &str) -> crate::error::Result<String> {
     let s = raw.trim();
     if s.is_empty() {
-        return Err("地址不能为空".into());
+        return Err(AppError::bad("srv.url.empty"));
     }
     let with_scheme = if has_scheme(s) { s.to_string() } else { format!("http://{s}") };
-    let u = Url::parse(&with_scheme).map_err(|_| "地址格式不对".to_string())?;
+    let u = Url::parse(&with_scheme).map_err(|_| AppError::bad("srv.url.bad"))?;
     match u.scheme() {
         "http" | "https" => {}
-        _ => return Err("只支持 http / https".into()),
+        _ => return Err(AppError::bad("srv.url.scheme")),
     }
     if !u.username().is_empty() || u.password().is_some() {
-        return Err("地址里不要带账号密码".into());
+        return Err(AppError::bad("srv.url.credentials"));
     }
     if u.query().is_some() || u.fragment().is_some() {
-        return Err("地址里不要带查询参数".into());
+        return Err(AppError::bad("srv.url.query"));
     }
     let path = u.path().trim_end_matches('/').to_string();
     Ok(format!("{}{path}", u.origin().ascii_serialization()))
@@ -37,25 +39,25 @@ pub fn norm_url(raw: &str) -> Result<String, String> {
 
 /// cloud.normBase 与 backend.normUrl 的返回写法不同：这里保留 pathname 原样（含结尾斜杠），
 /// 与 JS 的 `u.origin + u.pathname` 一字不差，否则双跑时设置里的 base 会对不上
-pub fn norm_base(raw: &str) -> Result<String, String> {
+pub fn norm_base(raw: &str) -> crate::error::Result<String> {
     let s = raw.trim().trim_end_matches('/').to_string();
     if s.is_empty() {
-        return Err("base_url 不能为空".into());
+        return Err(AppError::bad("srv.url.baseEmpty"));
     }
     let with_scheme = if has_scheme(&s) { s.clone() } else { format!("https://{s}") };
-    let u = Url::parse(&with_scheme).map_err(|_| "base_url 格式不对".to_string())?;
+    let u = Url::parse(&with_scheme).map_err(|_| AppError::bad("srv.url.baseBad"))?;
     match u.scheme() {
         "http" | "https" => {}
-        _ => return Err("只支持 http / https".into()),
+        _ => return Err(AppError::bad("srv.url.scheme")),
     }
     if u.host_str().unwrap_or("").is_empty() {
-        return Err("base_url 缺主机名".into());
+        return Err(AppError::bad("srv.url.noHost"));
     }
     if !u.username().is_empty() || u.password().is_some() {
-        return Err("base_url 里不要带账号密码".into());
+        return Err(AppError::bad("srv.url.baseCredentials"));
     }
     if u.query().is_some() || u.fragment().is_some() {
-        return Err("base_url 里不要带查询参数".into());
+        return Err(AppError::bad("srv.url.baseQuery"));
     }
     Ok(format!("{}{}", u.origin().ascii_serialization(), u.path()))
 }
@@ -78,18 +80,18 @@ pub fn join(base: &str, p: &str) -> String {
     format!("{}{}", base.trim_end_matches('/'), p)
 }
 
-async fn get_json(ctx: &Ctx, url: &str) -> Result<Value, String> {
+async fn get_json(ctx: &Ctx, url: &str) -> crate::error::Result<Value> {
     let r = ctx
         .http
         .get(url)
         .timeout(Duration::from_millis(PROBE_MS))
         .send()
         .await
-        .map_err(|e| e.strip_err())?;
+        .map_err(|e| send_err(url, e))?;
     if !r.status().is_success() {
-        return Err(format!("HTTP {}", r.status().as_u16()));
+        return Err(AppError::bad_args("srv.backend.http", json!({ "code": r.status().as_u16() })));
     }
-    r.json::<Value>().await.map_err(|e| e.strip_err())
+    r.json::<Value>().await.map_err(|e| send_err(url, e))
 }
 
 /// 认后端：新版读 /system_stats，老版退回 /version，再退回归根页面的标题
@@ -101,7 +103,7 @@ pub async fn probe(ctx: &Ctx, raw_url: &str) -> Value {
         Err(e) => {
             out.insert("url".into(), Value::String(raw_url.to_string()));
             out.insert("ok".into(), Value::Bool(false));
-            out.insert("error".into(), Value::String(e));
+            out.extend(err_fields(e));
             out.insert("ms".into(), Value::from(0));
             return Value::Object(out);
         }
@@ -152,17 +154,16 @@ pub async fn probe(ctx: &Ctx, raw_url: &str) -> Value {
                 let head = head.chars().take(4096).collect::<String>();
                 if head.to_lowercase().contains("comfyui") {
                     out.insert("ok".into(), Value::Bool(true));
-                    out.insert("version".into(), Value::String("未知（老版本，无版本接口）".into()));
+                    out.insert("version".into(), Value::String("srv.backend.versionOld".into()));
                 } else {
                     out.insert(
                         "error".into(),
-                        Value::String(if head.is_empty() { "空应答".into() } else { "应答了，但不是 ComfyUI".into() }),
+                        Value::String(if head.is_empty() { "srv.backend.emptyAnswer" } else { "srv.backend.notComfy" }.into()),
                     );
                 }
             }
             Err(e) => {
-                let msg = e.strip_err();
-                out.insert("error".into(), Value::String(clip(&msg, 90)));
+                out.extend(err_fields(send_err(&url, e)));
             }
         }
     }
@@ -174,7 +175,7 @@ pub fn list_custom(ctx: &Ctx) -> Vec<Value> {
     repo::all(ctx, "SELECT url, label, added_at FROM backends ORDER BY added_at", &[]).unwrap_or_default()
 }
 
-pub fn add_custom(ctx: &Ctx, raw_url: &str, label: Option<&str>) -> Result<String, String> {
+pub fn add_custom(ctx: &Ctx, raw_url: &str, label: Option<&str>) -> crate::error::Result<String> {
     let url = norm_url(raw_url)?;
     let lbl = label.map(|l| clip(l, 40)).filter(|l| !l.is_empty());
     repo::run(
@@ -182,16 +183,16 @@ pub fn add_custom(ctx: &Ctx, raw_url: &str, label: Option<&str>) -> Result<Strin
         "INSERT INTO backends(url,label) VALUES(?,?) ON CONFLICT(url) DO UPDATE SET label=excluded.label",
         &[repo::s(&url), repo::si(lbl.as_deref())],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(url)
 }
 
 /// 移除登记。生效中的那条要一起回落，否则之后所有提交与取图都往一个不存在的地址打
-pub fn remove_custom(ctx: &Ctx, raw_url: &str) -> Result<String, String> {
+pub fn remove_custom(ctx: &Ctx, raw_url: &str) -> crate::error::Result<String> {
     let url = norm_url(raw_url)?;
-    repo::run(ctx, "DELETE FROM backends WHERE url=?", &[repo::s(&url)]).map_err(|e| e.to_string())?;
+    repo::run(ctx, "DELETE FROM backends WHERE url=?", &[repo::s(&url)])?;
     if active_url(ctx) == url {
-        repo::settings::del(ctx, "comfy_active").map_err(|e| e.to_string())?;
+        repo::settings::del(ctx, "comfy_active")?;
     }
     Ok(active_url(ctx))
 }
@@ -200,9 +201,9 @@ pub fn active_url(ctx: &Ctx) -> String {
     repo::settings::get(ctx, "comfy_active").unwrap_or_else(|| DEFAULT_URL.into())
 }
 
-pub fn set_active(ctx: &Ctx, raw_url: &str) -> Result<String, String> {
+pub fn set_active(ctx: &Ctx, raw_url: &str) -> crate::error::Result<String> {
     let url = norm_url(raw_url)?;
-    repo::settings::put(ctx, "comfy_active", &url).map_err(|e| e.to_string())?;
+    repo::settings::put(ctx, "comfy_active", &url)?;
     Ok(active_url(ctx))
 }
 
@@ -242,45 +243,59 @@ pub async fn scan(ctx: &Ctx) -> Vec<Value> {
     found
 }
 
-trait StripErr {
-    fn strip_err(self) -> String;
-}
-impl StripErr for reqwest::Error {
-    fn strip_err(self) -> String {
-        // reqwest 的 Display 会带上 URL，探活失败的文案要短，且不能把带 key 的 URL 漏出去
-        let kind = if self.is_timeout() {
-            "超时"
-        } else if self.is_connect() {
-            "连不上"
-        } else {
-            "请求失败"
-        };
-        format!("{kind}：{}", self).chars().take(200).collect()
+/// 探活的结论写进 JSON，所以交钥匙 + 参数：界面按当前语言查这一句
+fn err_fields(e: AppError) -> Map<String, Value> {
+    let (code, args) = e.reason();
+    let mut o = Map::new();
+    o.insert("error".into(), Value::String(code));
+    if let Some(a) = args {
+        o.insert("error_args".into(), Value::Object(a));
     }
+    o
+}
+
+/// 传输层失败：种类在这里判、句子在字典里。URL 已经在 `error_args` 里单独占一格。
+fn send_err(url: &str, e: reqwest::Error) -> AppError {
+    let code = if e.is_timeout() {
+        "srv.backend.timeout"
+    } else if e.is_connect() {
+        "srv.backend.connect"
+    } else {
+        "srv.backend.send"
+    };
+    AppError::detailed_args(502, code, json!({ "url": url.to_string() }), crate::util::reqwest_detail(&e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// 断言看的是钥匙不是句子：措辞改了不该让单测红
+    fn why(r: crate::error::Result<String>) -> String {
+        match r {
+            Ok(_) => String::new(),
+            Err(e) => e.reason().0,
+        }
+    }
+
     #[test]
     fn norm_url_与_js_同判() {
         assert_eq!(norm_url("127.0.0.1:8188").unwrap(), "http://127.0.0.1:8188");
         assert_eq!(norm_url("http://x.test/comfy/").unwrap(), "http://x.test/comfy");
         assert_eq!(norm_url("https://x.test:8443").unwrap(), "https://x.test:8443");
-        assert_eq!(norm_url(""), Err("地址不能为空".to_string()));
-        assert_eq!(norm_url("ftp://x"), Err("只支持 http / https".to_string()));
-        assert_eq!(norm_url("http://u:p@x"), Err("地址里不要带账号密码".to_string()));
-        assert_eq!(norm_url("http://x?a=1"), Err("地址里不要带查询参数".to_string()));
-        assert_eq!(norm_url("http://x#f"), Err("地址里不要带查询参数".to_string()));
+        assert_eq!(why(norm_url("")), "srv.url.empty");
+        assert_eq!(why(norm_url("ftp://x")), "srv.url.scheme");
+        assert_eq!(why(norm_url("http://u:p@x")), "srv.url.credentials");
+        assert_eq!(why(norm_url("http://x?a=1")), "srv.url.query");
+        assert_eq!(why(norm_url("http://x#f")), "srv.url.query");
     }
 
     #[test]
     fn norm_base_保留结尾斜杠_norm_url_不保留() {
         assert_eq!(norm_base("api.example.com").unwrap(), "https://api.example.com/");
         assert_eq!(norm_base("https://api.example.com/v1/").unwrap(), "https://api.example.com/v1");
-        assert_eq!(norm_base("file:///x"), Err("只支持 http / https".to_string()));
-        assert_eq!(norm_base(""), Err("base_url 不能为空".to_string()));
+        assert_eq!(why(norm_base("file:///x")), "srv.url.scheme");
+        assert_eq!(why(norm_base("")), "srv.url.baseEmpty");
     }
 
     #[test]

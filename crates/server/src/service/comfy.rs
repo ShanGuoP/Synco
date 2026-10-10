@@ -2,9 +2,10 @@
 //! 地址每次现取，切换后端不用重启进程。
 
 use crate::backend::{active_url, join};
+use crate::error::AppError;
 use crate::service::workflow::CROP_KEYS;
 use crate::state::Ctx;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -12,14 +13,14 @@ use std::time::Duration;
 ///
 /// 要挡的是"云端形状的 0 步 0 CFG"串回本机后被直接送进 KSampler——那不报错，
 /// 只出一张没人看得出问题的图。跳过并给理由，比悄悄跑一张废图诚实。
-pub fn sample_args(settings: &Value) -> std::result::Result<(i64, f64), String> {
-    let steps = crate::util::number_of(settings.get("steps")).ok_or("请求里没带采样步数")?;
-    let cfg = crate::util::number_of(settings.get("cfg")).ok_or("请求里没带 CFG")?;
+pub fn sample_args(settings: &Value) -> crate::error::Result<(i64, f64)> {
+    let steps = crate::util::number_of(settings.get("steps")).ok_or_else(|| AppError::bad("srv.comfy.noSteps"))?;
+    let cfg = crate::util::number_of(settings.get("cfg")).ok_or_else(|| AppError::bad("srv.comfy.noCfg"))?;
     if !steps.is_finite() || !(1.0..=200.0).contains(&steps) {
-        return Err(format!("采样步数不合法（{steps}）：这一路要 1–200 步，云端的结果没有步数，回填后请先补上"));
+        return Err(AppError::bad_args("srv.comfy.stepsBad", json!({ "n": steps.to_string() })));
     }
     if !cfg.is_finite() || !(0.0..=30.0).contains(&cfg) {
-        return Err(format!("CFG 不合法（{cfg}）：这一路要 0–30"));
+        return Err(AppError::bad_args("srv.comfy.cfgBad", json!({ "n": cfg.to_string() })));
     }
     Ok((steps.round() as i64, cfg))
 }
@@ -31,59 +32,46 @@ pub const T_POLL: u64 = 10_000;
 pub const T_FILE: u64 = 120_000;
 
 /// ComfyUI 出错时给的是 HTML 页，直接当 JSON 解析抛 SyntaxError 会把真正的原因吞掉
-async fn fetch_json(req: reqwest::RequestBuilder, url_for_msg: &str, ms: u64) -> Result<Value, String> {
-    let r = req.timeout(Duration::from_millis(ms)).send().await.map_err(|e| e.strip())?;
+async fn fetch_json(req: reqwest::RequestBuilder, url_for_msg: &str, ms: u64) -> crate::error::Result<Value> {
+    let r = req.timeout(Duration::from_millis(ms)).send().await.map_err(|e| send_err(url_for_msg, e))?;
     let status = r.status().as_u16();
-    let text = r.text().await.map_err(|e| e.strip())?;
+    let text = r.text().await.map_err(|e| send_err(url_for_msg, e))?;
     if !(100..=299).contains(&status) {
         let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let flat: String = flat.chars().take(180).collect();
-        return Err(format!(
-            "ComfyUI HTTP {status}：{}",
-            if flat.is_empty() { url_for_msg.to_string() } else { flat }
+        return Err(AppError::bad_args(
+            "srv.comfy.http",
+            json!({ "code": status, "detail": if flat.is_empty() { url_for_msg.to_string() } else { flat } }),
         ));
     }
     serde_json::from_str::<Value>(&text)
-        .map_err(|_| format!("ComfyUI 的应答不是 JSON（HTTP {status}）：{}", text.chars().take(180).collect::<String>()))
+        .map_err(|_| AppError::bad_args("srv.comfy.notJson", json!({ "code": status, "detail": text.chars().take(180).collect::<String>() })))
 }
 
-trait Strip {
-    fn strip(self) -> String;
-}
-impl Strip for reqwest::Error {
-    fn strip(self) -> String {
-        let kind = if self.is_timeout() {
-            "超时"
-        } else if self.is_connect() {
-            "连不上"
-        } else {
-            "请求失败"
-        };
-        // reqwest 的 Display 会把完整 URL 带进来（云端那条 URL 可能有凭据），
-        // 所以只取错误链上的下一层：连接被拒时会露出 io 层的 os error
-        let mut detail = String::new();
-        let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&self);
-        while let Some(e) = src {
-            let t = e.to_string();
-            if !t.is_empty() && !t.contains("http") {
-                detail = t;
-            }
-            src = e.source();
-        }
-        let msg = if detail.is_empty() { kind.to_string() } else { format!("{kind}：{detail}") };
-        msg.chars().take(200).collect()
-    }
+/// 传输层失败：种类在这里判、句子在字典里，调用方原样往外传。
+/// 别再包一句中文——那会做出"连不上 ComfyUI：Cannot reach ComfyUI"这种半译。
+/// 细节优先取错误链上的下一层（连接被拒时露出 io 层的 os error）：reqwest 的 Display
+/// 会把完整 URL 带进来，而链上没第二层时才退回它——URL 本来就在 `{url}` 这一格里。
+fn send_err(url: &str, e: reqwest::Error) -> AppError {
+    let code = if e.is_timeout() {
+        "srv.comfy.timeout"
+    } else if e.is_connect() {
+        "srv.comfy.connect"
+    } else {
+        "srv.comfy.send"
+    };
+    AppError::detailed_args(502, code, json!({ "url": url.to_string() }), crate::util::reqwest_detail(&e))
 }
 
 /// 上传一张图，返回 ComfyUI 侧的引用名（可能带子目录）
-pub async fn upload(ctx: &Ctx, buf: Vec<u8>, filename: &str) -> Result<String, String> {
+pub async fn upload(ctx: &Ctx, buf: Vec<u8>, filename: &str) -> crate::error::Result<String> {
     let url = join(&active_url(ctx), "/upload/image");
     let form = reqwest::multipart::Form::new().part(
         "image",
         reqwest::multipart::Part::bytes(buf)
             .file_name(filename.to_string())
             .mime_str("image/png")
-            .map_err(|e| e.to_string())?,
+            .expect("mime 是常量"),
     ).text("overwrite", "true");
     let j = fetch_json(ctx.http.post(&url).multipart(form), &url, T_UPLOAD).await?;
     Ok(match (j.get("subfolder").and_then(|v| v.as_str()), j.get("name").and_then(|v| v.as_str())) {
@@ -93,31 +81,30 @@ pub async fn upload(ctx: &Ctx, buf: Vec<u8>, filename: &str) -> Result<String, S
     })
 }
 
-pub async fn post_json(ctx: &Ctx, p: &str, obj: Value) -> Result<Value, String> {
+pub async fn post_json(ctx: &Ctx, p: &str, obj: Value) -> crate::error::Result<Value> {
     let url = join(&active_url(ctx), p);
     fetch_json(ctx.http.post(&url).json(&obj), &url, T_PROMPT).await
 }
 
 /// 把 ComfyUI 的产物写到 DATA 下的绝对路径
-pub async fn download_to(ctx: &Ctx, url: &str, dest: &std::path::Path) -> Result<(), String> {
-    let r = ctx.http.get(url).timeout(Duration::from_millis(T_FILE)).send().await.map_err(|e| e.strip())?;
+pub async fn download_to(ctx: &Ctx, url: &str, dest: &std::path::Path) -> crate::error::Result<()> {
+    let r = ctx.http.get(url).timeout(Duration::from_millis(T_FILE)).send().await.map_err(|e| send_err(url, e))?;
     if !r.status().is_success() {
-        return Err(format!("回传成图失败 HTTP {}", r.status().as_u16()));
+        return Err(AppError::bad_args("srv.comfy.download", json!({ "code": r.status().as_u16() })));
     }
-    let bytes = r.bytes().await.map_err(|e| e.strip())?;
+    let bytes = r.bytes().await.map_err(|e| send_err(url, e))?;
     // 一张 20–33MB 的成图落盘是几百毫秒的同步写，按在 worker 上整个窗口会跟着一顿
     let dest = dest.to_path_buf();
     crate::util::blocking(move || {
-        std::fs::write(&dest, &bytes)
-            .map_err(|e| crate::error::AppError::Fail(format!("写入 {} 失败：{e}", dest.display())))
+        std::fs::write(&dest, &bytes).map_err(|e| {
+            AppError::detailed_args(500, "srv.image.slotWrite", json!({ "path": dest.display().to_string() }), e)
+        })
     })
     .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// 队列里还活着的 prompt_id：服务重启时用它认哪些 running 记录已经是僵尸
-pub async fn live_prompts(ctx: &Ctx) -> Result<HashSet<String>, String> {
+pub async fn live_prompts(ctx: &Ctx) -> crate::error::Result<HashSet<String>> {
     let url = join(&active_url(ctx), "/queue");
     let j = fetch_json(ctx.http.get(&url), &url, T_POLL).await?;
     let mut ids = HashSet::new();
@@ -138,7 +125,7 @@ pub async fn live_prompts(ctx: &Ctx) -> Result<HashSet<String>, String> {
 
 pub enum Check {
     /// 后端连不上：与"没这条任务"是两种完全不同的事
-    Unreachable(String),
+    Unreachable(AppError),
     Queued,
     Lost,
     Error(String),
@@ -297,7 +284,7 @@ fn percent_encode(s: &str) -> String {
 pub async fn interrupt(ctx: &Ctx, prompt_id: &str) -> Vec<String> {
     let mut errs = Vec::new();
     if let Err(e) = post_json(ctx, "/interrupt", Value::Object(Map::new())).await {
-        errs.push(format!("interrupt：{e}"));
+        errs.push(e.text());
     }
     let pid = prompt_id.to_string();
     let url = join(&active_url(ctx), "/queue");
@@ -315,7 +302,7 @@ pub async fn interrupt(ctx: &Ctx, prompt_id: &str) -> Vec<String> {
         _ => {
             // 老版没有 DELETE /queue，退回 POST /queue 的 queue_remove
             if let Err(e) = post_json(ctx, "/queue", serde_json::json!({ "queue_remove": [pid] })).await {
-                errs.push(format!("移出队列：{e}"));
+                errs.push(e.text());
             }
         }
     }
@@ -429,14 +416,16 @@ pub fn build_graph(photo: &str, mask: &str, settings: &Value, seed: i64, cfg: &V
 /// 往**你那张图**里填本次提交的变量。动到的只有这几处：照片、遮罩、提示词、
 /// 种子/步数/CFG、LoRA 开关。裁切参数、模型名、连线关系一概按文件里那样跑——
 /// 这正是接管的意义：你在 ComfyUI 里看到什么，提交出去就是什么。
-pub fn inject_workflow(graph: &Map<String, Value>, roles: &Map<String, Value>, photo: &str, mask: &str, settings: &Value, seed: i64) -> Result<Value, String> {
+pub fn inject_workflow(graph: &Map<String, Value>, roles: &Map<String, Value>, photo: &str, mask: &str, settings: &Value, seed: i64) -> crate::error::Result<Value> {
     let mut g = graph.clone();
-    let mut set = |role: &str, key: &str, val: Value| -> Result<(), String> {
-        let id = roles.get(role).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).ok_or_else(|| format!("角色「{role}」没配上节点"))?;
-        let node = g.get_mut(id).ok_or_else(|| format!("角色「{role}」指的节点 {id} 不在这张图里"))?;
-        let inputs = node.as_object_mut().and_then(|n| n.get_mut("inputs")).and_then(|i| i.as_object_mut()).ok_or_else(|| format!("节点 {id} 没有 inputs"))?;
+    let mut set = |role: &str, key: &str, val: Value| -> crate::error::Result<()> {
+        let id = roles.get(role).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad_args("srv.comfy.roleNoNode", json!({ "role": role.to_string() })))?;
+        let node = g.get_mut(id).ok_or_else(|| {
+            AppError::bad_args("srv.comfy.roleNotInGraph", json!({ "role": role.to_string(), "id": id }))
+        })?;
+        let inputs = node.as_object_mut().and_then(|n| n.get_mut("inputs")).and_then(|i| i.as_object_mut()).ok_or_else(|| AppError::bad_args("srv.comfy.noInputs", json!({ "id": id })))?;
         if !inputs.contains_key(key) {
-            return Err(format!("节点 {id} 没有 {key} 这个输入"));
+            return Err(AppError::bad_args("srv.comfy.noInput", json!({ "id": id, "key": key })));
         }
         inputs.insert(key.to_string(), val);
         Ok(())
@@ -644,10 +633,10 @@ mod tests {
         let g = table(USER);
         let mut roles = table(ROLES);
         roles.remove("load_mask");
-        let e = inject_workflow(&g, &roles, "p", "m", &settings(), 1).unwrap_err();
+        let e = inject_workflow(&g, &roles, "p", "m", &settings(), 1).unwrap_err().text();
         assert!(e.contains("load_mask"), "{e}");
         let roles2 = table(r#"{"load_image":"999","load_mask":"22","text_encode":"41","ksampler":"43"}"#);
-        let e2 = inject_workflow(&g, &roles2, "p", "m", &settings(), 1).unwrap_err();
+        let e2 = inject_workflow(&g, &roles2, "p", "m", &settings(), 1).unwrap_err().text();
         assert!(e2.contains("999"), "{e2}");
     }
 
@@ -680,9 +669,9 @@ mod tests {
 
     #[test]
     fn 合法采样参数按面板区间放行() {
-        assert_eq!(sample_args(&json!({ "steps": 20, "cfg": 3 })), Ok((20, 3.0)));
-        assert_eq!(sample_args(&json!({ "steps": "4", "cfg": "0.5" })), Ok((4, 0.5)));
-        assert_eq!(sample_args(&json!({ "steps": 20.6, "cfg": 3 })), Ok((21, 3.0)), "步数取整");
+        assert_eq!(sample_args(&json!({ "steps": 20, "cfg": 3 })).unwrap(), (20, 3.0));
+        assert_eq!(sample_args(&json!({ "steps": "4", "cfg": "0.5" })).unwrap(), (4, 0.5));
+        assert_eq!(sample_args(&json!({ "steps": 20.6, "cfg": 3 })).unwrap(), (21, 3.0), "步数取整");
     }
 
     /// M4 的回归：云端行是 steps=0/cfg=0 的形状，串回本机时不能把 0 送进 KSampler
@@ -693,7 +682,7 @@ mod tests {
         }
         assert!(sample_args(&json!({ "steps": 999, "cfg": 3 })).is_err());
         assert!(sample_args(&json!({ "steps": 20, "cfg": 99 })).is_err());
-        let e = sample_args(&json!({ "steps": 0, "cfg": 0 })).unwrap_err();
+        let e = sample_args(&json!({ "steps": 0, "cfg": 0 })).unwrap_err().text();
         assert!(e.contains("步数"), "报错要指名是哪一项：{e}");
     }
 }

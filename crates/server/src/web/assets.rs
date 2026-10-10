@@ -3,12 +3,11 @@
 //! 桌面壳的窗口加载的是本机 http 地址，所以 HTML/JS/字体必须由这个服务给，
 //! 而不是由 Tauri 的资源协议给——不然 `/api/...` 这类相对请求会打到 tauri:// 上去。
 //! 开发态 rust-embed 走读盘，改完刷新就见效；`SYNCO_PUBLIC` 指了别的目录也以那边为准。
+//!
+//! 资源表本身（`Public`）在 `crate::text`：那个 derive 一处只能有一份，
+//! 服务端取文案与这里取文件走的是同一个嵌入。
 
-use rust_embed::RustEmbed;
-
-#[derive(RustEmbed)]
-#[folder = "../../public"]
-pub struct Public;
+use crate::text::Public;
 
 /// 磁盘上读不到时的兜底：发布态界面就在 exe 里。
 /// 返回形状与 `files::stat_and_read` 一致（ETag + 内容），调用方不用分两种来源写。
@@ -22,20 +21,13 @@ pub fn read(rel: &str, inm: Option<&str>) -> Option<(String, Option<Vec<u8>>)> {
     Some((etag, Some(hit.data.into_owned())))
 }
 
-/// debug 构建里 rust-embed 其实是读盘的，横幅要把这件事说清楚
-pub const fn source() -> &'static str {
-    if cfg!(debug_assertions) {
-        "读盘（rust-embed debug）"
-    } else {
-        "内嵌在 exe 里"
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn 入口页在资源表里() {
         // 取不到就说明 folder 路径或打包配置错了，界面会整片空白
-        assert!(super::Public::get("index.html").map(|f| f.data.len() > 200).unwrap_or(false));
+        assert!(crate::text::Public::get("index.html").map(|f| f.data.len() > 200).unwrap_or(false));
     }
 }

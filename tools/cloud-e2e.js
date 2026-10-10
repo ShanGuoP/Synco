@@ -346,7 +346,7 @@ async function main() {
   check('这一行的参数快照标了 full', JSON.parse(fullRow.settings_json || '{}').full === true, fullRow.settings_json);
   const localFull = await req(srv.base, 'POST', '/api/run', { image_ids: [iid], settings: { prompt: 'x', steps: 20, cfg: 3, full: true } });
   const lf = (localFull.body.results || [])[0] || {};
-  check('本机那条遇到 full 明确拒绝而不是偷跑局部重绘', lf.skipped === true && /只走云端/.test(String(lf.reason)), JSON.stringify(lf));
+  check('本机那条遇到 full 明确拒绝而不是偷跑局部重绘', lf.skipped === true && lf.reason === 'srv.submit.fullNeedsCloud', JSON.stringify(lf));
 
   // ---- 画布笔迹快照：每一步各存一份，取回要逐字节回到当时 ----
   const cv = await req(srv.base, 'POST', '/api/canvas/create', { name: '快照自检', w: 1024, h: 1024 });

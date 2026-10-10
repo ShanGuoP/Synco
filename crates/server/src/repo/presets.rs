@@ -18,7 +18,7 @@ pub fn norm_kind(v: Option<&str>) -> String {
 }
 
 /// 带 project_id 时"全局 + 这个项目"都要列出来，不带时只看全局。
-/// 短语按 id 排（胶囊那一排的顺序是有意义的，出厂 7 条的摆位不该被字面排序打乱），预设按名字排。
+/// 短语按 id 排（胶囊那一排的顺序是有意义的，出厂 10 条的摆位不该被字面排序打乱），预设按名字排。
 pub fn list(ctx: &Ctx, project_id: Option<i64>, kind: &str) -> Result<Vec<Value>> {
     let order = if kind == KIND_PHRASE { "id" } else { "name" };
     let sql = match project_id {

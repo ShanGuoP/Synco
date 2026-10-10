@@ -6,7 +6,7 @@ import { el, $, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { api, fileToPayload } from '../../core/api.js';
 import { encodeMask } from '../../core/maskEncode.js';
-import { t } from '../../core/i18n.js';
+import { dx, t } from '../../core/i18n.js';
 import { store, loadProject, loadPhrases } from '../../state.js';
 import { go } from '../../core/router.js';
 import { toastOk, toastErr, toastBusy } from '../../ui/toast.js';
@@ -439,7 +439,7 @@ async function submit() {
   let r;
   try { r = await api.canvasGenerate(imgId, { prompt }, rerunOf); }
   catch (e) { release(); toastErr(t('gen.submitFail'), e.message); return; }
-  if (!r?.result_id) { release(); toastErr(t('cv.notQueued'), r?.error || t('cv.cloudRejected')); return; }
+  if (!r?.result_id) { release(); toastErr(t('cv.notQueued'), dx(r?.error, r?.error_args) || t('cv.cloudRejected')); return; }
   const nf = c.refList.length;
   line(rerunOf
     ? nf ? t('cv.queuedRerunRefs', { id: r.result_id, from: rerunOf, n: nf }) : t('cv.queuedRerun', { id: r.result_id, from: rerunOf })
@@ -450,12 +450,12 @@ async function submit() {
       release();
       done?.status === 'done'
         ? line(t('cv.doneLine', { id: done.id }))
-        : line(t('cv.failLine', { msg: String(done?.error || t('ed.unknown')).slice(0, 90) }), true);
+        : line(t('cv.failLine', { msg: (dx(done?.error, done?.error_args) || t('ed.unknown')).slice(0, 90) }), true);
       try {
         const d = await api.canvas(imgId);
         if (c.imgId === imgId) syncResults(d.results || []);
       } catch { /* 列表刷新失败不影响这次结果本身 */ }
-      done?.status === 'done' ? toastOk(t('cv.doneToast'), `#${done.id}`) : toastErr(t('gen.failTitle'), String(done?.error || '').slice(0, 120));
+      done?.status === 'done' ? toastOk(t('cv.doneToast'), `#${done.id}`) : toastErr(t('gen.failTitle'), dx(done?.error, done?.error_args).slice(0, 120));
     },
   });
 }
@@ -472,7 +472,7 @@ function line(txt, isErr) {
  */
 function showResult(r) {
   if (r.status !== 'done' || r.final_dead) {
-    toastErr(r.final_dead ? t('cv.resultDead') : t('cv.notYet'), r.error || t('cv.stillQueued'));
+    toastErr(r.final_dead ? t('cv.resultDead') : t('cv.notYet'), dx(r.error, r.error_args) || t('cv.stillQueued'));
     return;
   }
   c.cmpId = r.id;

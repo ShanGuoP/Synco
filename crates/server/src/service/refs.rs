@@ -4,14 +4,14 @@
 //! 提交时由队列把当次槽位复制成**这一行自己的**快照（与画稿快照同形），
 //! 所以"取回这一版""用这组参数再跑一次"永远拿得到当时那几张，而不是此刻的槽位。
 
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::img::codec;
 use crate::models::entity::{Image, ResultRow};
 use crate::repo::{images as rimg, settings as rset};
 use crate::service::{cloud, imagesvc};
 use crate::state::Ctx;
 use crate::util;
-use serde_json::Value;
+use serde_json::{json, Value};
 use stitch_core::Rgba;
 
 /// 一次最多带几张参考图。模型侧的张数上限**没实测**（`tools/sketch-probe.js --refs` 就是去测那一族），
@@ -55,18 +55,18 @@ pub fn set(ctx: &Ctx, img: &Image, rels: &[String]) -> Result<()> {
 /// 小图在这里被**折大**到像素下限、大图被折小，所以参考图不会因为"只是一张 512 的色板"被打回；
 /// 只有根本折不出合法档的（全景 >3:1 那种）才拒，理由是发出去也必被中转判死。
 /// 拍白底是因为参考图常带 alpha，而 `edits` 收的是不透明图——与画稿发出去前那一步同一条处理。
-fn normalize(ctx: &Ctx, bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
+fn normalize(ctx: &Ctx, bytes: &[u8]) -> Result<Vec<u8>> {
     let dec = codec::decode(bytes)?;
     fold(&dec, cloud::settings(ctx).stitch_edge.max(1) as u32).map(|o| codec::encode_png(&o))
 }
 
 /// 折到合法档位：已经在框里就只拍平，不动像素；超了才按档位缩放。
-fn fold(dec: &Rgba, edge: u32) -> std::result::Result<Rgba, String> {
+fn fold(dec: &Rgba, edge: u32) -> Result<Rgba> {
     let fit = stitch_core::geom::fit_size(dec.w as u32, dec.h as u32, edge);
     if fit.unfit {
-        return Err(format!(
-            "参考图 {}×{} 折不进云端允许的框（长边≤{}、比例≤3:1、像素 655360~8294400）",
-            dec.w, dec.h, stitch_core::geom::EDGE_MAX
+        return Err(AppError::bad_args(
+            "srv.image.refFold",
+            json!({ "w": dec.w, "h": dec.h, "edge": stitch_core::geom::EDGE_MAX }),
         ));
     }
     let flat = codec::flatten(dec, [255, 255, 255]);
@@ -85,52 +85,52 @@ fn slot_name(img: &Image) -> String {
 }
 
 /// 落一张新槽位，返回它的 rel。体积在这一步已经有界（重编码 PNG + 折档）。
-pub fn add_bytes(ctx: &Ctx, img: &Image, bytes: &[u8]) -> std::result::Result<String, String> {
+pub fn add_bytes(ctx: &Ctx, img: &Image, bytes: &[u8]) -> Result<String> {
     let png = normalize(ctx, bytes)?;
     let rel = slot_name(img);
-    imagesvc::write_bytes(&ctx.data.join(&rel), &png).map_err(|e| format!("参考图落盘失败：{e}"))?;
+    // 落盘那层已经有自己的钥匙（写失败/落位失败带路径），原样传出去，不再包一句中文
+imagesvc::write_bytes(&ctx.data.join(&rel), &png)?;
     Ok(rel)
 }
 
 /// 从库里另一张图取参考：**复制**一份成这个画布的槽位，不是引用那个 id。
 /// 原图后来被删、被重新导入，都不该让"这一版参考了哪张"变成说不清的事。
-pub fn add_from_image(ctx: &Ctx, img: &Image, src_id: i64) -> std::result::Result<String, String> {
-    let src = rimg::by_id(ctx, src_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "那张图已经不在库里了".to_string())?;
+pub fn add_from_image(ctx: &Ctx, img: &Image, src_id: i64) -> Result<String> {
+    let src = rimg::by_id(ctx, src_id)?
+        .ok_or_else(|| AppError::bad("srv.image.refNotInLib"))?;
     let p = util::data_file(&ctx.data, &src.orig_path)
-        .ok_or_else(|| format!("那张图的文件不在磁盘上了：{}", src.name))?;
-    let bytes = std::fs::read(&p).map_err(|e| format!("读那张图失败：{e}"))?;
+        .ok_or_else(|| AppError::bad_args("srv.image.refNotOnDisk", json!({ "name": src.name.clone() })))?;
+    let bytes = std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.refRead", e))?;
     add_bytes(ctx, img, &bytes)
 }
 
 /// 历史条目"回填这组参考图"：把那一行的快照复制成新的槽位文件。
 /// 复制而不直接指向快照——快照跟着那条记录删，槽位要是挂在它上面，删记录就会把待提交的一组参考图一起带走。
-pub fn add_from_result(ctx: &Ctx, img: &Image, row: &ResultRow) -> std::result::Result<Vec<String>, String> {
+pub fn add_from_result(ctx: &Ctx, img: &Image, row: &ResultRow) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for rel in row_refs(row) {
         if !ours(img.project_id, &rel) {
             continue;
         }
-        let src = util::data_file(&ctx.data, &rel).ok_or_else(|| "这一版的参考图文件已经不在磁盘上了".to_string())?;
-        let bytes = std::fs::read(&src).map_err(|e| format!("读参考图快照失败：{e}"))?;
+        let src = util::data_file(&ctx.data, &rel).ok_or_else(|| AppError::bad("srv.image.refSnapGone"))?;
+        let bytes = std::fs::read(&src).map_err(|e| AppError::fail_detail("srv.image.refSnapRead", e))?;
         out.push(add_bytes(ctx, img, &bytes)?);
     }
     Ok(out)
 }
 
 /// 提交这一刻：把当次槽位复制成**这一行自己的**快照，名字带 rid 所以永不覆写。
-pub fn snapshot(ctx: &Ctx, img: &Image, rid: i64, slots: &[String]) -> std::result::Result<Vec<String>, String> {
+pub fn snapshot(ctx: &Ctx, img: &Image, rid: i64, slots: &[String]) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for (i, rel) in slots.iter().enumerate() {
         let src = util::data_file(&ctx.data, rel)
-            .ok_or_else(|| format!("参考图文件不在磁盘上了：{rel}"))?;
+            .ok_or_else(|| AppError::bad_args("srv.image.refFileGone", json!({ "path": rel.clone() })))?;
         let dst = util::rel_path(&[
             "projects".into(),
             img.project_id.to_string(),
             format!("g{}_{rid}_ref{}.png", img.id, i + 1),
         ]);
-        std::fs::copy(&src, ctx.data.join(&dst)).map_err(|e| format!("复制参考图失败：{e}"))?;
+        std::fs::copy(&src, ctx.data.join(&dst)).map_err(|e| AppError::fail_detail("srv.image.refCopy", e))?;
         out.push(dst);
     }
     Ok(out)
@@ -146,11 +146,11 @@ pub fn row_refs(row: &ResultRow) -> Vec<String> {
 }
 
 /// 发出去时的字节：快照已在 normalize 那一步折成合法 PNG，这里只读不算。
-pub fn row_payloads(ctx: &Ctx, row: &ResultRow) -> std::result::Result<Vec<Vec<u8>>, String> {
+pub fn row_payloads(ctx: &Ctx, row: &ResultRow) -> Result<Vec<Vec<u8>>> {
     let mut out = Vec::new();
     for rel in row_refs(row) {
         match util::data_file(&ctx.data, &rel) {
-            Some(p) => out.push(std::fs::read(&p).map_err(|e| format!("读参考图失败：{e}"))?),
+            Some(p) => out.push(std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.refRead", e))?),
             // 快照被手动删掉时这一版就少一张：宁可少发一张并留痕，也不要整单因为一张读不到而失败
             None => eprintln!("  这一版的参考图少了文件（#{rid}）：{rel}", rid = row.id),
         }

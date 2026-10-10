@@ -176,18 +176,18 @@ fn clarity_radius(w: usize, h: usize) -> usize {
     (w.min(h) / 48).clamp(2, 32)
 }
 
-/// 内置预设 = 滑杆参数包，没有任何额外算子。名字给前端当 `color.preset` 用。
+/// 内置预设 = 滑杆参数包，没有任何额外算子。第二列是给界面的**钥匙**（`ad.pn*`），不是名字本身。
 pub const PRESETS: &[(&str, &str)] = &[
-    ("clean", "纯净"),
-    ("warm", "暖阳"),
-    ("film", "胶片"),
-    ("mono", "黑白对比"),
-    ("cool", "冷调"),
-    ("soft", "人像柔和"),
-    ("crisp", "通透"),
-    ("teal", "青橙"),
-    ("faded", "褪色"),
-    ("night", "夜色"),
+    ("clean", "ad.pnClean"),
+    ("warm", "ad.pnWarm"),
+    ("film", "ad.pnFilm"),
+    ("mono", "ad.pnMono"),
+    ("cool", "ad.pnCool"),
+    ("soft", "ad.pnSoft"),
+    ("crisp", "ad.pnCrisp"),
+    ("teal", "ad.pnTeal"),
+    ("faded", "ad.pnFaded"),
+    ("night", "ad.pnNight"),
 ];
 
 /// 取预设的滑杆值；未知名字返回 `None`，由调用方决定报错还是忽略

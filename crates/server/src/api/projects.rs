@@ -1,6 +1,6 @@
 //! 路由薄层：只做参数解析、状态码与响应形状；业务在 `crate::service`，读写在 `crate::repo`。
 
-use super::common::{bad, batch_limit, body_of, err, ok, path_id, save_batch};
+use super::common::{bad, bad_args, batch_limit, body_of, err, ok, path_id, save_batch};
 use crate::error::Result;
 use crate::models::dto;
 use crate::repo;
@@ -38,7 +38,7 @@ pub async fn projects_list(State(ctx): State<Shared>) -> Result<Response> {
 /// 但纯空格不能当名字存进去（早期就这么写过，首页会出现看不见的项目）
 fn project_name(body: &Value) -> String {
     let raw = body.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
-    util::clip(if raw.is_empty() { "未命名项目" } else { raw }, 60)
+    util::clip(if raw.is_empty() { "未命名项目" /* i18n-keep 建项目时落库的默认名，翻译它等于改已存数据 */ } else { raw }, 60)
 }
 
 pub async fn projects_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
@@ -47,7 +47,7 @@ pub async fn projects_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Re
     // 张数在建项目之前先判：反过来先建后判会留下一个空项目挂在库里
     if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
         if let Some(msg) = batch_limit(files) {
-            return Ok(bad(msg));
+            return Ok(bad_args("srv.common.batchMax", msg));
         }
     }
     let pid = rproj::create(&ctx, &name)?;
@@ -65,7 +65,7 @@ pub async fn project_rename(State(ctx): State<Shared>, APath(id): APath<String>,
     let body = body_of(raw).await?;
     let raw_name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
     if raw_name.is_empty() {
-        return Ok(bad("项目名不能是空的"));
+        return Ok(bad("srv.project.nameEmpty"));
     }
     let name = util::clip(raw_name, 60);
     if rproj::rename(&ctx, pid, &name)? == 0 {

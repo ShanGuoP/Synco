@@ -25,7 +25,7 @@ pub async fn image_get(State(ctx): State<Shared>, APath(id): APath<String>) -> R
         .collect();
     let mut out = match dto::image_json(&ctx, &img, false).as_object().cloned() {
         Some(m) => m,
-        None => return Err(AppError::Fail("这张图的响应构不出来（库里的行坏了）".into())),
+        None => return Err(AppError::fail("srv.image.rowBroken")),
     };
     out.insert("results".into(), Value::Array(results.clone()));
     out.insert("last".into(), results.first().cloned().unwrap_or(Value::Null));
@@ -53,7 +53,7 @@ pub async fn tiles_get(State(ctx): State<Shared>, APath(id): APath<String>) -> R
     // 限流与"派生档同时在制不超过两份"是同一条纪律，见 imagesvc::tiles_async
     match imagesvc::tiles_async(&ctx, img).await {
         Ok(v) => Ok(ok(v)),
-        Err(e) => Ok(err(500, e.as_str())),
+        Err(e) => Err(e),
     }
 }
 
@@ -122,10 +122,10 @@ pub async fn mask_post(State(ctx): State<Shared>, APath(id): APath<String>, raw:
         // 所以仍走 write_bytes 那套 .part→rename 纪律
         let rel = util::blocking(move || -> Result<String> {
             if crate::img::codec::decode(&bytes).is_err() {
-                return Err(AppError::bad("遮罩不是能解码的 PNG，这次没有覆盖已有遮罩"));
+                return Err(AppError::bad("srv.image.maskBadPng"));
             }
             let rel = util::rel_path(&["projects".into(), pid.to_string(), format!("{stem}_mask.png")]);
-            imagesvc::write_bytes(&data.join(&rel), &bytes).map_err(AppError::Fail)?;
+            imagesvc::write_bytes(&data.join(&rel), &bytes)?;
             Ok(rel)
         })
         .await?;

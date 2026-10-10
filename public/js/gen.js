@@ -1,7 +1,7 @@
 // 生成任务层：提交 / 轮询 / 状态回写，项目页批量与编辑器单张共用
 'use strict';
 import { api, ApiError } from './core/api.js';
-import { t } from './core/i18n.js';
+import { dx, t } from './core/i18n.js';
 import { store, setJob, touchImage, saveSettings } from './state.js';
 import { toast, toastErr, toastOk, toastBusy } from './ui/toast.js';
 
@@ -70,8 +70,8 @@ async function tick() {
       });
       toastOk(t('gen.doneTitle'), job.t0 ? t('gen.doneBody', { id: rid, sec: Math.round((Date.now() - job.t0) / 1000) }) : t('gen.doneBodyBare', { id: rid }));
     } else {
-      setJob(job.imgId, { state: 'err', resultId: rid, error: r.error || t('gen.noReason') });
-      toastErr(t('gen.failTitle'), String(r.error || '').slice(0, 120));
+      setJob(job.imgId, { state: 'err', resultId: rid, error: dx(r.error, r.error_args) || t('gen.noReason') });
+      toastErr(t('gen.failTitle'), dx(r.error, r.error_args).slice(0, 120));
     }
     callDone(job, r);
   }
@@ -117,9 +117,9 @@ export async function submit(ids, settings, opt = {}) {
 
   /* 后端在 ComfyUI 拒收时返回 200 + {error} */
   if (r?.error) {
-    for (const id of ids) setJob(id, { state: 'err', error: r.error });
-    toastErr(t('gen.rejectTitle'), String(r.error).slice(0, 160));
-    return { ok: 0, skipped: [], error: r.error };
+    for (const id of ids) setJob(id, { state: 'err', error: dx(r.error, r.error_args) });
+    toastErr(t('gen.rejectTitle'), dx(r.error, r.error_args).slice(0, 160));
+    return { ok: 0, skipped: [], error: dx(r.error, r.error_args) };
   }
 
   let ok = 0;
@@ -127,7 +127,7 @@ export async function submit(ids, settings, opt = {}) {
   for (const one of (r.results || [])) {
     if (one.skipped) {
       skipped.push(one);
-      setJob(one.image_id, { state: 'skip', error: one.reason });
+      setJob(one.image_id, { state: 'skip', error: dx(one.reason, one.reason_args) });
       continue;
     }
     ok++;
@@ -137,7 +137,7 @@ export async function submit(ids, settings, opt = {}) {
   }
   if (ok && !opt.quiet) toastBusy(t('gen.submittedTitle', { n: ok }), t('gen.submittedBody'));
   startPolling();
-  return { ok, skipped, results: done, error: ok ? undefined : (skipped[0]?.reason || t('gen.noneAccepted')) };
+  return { ok, skipped, results: done, error: ok ? undefined : (dx(skipped[0]?.reason, skipped[0]?.reason_args) || t('gen.noneAccepted')) };
 }
 
 /** 用户中断：从轮询里摘掉，别让下一轮又把状态改回 running */

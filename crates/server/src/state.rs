@@ -66,14 +66,29 @@ impl Ctx {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn mark_error(&self, id: i64, msg: &str) {
+    /// 把一行判死并写下原因。**存的是钥匙 + 参数**，不是某一语言的句子：
+    /// 库里的东西要能跟着界面语言走，老库里的整句中文也照样读得出来（查不到钥匙就原样显示）。
+    pub fn mark_error(&self, id: i64, code: &str, args: serde_json::Value) {
         self.misses.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-        let truncated: String = msg.chars().take(400).collect();
+        let truncated: String = code.chars().take(400).collect();
+        // 没参数就存 NULL，别存一个 "{}" 让读侧去猜
+        let args = match args {
+            serde_json::Value::Object(m) if !m.is_empty() => Some(serde_json::Value::Object(m).to_string()),
+            _ => None,
+        };
         // 只推进还在排/还在跑的行：已经 done 的那张不该被一次迟到的判死改成 error
         let _ = self
             .db()
-            .prepare_cached("UPDATE results SET status=?, error=? WHERE id=? AND status IN ('running','queued')")
-            .and_then(|mut st| st.execute(("error", truncated.as_str(), id)));
+            .prepare_cached("UPDATE results SET status=?, error=?, error_args=? WHERE id=? AND status IN ('running','queued')")
+            .and_then(|mut st| st.execute(("error", truncated.as_str(), args.as_deref(), id)));
+    }
+
+    /// 用另一把错误的钥匙与参数判死这一行：嵌套失败（快照没写成，这一版就没有）原样传钥匙，不包句子。
+    pub fn mark_error_of(&self, id: i64, e: &crate::error::AppError) {
+        match e.keyed() {
+            Some((code, args)) => self.mark_error(id, code, serde_json::Value::Object(args)),
+            None => self.mark_error(id, &e.to_string(), serde_json::Value::Null),
+        }
     }
 
     fn jobs(&self) -> std::sync::MutexGuard<'_, HashMap<i64, LiveJob>> {

@@ -294,7 +294,7 @@ async function m3SelfCheck(base, dataDir) {
   // M4 的回归：云端行是 0 步 0 CFG，串回本机这条路的提交必须被挡下而不是跑出一张废图
   const run0 = await req(base, 'POST', '/api/run', { image_ids: [iid], settings: { prompt: 'x', steps: 0, cfg: 0 } });
   const sk0 = (run0.body.results || [])[0] || {};
-  ok('本机提交拒收云端形状的 0 步 0 CFG', sk0.skipped === true && /步数/.test(String(sk0.reason || '')), JSON.stringify(run0.body).slice(0, 180));
+  ok('本机提交拒收云端形状的 0 步 0 CFG', sk0.skipped === true && sk0.reason === 'srv.comfy.stepsBad', JSON.stringify(run0.body).slice(0, 180));
 
   // 派生档要跟着图一起删掉，不然目录只涨不落
   await req(base, 'DELETE', `/api/images/${iid}`);
@@ -358,7 +358,18 @@ async function phraseSelfCheck(base) {
   };
   const seeded = await req(base, 'GET', '/api/presets?kind=phrase');
   const rows = seeded.body || [];
-  ok('出厂 7 条短语已播种进库', Array.isArray(rows) && rows.length === 7, `${rows.length} 条`);
+  ok('出厂 10 条短语已播种进库', Array.isArray(rows) && rows.length === 10, `${rows.length} 条`);
+  // 出厂句子的三条写法规矩（钉住它，别被后来的润色悄悄改回去）：
+  // 一条只讲一个目标状态、正向里不写排除式、皮肤与妆容那两条必须自带"自然"限定
+  const zhOnes = rows.filter(r => !/（英文）$/.test(r.name));
+  ok('中文短语不带排除式说法', zhOnes.every(r => !/(不要|不许|禁止|切勿|不应|没有)/.test(r.prompt)),
+    JSON.stringify(zhOnes.filter(r => /(不要|不许|禁止|切勿|不应|没有)/.test(r.prompt)).map(r => r.name)));
+  ok('皮肤与妆容类带克制限定', zhOnes.filter(r => /皮肤|妆/.test(r.name)).every(r => /自然|轻薄|柔和/.test(r.prompt)),
+    JSON.stringify(zhOnes.filter(r => /皮肤|妆/.test(r.name)).map(r => r.prompt)));
+  const enOne = rows.find(r => /（英文）$/.test(r.name));
+  ok('云端那条写明只改遮罩并列出保持清单',
+    !!enOne && /Change only the masked area/.test(enOne.prompt) && /exactly the same/.test(enOne.prompt),
+    String(enOne && enOne.prompt).slice(0, 80));
   ok('短语列表里不混进参数预设', rows.every(r => r.kind === 'phrase'), JSON.stringify(rows.slice(0, 2).map(r => r.kind)));
   const presets0 = await req(base, 'GET', '/api/presets');
   ok('默认只列预设桶', (presets0.body || []).every(r => r.kind !== 'phrase'), JSON.stringify((presets0.body || []).slice(0, 3).map(r => r.kind)));
@@ -389,7 +400,7 @@ async function phraseSelfCheck(base) {
   // 守卫要求 POST 带 application/json，delete 这类无体请求要给个 {}
   for (const r of [add, cross, a, b, long]) await req(base, 'POST', `/api/presets/${r.body.id}/delete`, {});
   const after = await req(base, 'GET', '/api/presets?kind=phrase');
-  ok('删完回到出厂 7 条', (after.body || []).length === 7, `${(after.body || []).length} 条`);
+  ok('删完回到出厂 10 条', (after.body || []).length === 10, `${(after.body || []).length} 条`);
   return fails;
 }
 
@@ -421,11 +432,14 @@ async function workflowSelfCheck(base, dataDir) {
 
   // 参数读得到 ≠ 这张图能用来提交：缺必需角色时必须拒绝，而不是悄悄改用内置图
   const roles = await req(base, 'GET', '/api/workflow/roles');
+  // 清单里每一条都是 {code, args}：判钥匙与角色，不判句子（措辞改了不该让门红）
   ok('图不完整时拒绝接管而不是回退', roles.status === 200 && roles.body.is_api === true && roles.body.can_takeover === false
-    && String(roles.body.errors.join('')).includes('找不到节点'), JSON.stringify(roles.body.errors).slice(0, 220));
+    && (roles.body.errors || []).some(e => e.code === 'srv.wf.roleMissing' && e.args?.role?.code === 'wf.role.loadImage'),
+    JSON.stringify(roles.body.errors).slice(0, 220));
   ok('角色表回得来这个文件的节点清单', (roles.body.nodes || []).length === 6, JSON.stringify((roles.body.nodes || []).map(x => x.id)));
   const badRole = await req(base, 'POST', '/api/workflow/roles', { roles: { unet: '14' } });
-  ok('指错类名的角色被拒并给理由', (badRole.body.rejected || []).length === 1 && /UNETLoader/.test(String(badRole.body.rejected[0])), JSON.stringify(badRole.body.rejected));
+  ok('指错类名的角色被拒并给理由', (badRole.body.rejected || []).length === 1
+    && badRole.body.rejected[0].code === 'srv.wf.roleClass' && badRole.body.rejected[0].args?.class === 'UNETLoader', JSON.stringify(badRole.body.rejected));
   const junk = path.join(dataDir, 'wf-junk.json');
   fs.writeFileSync(junk, JSON.stringify({ hello: { world: 1 } }));
   // 这个接口不接路径参数：带了也只会按库里存的那条走（免得变成任意本地文件的读取口）
@@ -436,9 +450,9 @@ async function workflowSelfCheck(base, dataDir) {
   const emptyWf = path.join(dataDir, 'wf-empty.json');
   fs.writeFileSync(emptyWf, JSON.stringify({ nodes: [], links: [] }));
   const set2 = await req(base, 'POST', '/api/settings/workflow', { path: emptyWf.replace(/\\/g, '/') });
-  ok('读不到已知节点时不谎称读自工作流', set2.body.cfg_source === 'builtin' && /没有本管线认识的节点/.test(String(set2.body.cfg_error)), JSON.stringify(set2.body).slice(0, 220));
+  ok('读不到已知节点时不谎称读自工作流', set2.body.cfg_source === 'builtin' && set2.body.cfg_error?.code === 'srv.wf.noParams', JSON.stringify(set2.body).slice(0, 220));
   const set3 = await req(base, 'POST', '/api/settings/workflow', { path: path.join(dataDir, 'nope.json').replace(/\\/g, '/') });
-  ok('文件不存在说得不含糊', set3.body.cfg_source === 'builtin' && String(set3.body.cfg_error).includes('不存在'), JSON.stringify(set3.body).slice(0, 160));
+  ok('文件不存在说得不含糊', set3.body.cfg_source === 'builtin' && set3.body.cfg_error?.code === 'srv.wf.fileMissing', JSON.stringify(set3.body).slice(0, 160));
   return fails;
 }
 
@@ -470,7 +484,7 @@ async function refsSelfCheck(base, dataDir) {
   const gc = await req(base, 'POST', `/api/canvas/${b}/generate`, { settings: { prompt: '另一张画布的那一版' } });
   const ridB = gc.body.result_id;
   const cross = await req(base, 'POST', `/api/canvas/${a}/refs`, { from_result: ridB });
-  ok('别的画布的记录不能往这张上搬参考图', cross.status === 400 && /不是这张画布/.test(String(cross.body?.error || '')),
+  ok('别的画布的记录不能往这张上搬参考图', cross.status === 400 && cross.body?.code === 'srv.canvas.wrongOwner',
     `${cross.status} ${JSON.stringify(cross.body)}`);
 
   const one = await req(base, 'GET', `/api/canvas/${a}`);

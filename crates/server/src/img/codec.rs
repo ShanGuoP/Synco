@@ -1,10 +1,12 @@
 //! 像素数组与图片字节之间的唯一通道。
 //! JPEG 用于 thumb/proxy（体积小、编码快），PNG 只保留上游给的就是 PNG 的场合（成图三件套、蒙版）。
 
+use crate::error::{AppError, Result};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ExtendedColorType as ColorType, ImageDecoder, ImageEncoder, ImageReader};
+use serde_json::json;
 use stitch_core::Rgba;
 use std::io::Cursor;
 
@@ -19,18 +21,21 @@ const MAX_DECODE_PX: u64 = 60_000_000;
 /// 解码成 RGBA，并把 EXIF 方向烘焙进像素。
 /// 浏览器渲染 `<img>` 时自己按 EXIF 转，我们的缩略图不转就会出现"原图正着看、缩略图横着躺"，
 /// 所以这一步必须在服务端做，而不是指望前端。
-pub fn decode(bytes: &[u8]) -> Result<Rgba, String> {
+pub fn decode(bytes: &[u8]) -> Result<Rgba> {
     let reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|e| format!("认不出图片格式：{e}"))?;
-    let mut decoder = reader.into_decoder().map_err(|e| format!("建解码器失败：{e}"))?;
+        .map_err(|e| AppError::detail("srv.image.badFormat", e))?;
+    let mut decoder = reader.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
     let (dw, dh) = decoder.dimensions();
     if dw == 0 || dh == 0 || dw.max(dh) > MAX_DECODE_EDGE || dw as u64 * dh as u64 > MAX_DECODE_PX {
-        return Err(format!("图片尺寸超出能处理的范围（{dw}×{dh}；上限长边 {MAX_DECODE_EDGE}、总像素 {MAX_DECODE_PX}）"));
+        return Err(AppError::bad_args(
+            "srv.image.dimsOut",
+            json!({ "w": dw, "h": dh, "edge": MAX_DECODE_EDGE, "px": MAX_DECODE_PX }),
+        ));
     }
     // PNG/WEBP 的解码器没有 orientation()，默认就是 Unspecified；JPEG/TIFF 会真读
     let orient = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut img = DynamicImage::from_decoder(decoder).map_err(|e| format!("解码失败：{e}"))?;
+    let mut img = DynamicImage::from_decoder(decoder).map_err(|e| AppError::detail("srv.image.decodeFail", e))?;
     img.apply_orientation(orient);
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);

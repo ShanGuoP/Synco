@@ -28,11 +28,11 @@ fn ops_of_body(body: &Value) -> Value {
 async fn photo_of(ctx: &Shared, id: i64) -> Result<Option<Image>> {
     let Some(img) = rimg::by_id(ctx, id)? else { return Ok(None) };
     if img.is_sketch() {
-        return Err(AppError::bad("画稿不走本地调整：那是画布自己的链路"));
+        return Err(AppError::bad("srv.adjust.sketchPath"));
     }
     // 行在但文件不在：与其在解码处抛一句 ENOENT，不如在入口说清楚
     if !util::file_alive(&ctx.data, &Value::String(img.orig_path.clone())) {
-        return Err(AppError::bad("原图文件已不在磁盘上（data/projects 被清过？）"));
+        return Err(AppError::bad("srv.submit.origGone"));
     }
     Ok(Some(img))
 }
@@ -65,11 +65,11 @@ pub async fn adjust_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
     let long_edge = img.w.max(img.h).max(1) as usize;
     let ctx2 = ctx.clone();
     let saved = util::blocking(move || -> Result<Value> {
-        let (mut ops, mut rep) = EditOps::parse(&payload).map_err(AppError::bad)?;
+        let (mut ops, mut rep) = EditOps::parse(&payload).map_err(|e| AppError::detail("srv.adjust.badOpsJson", e))?;
         // LUT 名字要拿去拼路径：这里先给个准信，服务侧读文件时还有一道白名单
         if let Some(l) = ops.lut.as_ref() {
             if l.name.contains('/') || l.name.contains('\\') || l.name.contains("..") {
-                return Err(AppError::bad("LUT 只能选 data/luts 里的那一层文件"));
+                return Err(AppError::bad("srv.adjust.lutOutside"));
             }
         }
         rep.extend(adjust::normalize(&mut ops, long_edge));
@@ -94,7 +94,7 @@ pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, r
                 o.clamp();
                 o
             }
-            Some(Err(e)) => return Err(AppError::bad(e)),
+            Some(Err(e)) => return Err(AppError::bad_msg(e)),
             None => adjust::load_ops(&ctx2, img.id),
         };
         if ops.is_identity() {
@@ -102,7 +102,7 @@ pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, r
             let rel = img.proxy_path.clone().unwrap_or(img.orig_path.clone());
             return Ok(json!({ "preview_url": format!("/file/{rel}"), "w": img.w, "h": img.h, "ms": 0, "reused": true, "identity": true }));
         }
-        let b = adjust::build_preview(&ctx2, &img, &ops).map_err(AppError::Fail)?;
+        let b = adjust::build_preview(&ctx2, &img, &ops)?;
         let mut v = adjust::preview_json(&b).as_object().cloned().unwrap_or_default();
         v.insert("identity".into(), json!(false));
         Ok(Value::Object(v))
@@ -119,9 +119,9 @@ pub async fn render_post(State(ctx): State<Shared>, APath(id): APath<String>) ->
     let out = util::blocking(move || -> Result<Value> {
         let ops = adjust::load_ops(&ctx2, img.id);
         if ops.is_identity() {
-            return Err(AppError::bad("还没动过任何滑杆，先调一下再落盘"));
+            return Err(AppError::bad("srv.adjust.untouchedRender"));
         }
-        let (b, thumb) = adjust::build_render(&ctx2, &img, &ops).map_err(AppError::Fail)?;
+        let (b, thumb) = adjust::build_render(&ctx2, &img, &ops)?;
         Ok(json!({
             // 宽高报的是**渲出来那张**：几何段转过 90° 之后长宽会换边，
             // 报源图那对就会让前端把新图摆歪
@@ -145,10 +145,10 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
     let out = util::blocking(move || -> Result<Value> {
         let ops = adjust::load_ops(&ctx2, img.id);
         if ops.is_identity() {
-            return Err(AppError::bad("这张图还没调整，另存为新图没有意义"));
+            return Err(AppError::bad("srv.adjust.untouchedFork"));
         }
         // 成图的真实像素尺寸才是新行的 w/h：几何段转过 90° 之后长宽是会换边的
-        let (b, _) = adjust::build_render(&ctx2, &img, &ops).map_err(AppError::Fail)?;
+        let (b, _) = adjust::build_render(&ctx2, &img, &ops)?;
         let (nw, nh) = (b.w as i64, b.h as i64);
         let new_id = adjust::fork_from(&ctx2, &img, &b.rel, nw, nh)?;
         Ok(json!({ "image_id": new_id, "derived_from": img.id, "w": nw, "h": nh }))
@@ -183,6 +183,6 @@ pub async fn tiles_get(State(ctx): State<Shared>, APath(id): APath<String>) -> R
         adjust::tiles(&ctx, &img, &ops)
     })
     .await
-    .map_err(AppError::Fail)?;
+    ?;
     Ok(ok(out))
 }

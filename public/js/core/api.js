@@ -1,10 +1,17 @@
 // 网络层：唯一与后端 REST 契约打交道的地方，视图不直接 fetch
 'use strict';
 
-import { t } from './i18n.js';
+import { dx, t } from './i18n.js';
 
 export class ApiError extends Error {
   constructor(msg, status) { super(msg); this.name = 'ApiError'; this.status = status || 0; }
+}
+
+/** 服务端错误里有两样东西：`code` 是语言包里的钥匙，`error` 是拼出来的中文兜底。
+ *  有钥匙就按当前语言取句（切了英文不会看到中文报错）；没钥匙——老文案、上游原文、字典缺键——
+ *  就原样显示。宁可显示另一语言的句子，也不要显示空白。 */
+function errText(data, status) {
+  return dx(data?.code || data?.error, data?.args) || `HTTP ${status}`;
 }
 
 async function request(path, { method = 'GET', body, signal } = {}) {
@@ -20,7 +27,7 @@ async function request(path, { method = 'GET', body, signal } = {}) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-  if (!res.ok) throw new ApiError(data?.error || `HTTP ${res.status}`, res.status);
+  if (!res.ok) throw new ApiError(errText(data, res.status), res.status);
   return data;
 }
 

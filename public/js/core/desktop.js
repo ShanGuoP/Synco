@@ -2,17 +2,35 @@
 // 浏览器里跑（cargo run 起的本机服务）时这些一律返回"不是桌面版"，调用方要自己降级。
 'use strict';
 import { el } from './dom.js';
-import { t as tr } from './i18n.js';
+import { dx, t as tr } from './i18n.js';
 
 const tauri = () => (typeof window !== 'undefined' ? window.__TAURI__ : null);
 
 export const isDesktop = () => !!tauri()?.core?.invoke;
 
+/**
+ * 壳里的错误是一条钥匙，或一份 `{code,args}` 的 JSON（tauri 的失败通道只有一条字符串，
+ * 带参数就只能连着钥匙一起走）。在这里统一换成当前语言那句话，调用方拿到的就是可读文本。
+ */
+function shellError(raw) {
+  const s = String(raw?.message ?? raw ?? '');
+  if (!s) return '';
+  let v = s;
+  if (s.startsWith('{')) {
+    try { v = JSON.parse(s); } catch { /* 不是 JSON 就原样 */ }
+  }
+  return dx(v) || s;
+}
+
 /** 调一个壳里注册的命令；不在桌面版就抛，调用方按"功能不可用"处理 */
 export async function call(cmd, args) {
   const t = tauri();
   if (!t?.core?.invoke) throw new Error(tr('desktop.needDesktop'));
-  return t.core.invoke(cmd, args || {});
+  try {
+    return await t.core.invoke(cmd, args || {});
+  } catch (e) {
+    throw new Error(shellError(e));
+  }
 }
 
 /** 系统文件夹选择框；取消返回 null */

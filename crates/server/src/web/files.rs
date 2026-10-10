@@ -34,10 +34,11 @@ fn mime_of(ext: &str) -> &'static str {
 }
 
 fn json_err(code: u16, msg: &str) -> Response {
+    // msg 可能是钥匙也可能是技术原文（"not found" 那几条）：查得到就出句子，查不到就原样
     (
         StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        format!("{{\"error\":{}}}", serde_json::Value::String(msg.to_string())),
+        format!("{{\"error\":{}}}", serde_json::Value::String(crate::text::text(msg, None))),
     )
         .into_response()
 }
@@ -86,7 +87,7 @@ fn bytes_response(content_type: &str, cache: Option<&str>, etag: Option<&str>, b
     if let Some(e) = etag {
         builder = builder.header(header::ETAG, e);
     }
-    builder.body(Body::from(body)).unwrap_or_else(|_| json_err(500, "响应构造失败"))
+    builder.body(Body::from(body)).unwrap_or_else(|_| json_err(500, "srv.common.respFail"))
 }
 
 /// 一次阻塞线程里把"在不在、多大、要不要读"判完：304 命中时连文件内容都不碰。
@@ -188,7 +189,7 @@ fn not_modified(cache: Option<&str>, etag: Option<&str>) -> Response {
     if let Some(e) = etag {
         builder = builder.header(header::ETAG, e);
     }
-    builder.body(Body::empty()).unwrap_or_else(|_| json_err(500, "响应构造失败"))
+    builder.body(Body::empty()).unwrap_or_else(|_| json_err(500, "srv.common.respFail"))
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ import { api } from '../core/api.js';
 import { isDesktop, call, pickFolder, human, openExternal } from '../core/desktop.js';
 import { MODES, apply, mode, resolved, watch } from '../core/theme.js';
 import { osReduce, reduce, saved, set as setMotion, watch as watchMotion } from '../core/motion.js';
-import { flushForSwitch, getLang, t } from '../core/i18n.js';
+import { dl, dx, flushForSwitch, getLang, t } from '../core/i18n.js';
 import { store } from '../state.js';
 import { modal } from './modal.js';
 import { toastOk, toastErr, toastBusy } from './toast.js';
@@ -44,7 +44,7 @@ function createWorkflowPane() {
       inp.value = cfg.workflow_path || '';
       const rows = [
         okRow(cfg.cfg_source === 'workflow',
-          t(cfg.cfg_source === 'workflow' ? 'settings.wf.readFrom' : 'settings.wf.builtinFrom'), cfg.workflow_error || ''),
+          t(cfg.cfg_source === 'workflow' ? 'settings.wf.readFrom' : 'settings.wf.builtinFrom'), dx(cfg.workflow_error)),
       ];
       if (r) rows.push(graphRow(r));
       rows.push(okRow(!!s.active, t('settings.wf.curBackend', { host: String(s.active).replace(/^https?:\/\//, '') })));
@@ -77,8 +77,8 @@ function createWorkflowPane() {
 /** 计算图来源那一行：接管成功是绿点，认不出角色是红点（提交会被明确拒掉），非 API 导出是灰点 */
 function graphRow(r) {
   if (r.can_takeover) return okRow(true, t('settings.graph.mine'), t('settings.graph.rolesReady', { n: Object.keys(r.effective || {}).length }));
-  if (!r.is_api) return okRow(null, t('settings.graph.builtin'), r.reason || '');
-  return okRow(false, t('settings.graph.notYet'), (r.errors || []).join(t('settings.sepErr')));
+  if (!r.is_api) return okRow(null, t('settings.graph.builtin'), dx(r.reason, r.reason_args) || '');
+  return okRow(false, t('settings.graph.notYet'), dl(r.errors));
 }
 
 /**
@@ -91,7 +91,7 @@ async function editRoles(reload) {
   if (!d.is_api) {
     modal({
       title: t('settings.roles.notGraphTitle'),
-      body: el('p.muted', { text: d.reason ? t('settings.roles.notGraphBody', { reason: d.reason }) : t('settings.roles.notGraphBodyBare') }),
+      body: el('p.muted', { text: d.reason ? t('settings.roles.notGraphBody', { reason: dx(d.reason, d.reason_args) }) : t('settings.roles.notGraphBodyBare') }),
       actions: [{ label: t('common.gotIt'), kind: 'ghost' }],
     });
     return;
@@ -114,7 +114,7 @@ async function editRoles(reload) {
     if (!list.length) sel.disabled = true;
     selects.push({ key: r.key, node: sel, auto: auto[r.key] });
     return el('div.set__row', {},
-      el('b', { text: r.label }),
+      el('b', { text: dx(r.label) }),
       el('span.set__extra', {
         text: t(r.required ? 'settings.roles.classCountReq' : 'settings.roles.classCount', { cls: r.class, n: list.length }),
       }),
@@ -125,7 +125,7 @@ async function editRoles(reload) {
     el('h4.dlg-h4', { text: t('settings.roles.verifyTitle') }),
     ...(v.can_takeover
       ? [okRow(true, t('settings.roles.verdictOk'))]
-      : [okRow(false, t('settings.roles.verdictBad'), (v.errors || []).join(t('settings.sepErr')))]));
+      : [okRow(false, t('settings.roles.verdictBad'), dl(v.errors))]));
   paintVerdict(d);
   /* 只交与自动认出不同的那些：全量存进库等于把节点号钉死，
      而节点号是 ComfyUI 按画布顺序给的，挪一下就会变 */
@@ -138,7 +138,7 @@ async function editRoles(reload) {
     try {
       const r = await api.setWorkflowRoles(grab());
       paintVerdict(r);
-      if ((r.rejected || []).length) toastErr(t('settings.roles.rejected'), r.rejected.join(t('settings.sepErr')));
+      if ((r.rejected || []).length) toastErr(t('settings.roles.rejected'), dl(r.rejected));
       else toastOk(t('settings.roles.saved'));
       if (close) { reload?.(); handle?.close(); }
     } catch (e) { toastErr(t('settings.roles.saveFail'), e.message); }
@@ -208,7 +208,7 @@ function createCloudPane() {
       last ? okRow(!!last.ok, t('settings.cloud.probe'),
         last.ok
           ? last.models != null ? t('settings.cloud.probeModels', { ms: last.ms, n: last.models }) : t('settings.cloud.probeRtt', { ms: last.ms })
-          : (last.error || '')) : null);
+          : dx(last.error, last.error_args)) : null);
   }
 
   /* 键名 → 输入框 → 服务端字段。局部保存后只回填这次真改过的那几个，
@@ -259,7 +259,7 @@ function createCloudPane() {
     catch (e) { busy.close(); last = { ok: false, error: e.message }; paintState(); }
     last.ok
       ? toastOk(t('settings.cloud.testOk'), t('settings.cloud.probeRtt', { ms: last.ms }))
-      : toastErr(t('settings.cloud.testDead'), String(last.error || '').slice(0, 120));
+      : toastErr(t('settings.cloud.testDead'), dx(last.error, last.error_args).slice(0, 120));
   }
 
   async function load() {
@@ -348,10 +348,10 @@ function createSetupPane() {
       el('div', {},
         el('h4.dlg-h4', { text: t('settings.setup.packsTitle') }),
         ...d.packs.map(p => okRow(p.installed, p.dir,
-          p.installed ? p.label : t('settings.setup.packsMissing', { label: p.label, nodes: p.nodes.join(' / ') })))),
+          p.installed ? dx(p.label) : t('settings.setup.packsMissing', { label: dx(p.label), nodes: p.nodes.join(' / ') })))),
       el('div', {},
         el('h4.dlg-h4', { text: t('settings.setup.weightsTitle', { total: gb(d.total_bytes), missing: gb(d.missing_bytes) }) }),
-        ...d.models.map(m => okRow(m.found ? true : m.optional ? null : false, m.label,
+        ...d.models.map(m => okRow(m.found ? true : m.optional ? null : false, dx(m.label),
           m.found
             ? t(m.sha256 ? 'settings.setup.wFound' : 'settings.setup.wFoundNoBase', { size: gb(m.bytes) })
             : m.optional ? t('settings.setup.wOptional') : t('settings.setup.wMissing', { dir: m.dir, rel: m.rel }))),
@@ -385,8 +385,8 @@ function createSetupPane() {
       /* 三态而不是"非黑即白"：没有基准可比既不是通过也不是损坏，画成红叉会让人以为文件坏了 */
       const state = s => (s === 'ok' ? true : s === 'no-baseline' ? null : false);
       const verdict = s => (VERIFY_TEXT[s] ? t(VERIFY_TEXT[s]) : s);
-      fill(verifyBox, ...r.rows.map(x => okRow(state(x.status), `${x.label} ${verdict(x.status)}`)));
-      if (bad.length) toastErr(t('settings.setup.mismatch'), t('settings.setup.mismatchBody', { names: bad.map(x => x.label).join(t('settings.sepList')) }));
+      fill(verifyBox, ...r.rows.map(x => okRow(state(x.status), `${dx(x.label)} ${verdict(x.status)}`)));
+      if (bad.length) toastErr(t('settings.setup.mismatch'), t('settings.setup.mismatchBody', { names: bad.map(x => dx(x.label)).join(t('settings.sepList')) }));
       else toastOk(t('settings.setup.verifyOk'), t('settings.setup.verifyOkBody', { n: r.rows.filter(x => x.status === 'ok').length }));
     } catch (e) { fill(verifyBox, el('span.muted', { text: t('settings.setup.verifyFail', { msg: e.message }) })); }
   }
@@ -558,7 +558,7 @@ function createDataPane() {
     const path = info?.path || vinfo?.data_dir || '';
     fill(state,
       okRow(!!path, t('settings.data.curDir'),
-        path ? (info ? t('settings.data.withSource', { path, source: info.source }) : path) : t('settings.data.unreadable')),
+        path ? (info ? t('settings.data.withSource', { path, source: dx(info.source) }) : path) : t('settings.data.unreadable')),
       info ? okRow(info.has_db, t('settings.data.contents'),
         t('settings.data.contentsNote', { projects: info.projects, images: info.images, bytes: human(info.bytes) })) : null,
       okRow(vinfo?.desktop, t('settings.data.form'),
@@ -740,7 +740,7 @@ function createAboutPane() {
       // 三种状态分开说：拉失败、拉到了但仓库没发布过、拉到了有内容。
       // 把"还没有 Release"报成"网络不通"会让人白查半天
       r.error
-        ? [okRow(false, t('settings.about.logFail'), r.error)]
+        ? [okRow(false, t('settings.about.logFail'), dx(r.error, r.error_args))]
         : cs.length
           ? cs.map(c => el('div.set__row', {},
               el('span.muted', { text: `${c.date} · ${c.tag}` }),

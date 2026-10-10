@@ -10,6 +10,7 @@ pub mod models;
 pub mod repo;
 pub mod service;
 pub mod state;
+pub mod text;
 pub mod util;
 pub mod version;
 pub mod web;
@@ -87,9 +88,7 @@ fn lock_data_dir(data: &Path) -> Result<()> {
                 Ok(f) => std::mem::forget(f),
                 // 32 = ERROR_SHARING_VIOLATION：另一个进程正持有这个目录
                 Err(e) if e.raw_os_error() == Some(32) => {
-                    return Err(AppError::Fail(
-                        "这个数据目录已经有另一个 Synco 在用了：回到已经开着的那个窗口即可（再双击图标会把它叫到前面）".into(),
-                    ))
+                    return Err(AppError::fail("srv.app.dataLocked"))
                 }
                 Err(e) => return Err(AppError::Io(e)),
             }
@@ -158,24 +157,19 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     println!("Synco 新刻（Rust {}）  SYNCO_URL=http://127.0.0.1:{real}", version::VERSION);
     println!("  数据目录 {}", data.display());
     let c = service::workflow::get_cfg(&ctx);
-    println!(
-        "  后端 {} · 参数{}",
-        backend::active_url(&ctx),
-        match c.get("cfgSource").and_then(|v| v.as_str()) {
-            Some("workflow") => "读自工作流".to_string(),
-            _ => format!(
-                "用内置默认（工作流读不到：{}）",
-                c.get("workflowError").and_then(|v| v.as_str()).unwrap_or("未知")
-            ),
-        }
-    );
+    // 横幅写在一行里：控制台归控制台，但"中文只在语言包里"这条判据是按行认的
+    if c.get("cfgSource").and_then(|v| v.as_str()) == Some("workflow") {
+        println!("  后端 {} · 参数读自工作流", backend::active_url(&ctx));
+    } else {
+        println!("  后端 {} · 参数用内置默认（工作流读不到：{}）", backend::active_url(&ctx), c.get("workflowError").and_then(text::render).unwrap_or_else(|| "未知".into()));
+    }
 
     // 上一轮没跑完的 running 记录此时没人轮询了，先收一遍，别让状态栏一直撒谎
     let reclaim_ctx = ctx.clone();
     tokio::spawn(async move {
         match service::reclaim::reclaim_running(&reclaim_ctx).await {
             Ok(n) if n > 0 => println!("  收回 {n} 条 ComfyUI 已经不认的 running 记录"),
-            Err(e) => eprintln!("  回收 running 记录失败：{e}"),
+            Err(e) => eprintln!("  回收 running 记录失败：{}", e.text()),
             _ => {}
         }
         // 收完尸再叫队列：上一轮留下的 queued 行接着跑，关页面那批不该因为重启就消失

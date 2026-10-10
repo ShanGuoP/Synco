@@ -3,7 +3,7 @@
 import { el, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { fmtStamp, fmtNum } from '../../core/format.js';
-import { t } from '../../core/i18n.js';
+import { dx, t } from '../../core/i18n.js';
 
 const settingsOf = r => { try { return JSON.parse(r.settings_json || 'null'); } catch { return null; } };
 
@@ -69,7 +69,7 @@ export function createHistory({ onPick, onRestore, onFork, onDel, bare = false, 
           el('b', { text: `#${r.id} · ${gone ? t('hist.goneFile') : r.status === 'done' ? t('status.done') : r.status === 'error' ? t('status.err') : t('status.run')}` }),
           el('span.pre-it__meta', { text: meta, title: meta }),
           /* 失败原因原来只在右下角 toast 里活 5 秒，回头看这条就什么都没有了 */
-          r.status === 'error' && r.error && !gone ? el('span.pre-it__err', { text: String(r.error).slice(0, 160), title: String(r.error || '') }) : null,
+          r.status === 'error' && r.error && !gone ? el('span.pre-it__err', { text: dx(r.error, r.error_args).slice(0, 160), title: dx(r.error, r.error_args) }) : null,
           r.rerun_of ? el('span.pre-it__from', { text: t('hist.from', { id: r.rerun_of }) }) : null),
         /* 这一列在 .pre-list（overflow 滚动容器）里，自绘气泡会被裁掉一截：
            实测 174px 宽的提示只有 33px 落在面板内，剩下的被切了。改用原生 title，浏览器画的浮层不受我们布局的裁剪。 */

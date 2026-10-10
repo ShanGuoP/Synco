@@ -5,7 +5,7 @@
 //! 所以出图走 `service::queue` 里的画布分支，而照片那两条入口（`/api/run`、`/api/cloud/queue`）
 //! 会按 `kind` 显式拒绝画稿。
 
-use super::common::{bad, body_of, err, ok, path_id};
+use super::common::{bad, bad_args, body_of, err, ok, path_id};
 use crate::error::{AppError, Result};
 use crate::models::{dto, entity::Image};
 use crate::repo::{images as rimg, projects as rproj, results as rres};
@@ -15,7 +15,7 @@ use crate::util;
 use axum::body::Bytes;
 use axum::extract::{Path as APath, State};
 use axum::response::Response;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use stitch_core::Rgba;
 
 /// 画布默认档：1024×1024 正好落在云端硬约束中间，和本机那路的 1024 手感一致
@@ -23,7 +23,7 @@ const DEFAULT_EDGE: i64 = 1024;
 
 fn new_name(body: &Value) -> String {
     let raw = body.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
-    util::clip(if raw.is_empty() { "画布" } else { raw }, 60)
+    util::clip(if raw.is_empty() { "画布" /* i18n-keep 建图时落库的默认名，翻译它等于改已存数据 */ } else { raw }, 60)
 }
 
 /// 建一张空白画布。可以给现有项目加，也可以顺手开一个只装画布的新项目。
@@ -31,18 +31,16 @@ pub async fn canvas_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Resp
     let body = body_of(raw).await?;
     let w = util::clamp_round(body.get("w"), 1, 8192, DEFAULT_EDGE) as usize;
     let h = util::clamp_round(body.get("h"), 1, 8192, DEFAULT_EDGE) as usize;
-    if let Err(e) = queue::sketch_fit(w, h) {
-        return Ok(bad(e));
-    }
+    queue::sketch_fit(w, h)?;
     let name = new_name(&body);
     let pid = match body.get("project_id").and_then(|v| v.as_i64()) {
         Some(id) => {
             if rproj::by_id(&ctx, id)?.is_none() {
-                return Ok(err(404, "项目不存在"));
+                return Ok(err(404, "srv.common.noProject"));
             }
             id
         }
-        None => rproj::create(&ctx, &format!("画布 · {name}"))?,
+        None => rproj::create(&ctx, &format!("画布 · {name}") /* i18n-keep 建项目时落库的默认名 */)?,
     };
     let safe = util::safe_name(&name);
     // 空白画布 = 全透明的 RGBA；发出去时才拍到白底上（prepare_sketch 那一步在队列里）
@@ -57,11 +55,11 @@ pub async fn canvas_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Resp
         let rel2 = rel.clone();
         util::blocking(move || -> Result<()> {
             std::fs::create_dir_all(data.join("projects").join(pid.to_string()))
-                .map_err(|e| AppError::Fail(format!("建目录失败：{e}")))?;
+                .map_err(|e| AppError::fail_args("srv.canvas.mkdirFail", json!({ "msg": e.to_string() })))?;
             let blank = Rgba::new(w, h);
             // rel 本身已经带 projects/{pid}/ 前缀，只能接在 data 下面：接在项目目录上会写深一层，
             // 而 write_bytes 自己会补父目录，于是库里那行指的地址上根本没有文件
-            imagesvc::write_bytes(&data.join(&rel2), &crate::img::codec::encode_png(&blank)).map_err(AppError::Fail)?;
+            imagesvc::write_bytes(&data.join(&rel2), &crate::img::codec::encode_png(&blank))?;
             Ok(())
         })
         .await?;
@@ -74,9 +72,9 @@ pub async fn canvas_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Resp
 /// 画布详情：画稿地址 + 历史成图。不走 `/api/images/{id}`，那条会替照片判云端僵尸、补派生档。
 pub async fn canvas_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "没有这张画稿")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.canvas.noImage")) };
     if !img.is_sketch() {
-        return Ok(err(404, "这不是画稿"));
+        return Ok(err(404, "srv.canvas.notSketch"));
     }
     let rows: Vec<Value> = rres::list_for_image(&ctx, iid, 60)?
         .iter()
@@ -95,9 +93,9 @@ pub async fn canvas_get(State(ctx): State<Shared>, APath(id): APath<String>) -> 
 /// 存画稿：原地覆写（.part→rename），先解一次确认是能解码的图。
 pub async fn sketch_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "没有这张画稿")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.canvas.noImage")) };
     if !img.is_sketch() {
-        return Ok(bad("这不是画稿"));
+        return Ok(bad("srv.canvas.notSketch"));
     }
     let body = body_of(raw).await?;
     let b64 = body.get("b64").and_then(|v| v.as_str()).unwrap_or("");
@@ -108,11 +106,11 @@ pub async fn sketch_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
     let dest = ctx.data.join(&img.orig_path);
     let (dw, dh) = util::blocking(move || -> Result<(usize, usize)> {
         let decoded = crate::img::codec::decode(&bytes)
-            .map_err(|_| AppError::bad("画稿不是能解码的 PNG，这次没有覆盖已有画稿"))?;
+            .map_err(|_| AppError::bad("srv.canvas.pngBadNoOverwrite"))?;
         if decoded.w == 0 || decoded.h == 0 {
-            return Err(AppError::bad("画稿是空的，这次没有覆盖"));
+            return Err(AppError::bad("srv.canvas.emptyNoOverwrite"));
         }
-        imagesvc::write_bytes(&dest, &bytes).map_err(AppError::Fail)?;
+        imagesvc::write_bytes(&dest, &bytes)?;
         Ok((decoded.w, decoded.h))
     })
     .await?;
@@ -125,30 +123,28 @@ pub async fn sketch_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
 /// 提交一次生成：进同一条云端队列，进度就是这条 results 行。
 pub async fn canvas_generate(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "没有这张画稿")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.canvas.noImage")) };
     if !img.is_sketch() {
-        return Ok(bad("这不是画稿"));
+        return Ok(bad("srv.canvas.notSketch"));
     }
     let body = body_of(raw).await?;
     let settings = body.get("settings").cloned().unwrap_or(Value::Object(Map::new()));
     let prompt = settings.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if prompt.is_empty() {
-        return Ok(bad("画布生成只看提示词，先写要生成什么"));
+        return Ok(bad("srv.canvas.needPrompt"));
     }
     if !util::file_alive(&ctx.data, &Value::String(img.orig_path.clone())) {
-        return Ok(bad("画稿文件不在磁盘上，重画一版再提交"));
+        return Ok(bad("srv.canvas.sketchGone"));
     }
-    if let Err(e) = queue::sketch_fit(img.w.max(1) as usize, img.h.max(1) as usize) {
-        return Ok(bad(e));
-    }
+    queue::sketch_fit(img.w.max(1) as usize, img.h.max(1) as usize)?;
     let s = cloud::settings(&ctx);
     if s.base.is_empty() || s.model.is_empty() || s.key.is_empty() {
-        return Ok(bad("画布生成要走云端：先到设置 → 云端生成填 base_url、模型名与 API key"));
+        return Ok(bad("srv.canvas.needCloud"));
     }
     // 参考图缺文件时**建行之前**就拒：一旦插了行再失败，用户看到的是一条挂着空气的"生成中"
     let slots = refs::slots(&ctx, &img);
     if let Some(missing) = slots.iter().find(|r| !util::file_alive(&ctx.data, &Value::String(r.to_string()))) {
-        return Ok(bad(format!("参考图的文件不在磁盘上了（{missing}），撤下它再提交")));
+        return Ok(bad_args("srv.canvas.refsGone", json!({ "missing": missing })));
     }
     let rerun_of = body.get("rerun_of").and_then(|v| v.as_i64());
     let payload = serde_json::json!({ "prompt": prompt, "negative": "", "steps": 0, "cfg": 0, "loras": [], "canvas": true });
@@ -156,7 +152,7 @@ pub async fn canvas_generate(State(ctx): State<Shared>, APath(id): APath<String>
     // 先把这一版的线稿原样复制一份再排队：画稿是原地覆写的，用户接着画两笔，
     // "出这张图时我画的是什么"就只剩这一份能证明。复制而不重编码——转一档会把笔迹变糊
     if let Err(e) = snapshot_sketch(&ctx, &img, rid).await {
-        eprintln!("  画稿快照没存下（#{rid}）：{e}");
+        eprintln!("  画稿快照没存下（#{rid}）：{e}"); /* 日志：控制台给人读 */
     }
     // 参考图同理复制成这一行自己的快照：排着队的时候换槽位，不该改"这一版参考了哪几张"
     if !slots.is_empty() {
@@ -164,21 +160,21 @@ pub async fn canvas_generate(State(ctx): State<Shared>, APath(id): APath<String>
         // 判死这一行、把原因还给用户。也不能退化成"少发几张照跑"——界面上写着带 N 张参考图
         let snap_try = {
             let (ctx2, im, sl) = (ctx.clone(), img.clone(), slots.clone());
-            util::blocking(move || refs::snapshot(&ctx2, &im, rid, &sl).map_err(AppError::Fail))
+            util::blocking(move || refs::snapshot(&ctx2, &im, rid, &sl))
                 .await
-                .map_err(|e| e.to_string())
         };
         let snapped = match snap_try {
             Ok(v) => v,
             Err(e) => {
-                ctx.mark_error(rid, &format!("参考图快照没存下：{e}"));
-                return Ok(bad(format!("参考图快照失败，这一版没有提交：{e}")));
+                // 内层已经有自己的钥匙（画稿不在盘上 / 复制失败），原样传出去，不再包一句中文
+                ctx.mark_error_of(rid, &e);
+                return Err(e);
             }
         };
         if let Err(e) = rres::set_refs(&ctx, rid, &snapped) {
             refs::drop(&ctx, img.project_id, &snapped);
-            ctx.mark_error(rid, &format!("参考图没能挂上这一版：{e}"));
-            return Ok(bad(format!("参考图没能挂上这一版，这一版没有提交：{e}")));
+            ctx.mark_error_of(rid, &e);
+            return Err(e);
         }
     }
     rres::set_queued(&ctx, rid)?;
@@ -193,18 +189,18 @@ pub async fn canvas_generate(State(ctx): State<Shared>, APath(id): APath<String>
 /// "这一版参考了哪张"要还能说清。
 pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "没有这张画稿")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.canvas.noImage")) };
     if !img.is_sketch() {
-        return Ok(bad("这不是画稿"));
+        return Ok(bad("srv.canvas.notSketch"));
     }
     let body = body_of(raw).await?;
     // 三条来源的校验留在 handler 里（拒绝的理由要说准），解码/折档/重编码/落盘整段过阻塞池：
     // 一张参考图是全分辨率的 PNG，四张就是四次"解码 + 缩放 + 重编码"
     let row_opt = match body.get("from_result").and_then(|v| v.as_i64()) {
         Some(rid) => {
-            let Some(row) = rres::by_id(&ctx, rid)? else { return Ok(bad("没有这条记录")) };
+            let Some(row) = rres::by_id(&ctx, rid)? else { return Ok(bad("srv.common.noResult")) };
             if row.image_id != iid {
-                return Ok(bad("这条记录不是这张画布的"));
+                return Ok(bad("srv.canvas.wrongOwner"));
             }
             Some(row)
         }
@@ -218,7 +214,7 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
     let mut src_ids: Vec<i64> = Vec::new();
     if let Some(ids) = body.get("image_ids").and_then(|v| v.as_array()) {
         for v in ids {
-            let Some(src) = v.as_i64() else { return Ok(bad("image_ids 里要放数字 id")) };
+            let Some(src) = v.as_i64() else { return Ok(bad("srv.canvas.idsNumber")) };
             src_ids.push(src);
         }
     }
@@ -228,14 +224,14 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
             let mut added: Vec<String> = Vec::new();
             let mut from_empty = false;
             if let Some(row) = &row_opt {
-                added = refs::add_from_result(&ctx2, &im, row).map_err(AppError::bad)?;
+                added = refs::add_from_result(&ctx2, &im, row)?;
                 from_empty = added.is_empty();
             }
             for bytes in &files {
-                added.push(refs::add_bytes(&ctx2, &im, bytes).map_err(AppError::bad)?);
+                added.push(refs::add_bytes(&ctx2, &im, bytes)?);
             }
             for src in &src_ids {
-                added.push(refs::add_from_image(&ctx2, &im, *src).map_err(AppError::bad)?);
+                added.push(refs::add_from_image(&ctx2, &im, *src)?);
             }
             Ok((added, from_empty))
         })
@@ -243,7 +239,7 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
     };
     if added.is_empty() {
         // 那一版根本没带参考图 ≠ 请求写坏了：两种理由分开说，不然用户不知道点错了哪一条
-        return Ok(bad(if from_empty { "这一版没带参考图" } else { "没说要加哪几张参考图" }));
+        return Ok(bad(if from_empty { "srv.canvas.noRefsInVersion" } else { "srv.canvas.noRefsGiven" }));
     }
     let mut all = refs::slots(&ctx, &img);
     let over = all.len() + added.len() > refs::MAX;
@@ -254,7 +250,7 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
         let cut = all.split_off(refs::MAX);
         refs::drop(&ctx, img.project_id, &cut);
         refs::set(&ctx, &img, &all)?;
-        return Ok(bad(format!("参考图最多 {} 张，多出来的已经撤下", refs::MAX)));
+        return Ok(bad_args("srv.canvas.capDropped", json!({ "cap": refs::MAX })));
     }
     Ok(ok(serde_json::json!({ "refs": refs::json_of(&ctx, &all) })))
 }
@@ -262,9 +258,9 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
 /// 整组替换：撤一张、清空、调整顺序都走这条。被撤下的文件连着删，集合里只留还认的。
 pub async fn canvas_refs_set(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "没有这张画稿")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.canvas.noImage")) };
     if !img.is_sketch() {
-        return Ok(bad("这不是画稿"));
+        return Ok(bad("srv.canvas.notSketch"));
     }
     let body = body_of(raw).await?;
     let want: Vec<String> = body
@@ -276,7 +272,7 @@ pub async fn canvas_refs_set(State(ctx): State<Shared>, APath(id): APath<String>
         .filter_map(|v| v.as_str().map(str::to_string))
         .collect();
     if want.len() > refs::MAX {
-        return Ok(bad(format!("参考图最多 {} 张（这次给了 {} 张）", refs::MAX, want.len())));
+        return Ok(bad_args("srv.canvas.capGiven", json!({ "cap": refs::MAX, "got": want.len() })));
     }
     let before = refs::slots(&ctx, &img);
     // 只认"之前 GET 到的集合里的、而且这次只算一张"：dedup() 只去相邻重复，
@@ -301,24 +297,23 @@ fn sketch_relate(img: &Image) -> std::result::Result<(), AppError> {
     if util::rel_ok(&img.orig_path) {
         Ok(())
     } else {
-        Err(AppError::bad("库里这一行的画稿路径不是合法的相对路径，这次没有覆盖"))
+        Err(AppError::bad("srv.canvas.badPathNoOverwrite"))
     }
 }
 
 /// 先把这一版的线稿原样复制一份再排队：复制而不重编码——转一档会把笔迹变糊。
 /// 一张画稿是几十 MB 的同步拷贝，所以整段走阻塞池。
-async fn snapshot_sketch(ctx: &Shared, img: &Image, rid: i64) -> std::result::Result<(), String> {
+async fn snapshot_sketch(ctx: &Shared, img: &Image, rid: i64) -> crate::error::Result<()> {
     let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), format!("k{}_{rid}_sketch.png", img.id)]);
-    let src = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| "画稿文件不在磁盘上".to_string())?;
+    let src = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| AppError::fail("srv.canvas.sketchGoneRaw"))?;
     let ctx2 = ctx.clone();
     let dst = ctx.data.join(&rel);
     util::blocking(move || -> Result<()> {
-        std::fs::copy(&src, &dst).map_err(|e| AppError::Fail(format!("复制失败：{e}")))?;
+        std::fs::copy(&src, &dst).map_err(|e| AppError::fail_args("srv.common.copyFail", json!({ "msg": e.to_string() })))?;
         rres::set_sketch(&ctx2, rid, &rel)?;
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// 取回某一版当时的画稿：把那份快照写回画稿本体。
@@ -326,31 +321,31 @@ async fn snapshot_sketch(ctx: &Shared, img: &Image, rid: i64) -> std::result::Re
 /// 而不是他后来接着画上去的那些——所以这一步必须能覆盖当前画稿（前端先冲一次自动保存）。
 pub async fn canvas_use_sketch(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "没有这张画稿")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.canvas.noImage")) };
     if !img.is_sketch() {
-        return Ok(bad("这不是画稿"));
+        return Ok(bad("srv.canvas.notSketch"));
     }
     let body = body_of(raw).await?;
-    let Some(rid) = body.get("result_id").and_then(|v| v.as_i64()) else { return Ok(bad("要带 result_id")) };
-    let Some(row) = rres::by_id(&ctx, rid)? else { return Ok(err(404, "没有这条记录")) };
+    let Some(rid) = body.get("result_id").and_then(|v| v.as_i64()) else { return Ok(bad("srv.canvas.needResultId")) };
+    let Some(row) = rres::by_id(&ctx, rid)? else { return Ok(err(404, "srv.common.noResult")) };
     if row.image_id != iid {
-        return Ok(bad("这条记录不是这张画布的"));
+        return Ok(bad("srv.canvas.wrongOwner"));
     }
     let Some(snap) = row.sketch_path.clone() else {
-        return Ok(bad("这一版没留画稿快照（快照功能上线之前生成的那些版本没有）"));
+        return Ok(bad("srv.canvas.noSnapshot"));
     };
     sketch_relate(&img)?;
     // 与存画稿同一条纪律：先确认解得开，再 .part→rename，别把用户的草稿写成半张图。
     // 读快照、解码、覆写都是同步重活，整段过阻塞池
-    let snap_abs = util::data_file(&ctx.data, &snap).ok_or_else(|| AppError::bad("快照文件已经不在盘上了"))?;
+    let snap_abs = util::data_file(&ctx.data, &snap).ok_or_else(|| AppError::bad("srv.canvas.snapGone"))?;
     let dest = ctx.data.join(&img.orig_path);
     let (dw, dh) = util::blocking(move || -> Result<(usize, usize)> {
-        let bytes = std::fs::read(&snap_abs).map_err(|_| AppError::bad("快照文件已经不在盘上了"))?;
-        let decoded = crate::img::codec::decode(&bytes).map_err(|_| AppError::bad("快照不是能解码的 PNG，没有覆盖当前画稿"))?;
+        let bytes = std::fs::read(&snap_abs).map_err(|_| AppError::bad("srv.canvas.snapGone"))?;
+        let decoded = crate::img::codec::decode(&bytes).map_err(|_| AppError::bad("srv.canvas.snapBadPng"))?;
         if decoded.w == 0 || decoded.h == 0 {
-            return Err(AppError::bad("快照是空的，没有覆盖当前画稿"));
+            return Err(AppError::bad("srv.canvas.snapEmpty"));
         }
-        imagesvc::write_bytes(&dest, &bytes).map_err(AppError::Fail)?;
+        imagesvc::write_bytes(&dest, &bytes)?;
         Ok((decoded.w, decoded.h))
     })
     .await?;

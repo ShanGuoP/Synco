@@ -228,7 +228,8 @@ pub const DEFAULT_JSON: &str = r#"{"v":1,"geometry":{"crop":null,"rotate_deg":0.
 impl EditOps {
     /// 解析 + 夹逼。返回 `(参数, 被夹过的字段名)`；结构不对直接报字符串。
     pub fn parse(raw: &str) -> Result<(EditOps, Vec<String>), String> {
-        let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| format!("参数不是合法 JSON：{e}"))?;
+        // 这里只把 serde 的原文带出去：那句"参数不是合法 JSON"属于界面文案，在服务端的字典里
+        let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
         let mut rep = Vec::new();
         let ops = read_ops(&v, &mut rep);
         Ok((ops, rep))

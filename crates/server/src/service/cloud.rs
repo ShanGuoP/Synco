@@ -2,11 +2,12 @@
 //! 明文 key 只存在库里，任何 GET 都不回显（只回 key_saved + 末四位）。
 
 use crate::backend::{join, norm_base};
+use crate::error::AppError;
 use crate::repo::settings::{del as del_setting, get_raw, put as put_setting};
 use crate::state::Ctx;
 use crate::util::{clamp_round, clip};
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::time::Duration;
 
 pub const TIMEOUT_MIN: i64 = 30_000;
@@ -89,38 +90,38 @@ pub fn public_settings(ctx: &Ctx) -> Value {
 }
 
 /// 白名单落库；key 传空表示保持原值不动。返回改动过的键，供接口直接回给前端
-pub fn save(ctx: &Ctx, patch: &Value) -> Result<Map<String, Value>, String> {
+pub fn save(ctx: &Ctx, patch: &Value) -> crate::error::Result<Map<String, Value>> {
     let mut out = Map::new();
     if patch.get("kind").is_some() {
         let k = if patch["kind"].as_str() == Some("cloud") { "cloud" } else { "comfyui" };
-        put_setting(ctx, KEY.0, k).map_err(|e| e.to_string())?;
+        put_setting(ctx, KEY.0, k)?;
         out.insert("kind".into(), Value::String(k.into()));
     }
     if patch.get("base").is_some() {
         let b = norm_base(patch["base"].as_str().unwrap_or(""))?;
-        put_setting(ctx, KEY.1, &b).map_err(|e| e.to_string())?;
+        put_setting(ctx, KEY.1, &b)?;
         out.insert("base".into(), Value::String(b));
     }
     if patch.get("model").is_some() {
         let m = clip(patch["model"].as_str().unwrap_or("").trim(), 80);
-        put_setting(ctx, KEY.2, &m).map_err(|e| e.to_string())?;
+        put_setting(ctx, KEY.2, &m)?;
         out.insert("model".into(), Value::String(m));
     }
     for (field, idx, max) in [("size", KEY.3, 20usize), ("quality", KEY.4, 20)] {
         if patch.get(field).is_some() {
             let v = clip(patch[field].as_str().unwrap_or("").trim(), max);
-            put_setting(ctx, idx, &v).map_err(|e| e.to_string())?;
+            put_setting(ctx, idx, &v)?;
             out.insert(field.into(), Value::String(v));
         }
     }
     if patch.get("timeout").is_some() {
         let v = clamp_round(patch.get("timeout"), TIMEOUT_MIN, 600_000, 180_000);
-        put_setting(ctx, KEY.6, &v.to_string()).map_err(|e| e.to_string())?;
+        put_setting(ctx, KEY.6, &v.to_string())?;
         out.insert("timeout_ms".into(), Value::from(v));
     }
     if patch.get("concurrency").is_some() {
         let v = clamp_round(patch.get("concurrency"), 1, 6, 1);
-        put_setting(ctx, KEY.7, &v.to_string()).map_err(|e| e.to_string())?;
+        put_setting(ctx, KEY.7, &v.to_string())?;
         out.insert("concurrency".into(), Value::from(v));
     }
     let mut touched_stitch = false;
@@ -132,7 +133,7 @@ pub fn save(ctx: &Ctx, patch: &Value) -> Result<Map<String, Value>, String> {
         if patch.get(field).is_some() {
             touched_stitch = true;
             let v = clamp_round(patch.get(field), lo, hi, fb);
-            put_setting(ctx, key, &v.to_string()).map_err(|e| e.to_string())?;
+            put_setting(ctx, key, &v.to_string())?;
             out.insert(field.into(), Value::from(v));
         }
     }
@@ -146,19 +147,19 @@ pub fn save(ctx: &Ctx, patch: &Value) -> Result<Map<String, Value>, String> {
     if patch.get("key").is_some() {
         let k = patch["key"].as_str().unwrap_or("").trim().to_string();
         if !k.is_empty() {
-            put_setting(ctx, KEY.5, &k).map_err(|e| e.to_string())?;
+            put_setting(ctx, KEY.5, &k)?;
             out.insert("key_changed".into(), Value::Bool(true));
         }
     }
     if patch.get("clear_key").and_then(Value::as_bool).unwrap_or(false) {
-        del_setting(ctx, KEY.5).map_err(|e| e.to_string())?;
+        del_setting(ctx, KEY.5)?;
         out.insert("key_changed".into(), Value::Bool(true));
     }
     Ok(out)
 }
 
 /// 有些转发服务把 OpenAI 风格的错误塞在 JSON 里，原文比状态码有用得多
-async fn read_error(r: reqwest::Response) -> String {
+async fn read_error(r: reqwest::Response) -> AppError {
     let status = r.status().as_u16();
     let text = r.text().await.unwrap_or_default();
     let msg: Option<String> = serde_json::from_str::<Value>(&text).ok().and_then(|j| {
@@ -172,7 +173,8 @@ async fn read_error(r: reqwest::Response) -> String {
         Some(m) => m,
         None => text.split_whitespace().collect::<Vec<_>>().join(" "),
     };
-    format!("HTTP {status}：{}", body.chars().take(240).collect::<String>())
+    // 对面那句话不是我们的文案：不进字典，只当 detail 参数原样带出去
+    AppError::coded_args(502, "srv.cloud.upstream", json!({ "code": status, "detail": body.chars().take(240).collect::<String>() }))
 }
 
 /// 探活只 GET /models，绝不为了试连通烧一次生成
@@ -181,7 +183,7 @@ pub async fn probe(ctx: &Ctx) -> Value {
     let mut out = Map::new();
     if s.base.is_empty() {
         out.insert("ok".into(), Value::Bool(false));
-        out.insert("error".into(), Value::String("还没填 base_url".into()));
+        out.insert("error".into(), Value::String("srv.cloud.noUrl".into()));
         return Value::Object(out);
     }
     let t0 = std::time::Instant::now();
@@ -191,7 +193,9 @@ pub async fn probe(ctx: &Ctx) -> Value {
     match r {
         Err(e) => {
             out.insert("ok".into(), Value::Bool(false));
-            out.insert("error".into(), Value::String(e.to_string().chars().take(200).collect()));
+            let (code, args) = AppError::fail_detail("srv.cloud.probeFail", e).reason();
+            out.insert("error".into(), Value::String(code));
+            if let Some(a) = args { out.insert("error_args".into(), Value::Object(a)); }
             out.insert("ms".into(), Value::from(t0.elapsed().as_millis() as i64));
         }
         Ok(resp) => {
@@ -199,7 +203,9 @@ pub async fn probe(ctx: &Ctx) -> Value {
             if !(100..=299).contains(&status) {
                 out.insert("ok".into(), Value::Bool(false));
                 out.insert("status".into(), Value::from(status));
-                out.insert("error".into(), Value::String(read_error(resp).await));
+                let (code, args) = read_error(resp).await.reason();
+                out.insert("error".into(), Value::String(code));
+                if let Some(a) = args { out.insert("error_args".into(), Value::Object(a)); }
                 out.insert("ms".into(), Value::from(t0.elapsed().as_millis() as i64));
             } else {
                 let text = resp.text().await.unwrap_or_default();
@@ -216,6 +222,24 @@ pub async fn probe(ctx: &Ctx) -> Value {
         }
     }
     Value::Object(out)
+}
+
+/// 应答原文压成一行给界面看：换行与连续空白都收成单空格，只留前两二百个字符
+fn flat(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect()
+}
+
+/// 传输层失败：种类在这里判、句子在字典里，调用方原样往外传。
+/// 细节取错误链上的下一层；链空了才退回 Display（它带 URL，而 URL 本来就在 `{url}` 那格里）。
+fn send_err(url: &str, e: reqwest::Error) -> AppError {
+    let code = if e.is_timeout() {
+        "srv.cloud.timeout"
+    } else if e.is_connect() {
+        "srv.cloud.connect"
+    } else {
+        "srv.cloud.send"
+    };
+    AppError::detailed_args(502, code, json!({ "url": url.to_string() }), crate::util::reqwest_detail(&e))
 }
 
 /// 一次出站图像的**单文件**上限。中转那头的口径各家不一样（20MB / 50MB），取最紧的那个：
@@ -243,16 +267,16 @@ pub struct Edit<'a> {
 /// 一次裁切区重绘：图 + 同尺寸「透明=重绘」遮罩，回一张 PNG 字节。
 /// `mask` 传 `None` 时**不带这个 part**——反向涂抹一笔没涂就是"整幅重绘"，
 /// 与其造一张全透明的巨图（各家的遮罩体积上限还不一样），不如按接口本来的样子省略。
-pub async fn edit(ctx: &Ctx, e: Edit<'_>) -> Result<Vec<u8>, String> {
+pub async fn edit(ctx: &Ctx, e: Edit<'_>) -> crate::error::Result<Vec<u8>> {
     let s = settings(ctx);
     if s.base.is_empty() {
-        return Err("云端还没配置 base_url（设置 → 云端）".into());
+        return Err(AppError::bad("srv.cloud.noBase"));
     }
     if s.model.is_empty() {
-        return Err("云端还没填模型名".into());
+        return Err(AppError::bad("srv.cloud.noModel"));
     }
     if s.key.is_empty() {
-        return Err("云端还没填 API key".into());
+        return Err(AppError::bad("srv.cloud.noKey"));
     }
     // 先按长度判两道（单文件 / 合计），再拼装 multipart：判体积不该把几十 MB 复制一遍
     let mut sizes: Vec<usize> = Vec::new();
@@ -261,19 +285,17 @@ pub async fn edit(ctx: &Ctx, e: Edit<'_>) -> Result<Vec<u8>, String> {
     }
     if let Some(big) = sizes.iter().max() {
         if *big > SEND_MAX_BYTES {
-            return Err(format!(
-                "要发出去的图里有 {} MB 的一份，超过单文件上限 {} MB：换小一点的图，或把尺寸胶囊调小一档",
-                big / 1048576,
-                SEND_MAX_BYTES / 1048576
+            return Err(AppError::bad_args(
+                "srv.cloud.fileOver",
+                json!({ "mb": big / 1048576, "cap": SEND_MAX_BYTES / 1048576 }),
             ));
         }
     }
     let total: usize = sizes.iter().sum();
     if total > SEND_MAX_TOTAL {
-        return Err(format!(
-            "这一次要发 {} MB 图像，超过合计上限 {} MB：少带几张参考图",
-            total / 1048576,
-            SEND_MAX_TOTAL / 1048576
+        return Err(AppError::bad_args(
+            "srv.cloud.totalOver",
+            json!({ "mb": total / 1048576, "cap": SEND_MAX_TOTAL / 1048576 }),
         ));
     }
     let png = |name: &str, b: Vec<u8>| {
@@ -309,18 +331,18 @@ pub async fn edit(ctx: &Ctx, e: Edit<'_>) -> Result<Vec<u8>, String> {
         .timeout(Duration::from_millis(s.timeout_ms as u64))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| send_err(&s.base, e))?;
     if !r.status().is_success() {
         return Err(read_error(r).await);
     }
-    let text = r.text().await.map_err(|e| e.to_string())?;
+    let text = r.text().await.map_err(|e| send_err(&s.base, e))?;
     let j: Value = serde_json::from_str(&text)
-        .map_err(|_| format!("云端应答不是 JSON：{}", text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>()))?;
+        .map_err(|_| AppError::bad_args("srv.cloud.notJson", json!({ "detail": flat(&text) })))?;
     let one = j.get("data").and_then(|d| d.get(0)).cloned().unwrap_or(j.clone());
     if let Some(b64) = one.get("b64_json").and_then(|v| v.as_str()) {
         let bytes = crate::util::decode_b64(b64);
         if bytes.is_empty() {
-            return Err("云端应答里的 b64_json 是空的".into());
+            return Err(AppError::fail("srv.cloud.b64Empty"));
         }
         return Ok(bytes);
     }
@@ -331,13 +353,13 @@ pub async fn edit(ctx: &Ctx, e: Edit<'_>) -> Result<Vec<u8>, String> {
             .timeout(Duration::from_millis(s.timeout_ms as u64))
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| send_err(&s.base, e))?;
         if !img.status().is_success() {
-            return Err(format!("云端给了地址但取不回图 HTTP {}", img.status().as_u16()));
+            return Err(AppError::fail_args("srv.cloud.urlFail", json!({ "code": img.status().as_u16() })));
         }
-        return img.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string());
+        return img.bytes().await.map(|b| b.to_vec()).map_err(|e| send_err(&s.base, e));
     }
-    Err(format!("云端应答里没有图：{}", text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>()))
+    Err(AppError::bad_args("srv.cloud.noImage", json!({ "detail": flat(&text) })))
 }
 
 /// 给 settle/回收用的超时阈值：请求超时之外，再给缝合与回传留两分钟

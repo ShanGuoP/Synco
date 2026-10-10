@@ -22,7 +22,7 @@ import { createHistory } from './history.js';
 import { createFilmstrip } from '../../views/editor/filmstrip.js';
 import { createCompare } from './compare.js';
 import { fmtFile, fmtDims } from '../../core/format.js';
-import { beforeSwitch, t } from '../../core/i18n.js';
+import { beforeSwitch, dx, t } from '../../core/i18n.js';
 
 let ctx = null;   // 当前编辑器上下文（只建一次，切图复用）
 let rerunFrom = null;       // 下一次提交是「哪条结果的重跑」
@@ -338,7 +338,7 @@ async function showImage(imgId) {
       ctx.history.setResults(info.results, hit.id);
       showCompare(hit);
     } else {
-      toastErr(t('ed.resultBlind'), hit ? String(hit.error || t('ed.resultBlindWhy')).slice(0, 120) : t('ed.recordGone'));
+      toastErr(t('ed.resultBlind'), hit ? (dx(hit.error, hit.error_args) || t('ed.resultBlindWhy')).slice(0, 120) : t('ed.recordGone'));
     }
   }
   ctx.params.stages.reset();
@@ -726,7 +726,7 @@ async function doSubmitCloud() {
       },
     });
   } catch (e) { fail(e.message || e); return; }
-  if (!r?.result_id) { fail(r?.error || t('ed.cloudBadReply')); return; }
+  if (!r?.result_id) { fail(dx(r?.error, r?.error_args) || t('ed.cloudBadReply')); return; }
 
   setJob(imgId, { state: 'run', resultId: r.result_id, error: null });
   advance('sample', full ? t('ed.cloudGen', { id: r.result_id }) : t('ed.cloudCrop', { id: r.result_id }));
@@ -797,7 +797,7 @@ async function doSubmit() {
     if (mine()) {
       st.set(cur, 'err');
       ctx.params.setBusy(false);
-      ctx.params.line(r.error || t('gen.noneAccepted'), true);
+      ctx.params.line(dx(r.error, r.error_args) || t('gen.noneAccepted'), true);
     }
     return;
   }
@@ -811,7 +811,7 @@ async function onJobSettled(r) {
   if (r?.image_id && r.image_id !== ctx.imgId) return;
   ctx.params.setBusy(false);
   // 带得上原因就直接说原因：轮询放弃那两条出口（记录没了、连续读不到）并没有右下角通知可看
-  if (r.status !== 'done') { ctx.params.line(r.error ? String(r.error).slice(0, 120) : t('ed.genFailNote'), true); return; }
+  if (r.status !== 'done') { ctx.params.line(r.error ? dx(r.error, r.error_args).slice(0, 120) : t('ed.genFailNote'), true); return; }
   ctx.params.stages.finish(true);
   ctx.params.line(t('ed.doneDrag'));
   try {

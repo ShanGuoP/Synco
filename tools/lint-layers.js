@@ -2,7 +2,7 @@
 //
 //   node tools/lint-layers.js
 //
-// 六条规则，全部先在当时现状代码上验绿后才立的（不写跑起来就是红的规矩）：
+// 七条规则，全部先在当时现状代码上验绿后才立的（不写跑起来就是红的规矩）：
 //   R1  api/*.rs       不摸库          禁 rusqlite（handler 只编排，落库走 repo）
 //   R2  repo/*.rs      不碰 HTTP       禁 axum / reqwest
 //   R3  service/*.rs   收解包后的参数   禁 axum（"能脱离 HTTP 单测"的承诺兑现成断言）
@@ -12,6 +12,7 @@
 //                                      stitch-core 现在管，photoedit-core M1 落地后自动纳入
 //   R5  public/js      fetch 只在 core/api.js
 //   R6  已迁前端文件    不许再写中文字面量（账本 DONE_I18N 只增不减）
+//   R7  已交钥匙的后端文件 不许再写中文文案（账本与通道判据在 lib/i18n-ledger.js）
 //
 // 匹配前剥掉行首 // 注释：service/mod.rs 的头注释写着"axum handler 全在 crate::api"，
 // 那是契约陈述不是引用，文档里提概念不该报红。只剥行首、不动行中 //（字符串里的 http:// 会误伤）。
@@ -22,17 +23,12 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const { codeLines } = require('./lib/code-lines.js');
 
-// R6 的账本：搬完一个文件就往里加一行，只增不减。
-const DONE_I18N = [
-  'public/js/core/i18n.js', 'public/js/shell.js',
-  'public/js/core/desktop.js', 'public/js/core/maskEncode.js', 'public/js/core/api.js', 'public/js/core/format.js',
-  'public/js/state.js', 'public/js/ui/progress.js', 'public/js/ui/modal.js', 'public/js/views/editor/filmstrip.js',
-  'public/js/app.js', 'public/js/gen.js', 'public/js/views/editor/compare.js', 'public/js/views/editor/history.js',
-  'public/js/core/theme.js', 'public/js/ui/dialogs.js', 'public/js/ui/phrases.js', 'public/js/ui/backends.js',
-  'public/js/ui/settings.js', 'public/js/ui/presets.js', 'public/js/views/home.js',
-  'public/js/views/editor/params.js', 'public/js/views/editor/index.js',
-  'public/js/views/canvas/index.js', 'public/js/views/project.js', 'public/js/views/editor/adjust.js',
-];
+/* 两本账（已搬完的前端文件、已交钥匙的后端文件）与"什么算界面文案"的通道判据
+   都在 lib/i18n-ledger.js：lint 用它当门，i18n-check 用它报进度，出处只能有一个。 */
+const { DONE_I18N, DONE_I18N_RS, uiCopy } = require("./lib/i18n-ledger.js");
+
+// pre 的契约是"把要比对的那一行交回来（空串=放过）"，lib 给的是布尔判据，这里包一层
+const preLine = (line, raw) => (uiCopy(line, raw) ? line : '');
 const rel = p => path.relative(ROOT, p).replace(/\\/g, '/');
 
 function walk(dir, out = []) {
@@ -96,7 +92,19 @@ const RULES = [
     bans: [['中文文案', /["'`][^"'`\n]*[\u4e00-\u9fff]/]],
     // 注释（含行尾那句解释）已由 lib/code-lines.js 剥干净，这里只判剩下的代码。
     // 行里带 i18n-keep 的放过：那是发给模型或写进文件的内容，不是界面文案，翻它等于改数据。
-    pre: (line, raw) => (/i18n-keep/.test(raw) ? '' : line),
+    pre: preLine,
+  },
+  {
+    // 后端的账本，与 R6 同一条思路：只钉"已经把文案交给字典的那些文件"。
+    // 判据到 #[cfg(test)] 为止——测试里的中文是断言与函数名，不是界面文案，翻它没意义。
+    id: 'R7', title: '已交钥匙的后端文件不许再写中文文案（crates/ + src-tauri/）',
+    files: () => DONE_I18N_RS.map(p => path.join(ROOT, p)).filter(f => fs.existsSync(f)),
+    bans: [['中文文案', /"[^"\n]*[\u4e00-\u9fff]/]],
+    // 控制台/日志/panic 的中文不在账上：那三样写给坐在机器前的人，界面读的是 code，
+    // 两条路不会互相冒充。判据在 lib/i18n-ledger.js 的 uiCopy 里，与 i18n-check 报进度同一份。
+    pre: preLine,
+    // 只算 #[cfg(test)] 之前的行；R6 没有这一条，因为前端没有内联测试模块
+    testCut: true,
   },
 ];
 
@@ -106,7 +114,13 @@ for (const rule of RULES) {
   const hits = [];
   for (const f of files) {
     if (rule.allow && rule.allow(f)) continue;
-    for (const { n, raw, line: stripped } of codeLines(f)) {
+    let rows = codeLines(f);
+    // 后端账本只看测试模块之前：测试里的中文是断言与中文函数名，不是界面文案
+    if (rule.testCut) {
+      const cut = rows.findIndex(x => /^\s*#\[cfg\(test\)\]/.test(x.raw));
+      if (cut >= 0) rows = rows.slice(0, cut);
+    }
+    for (const { n, raw, line: stripped } of rows) {
       const line = rule.pre ? rule.pre(stripped, raw) : stripped;
       if (!line.trim()) continue;
       for (const [tag, re] of rule.bans) {

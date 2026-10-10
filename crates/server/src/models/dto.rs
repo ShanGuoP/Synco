@@ -74,6 +74,14 @@ pub fn image_row_json(ctx: &Ctx, row: &Value) -> Value {
 pub fn result_json(ctx: &Ctx, row: &Value) -> Value {
     let r = ResultRow::from_value(row);
     let mut o = row.as_object().cloned().unwrap_or_default();
+    // 库里 error_args 是一段 JSON 文本；界面要的是能直接喂 t() 的对象。
+    // 解不动就删掉这一项：参数烂了不该让那句报错也一起不见。
+    if let Some(raw) = o.get("error_args").and_then(|v| v.as_str()).map(str::to_string) {
+        o.insert("error_args".into(), serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null));
+    }
+    if o.get("error_args").map(|v| v.is_null()).unwrap_or(true) {
+        o.remove("error_args");
+    }
     for (col, rel) in [
         ("final", &r.final_path),
         ("crop", &r.crop_path),

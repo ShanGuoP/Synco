@@ -4,11 +4,13 @@
 //! 换名之后旧 URL 自然失效，新 URL 可以放心 immutable。
 //! 这里的函数全是同步重活：调用方一律过 `util::blocking`，不要在 handler 里直接调（`*_async` 两个入口已经自带了）。
 
+use crate::error::{AppError, Result};
 use crate::models::entity::Image;
 use crate::repo;
 use crate::state::{Ctx, Shared};
 use crate::util;
 use crate::img::codec;
+use serde_json::json;
 use stitch_core::{crop_scale_rgba, resize_rgba, Rgba};
 use std::path::{Path, PathBuf};
 
@@ -87,28 +89,29 @@ fn level_sizes(w: usize, h: usize) -> Vec<(usize, usize)> {
     v
 }
 
-pub(crate) fn write_bytes(p: &Path, buf: &[u8]) -> std::result::Result<(), String> {
-    let dir = p.parent().ok_or_else(|| "派生档路径没有父目录".to_string())?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败：{e}"))?;
+pub(crate) fn write_bytes(p: &Path, buf: &[u8]) -> Result<()> {
+    let dir = p.parent().ok_or_else(|| AppError::bad("srv.image.noParent"))?;
+    std::fs::create_dir_all(dir).map_err(|e| AppError::fail_detail("srv.common.mkdirFail", e))?;
     // 先写 .part 再改名：同一张图可能被导入回调和启动补空当同时加工，
     // 直接覆写会让中间态被 /file/ 读出去（半张 JPEG 在浏览器里就是破图）
     let tmp = p.with_extension("part");
-    std::fs::write(&tmp, buf).map_err(|e| format!("写 {} 失败：{e}", p.display()))?;
-    std::fs::rename(&tmp, p).map_err(|e| format!("落位 {} 失败：{e}", p.display()))
+    let path_arg = || json!({ "path": p.display().to_string() });
+    std::fs::write(&tmp, buf).map_err(|e| AppError::detailed_args(500, "srv.image.slotWrite", path_arg(), e))?;
+    std::fs::rename(&tmp, p).map_err(|e| AppError::detailed_args(500, "srv.image.slotMove", path_arg(), e))
 }
 
 /// 读原图并解码。库里有过这行不等于盘上还有这个文件，所以这里统一报可读的错。
 /// 路径走 `util::data_file`：库里躺着的若是绝对路径或 `..`（被人改过的库），不该跟着它读到 data/ 外。
-fn read_orig(ctx: &Ctx, img: &Image) -> std::result::Result<Rgba, String> {
+fn read_orig(ctx: &Ctx, img: &Image) -> Result<Rgba> {
     let p = util::data_file(&ctx.data, &img.orig_path)
-        .ok_or_else(|| format!("原图文件已不在磁盘上：{}", img.orig_path))?;
-    let bytes = std::fs::read(&p).map_err(|e| format!("读原图失败：{e}"))?;
+        .ok_or_else(|| AppError::coded_args(500, "srv.image.origGone", json!({ "path": img.orig_path.clone() })))?;
+    let bytes = std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.origRead", e))?;
     codec::decode(&bytes)
 }
 
 /// 生成 thumb（必出）与 proxy（只在原图超出档位时出）。已入库就整体跳过。
 /// 返回 `false` 表示没动（已有或原图读不出来，调用方不用重复报错）。
-pub fn derive(ctx: &Ctx, img: &Image) -> std::result::Result<bool, String> {
+pub fn derive(ctx: &Ctx, img: &Image) -> Result<bool> {
     // 画稿不切派生档：JPEG 没有 alpha，一张空白画布会被拍成一块死黑；
     // 画布视图按 1:1 自己画那张纸，项目卡片也按 kind 走专门的摆位
     if img.is_sketch() {
@@ -122,7 +125,7 @@ pub fn derive(ctx: &Ctx, img: &Image) -> std::result::Result<bool, String> {
     // 这一步反正已经把原图解开了：库里那对 w/h 是导入时客户端报的，与真实像素不符就顺手改回来，
     // 否则瓦片摆位与涂抹层的几何会一直歪着
     if (base.w as i64, base.h as i64) != (img.w, img.h) {
-        repo::images::set_dims(ctx, img.id, base.w as i64, base.h as i64).map_err(|e| e.to_string())?;
+        repo::images::set_dims(ctx, img.id, base.w as i64, base.h as i64)?;
     }
     let long = base.w.max(base.h);
     let th = thumb_slot(ctx, img);
@@ -134,7 +137,7 @@ pub fn derive(ctx: &Ctx, img: &Image) -> std::result::Result<bool, String> {
     } else {
         None
     };
-    repo::images::set_derived(ctx, img.id, Some(&th.rel), px.as_deref()).map_err(|e| e.to_string())?;
+    repo::images::set_derived(ctx, img.id, Some(&th.rel), px.as_deref())?;
     Ok(true)
 }
 
@@ -153,12 +156,10 @@ pub fn spawn_derive(ctx: &Shared, img: Image) {
         let Ok(_slot) = SLOTS.acquire().await else { return };
         // derive 里是一次全分辨率解码加两档重编码，秒级 CPU：留在当前 worker 上等于
         // 把一整条连接按住（桌面壳与服务同进程，窗口会跟着卡），所以要过一道阻塞池
-        let ran = util::blocking(move || derive(&ctx, &img).map_err(crate::error::AppError::Fail))
-            .await
-            .map_err(|e| e.to_string());
+        let ran = util::blocking(move || derive(&ctx, &img)).await;
         // 补不出来只记一行：原图被手动删过是常态，前端回退 orig_url 就行
         if let Err(e) = ran {
-            tracing_lite(&rel, &e);
+            tracing_lite(&rel, &e.text());
         }
     });
 }
@@ -199,7 +200,7 @@ pub fn backfill(ctx: &std::sync::Arc<Ctx>) {
             Err(e) => {
                 bad += 1;
                 if bad <= 3 {
-                    println!("  跳过 {}：{e}", img.orig_path);
+                    println!("  跳过 {}：{}", img.orig_path, e.text());
                 }
             }
         }
@@ -220,9 +221,9 @@ pub fn result_thumb(ctx: &Ctx, rid: i64, pid: i64, final_rel: &str) -> Option<St
 /// 涂抹层 → 原图尺寸。前端在 proxy 分辨率上画，本机链路要把蒙版喂给 ComfyUI，
 /// 尺寸必须和原图一致，否则 InpaintCrop 的裁切几何会整体错位。
 /// 已经是原图尺寸（历史蒙版就是满尺寸的）直接原样返回，不重编码。
-pub fn mask_to_orig(ctx: &Ctx, mask_rel: &str, w: usize, h: usize) -> std::result::Result<Vec<u8>, String> {
-    let bytes = std::fs::read(util::data_file(&ctx.data, mask_rel).ok_or_else(|| "遮罩文件已不在磁盘上".to_string())?)
-        .map_err(|e| format!("读遮罩失败：{e}"))?;
+pub fn mask_to_orig(ctx: &Ctx, mask_rel: &str, w: usize, h: usize) -> Result<Vec<u8>> {
+    let bytes = std::fs::read(util::data_file(&ctx.data, mask_rel).ok_or_else(|| AppError::bad("srv.submit.maskGone"))?)
+        .map_err(|e| AppError::fail_detail("srv.image.maskRead", e))?;
     let m = codec::decode(&bytes)?;
     if m.w == w && m.h == h {
         return Ok(bytes);
@@ -234,7 +235,7 @@ pub fn mask_to_orig(ctx: &Ctx, mask_rel: &str, w: usize, h: usize) -> std::resul
 /// meta.json 在目录里就是"切完了"的凭据；中途崩了下次重切，不留半套。
 /// 返回的 JSON 直接给前端：`{w,h,tile,levels:[{z,w,h,cols,rows}],url}`，
 /// `url` 是瓦片路径模板，前端把 `{z}_{x}_{y}` 换成实际编号。
-pub fn tiles(ctx: &Ctx, img: &Image) -> std::result::Result<serde_json::Value, String> {
+pub fn tiles(ctx: &Ctx, img: &Image) -> Result<serde_json::Value> {
     pyramid(&tiles_dir(ctx, img), &tiles_rel_root(img), || read_orig(ctx, img), &format!("/file/{}", img.orig_path))
 }
 
@@ -244,12 +245,12 @@ pub fn tiles(ctx: &Ctx, img: &Image) -> std::result::Result<serde_json::Value, S
 pub fn pyramid(
     dir: &Path,
     root: &str,
-    decode: impl FnOnce() -> std::result::Result<Rgba, String>,
+    decode: impl FnOnce() -> Result<Rgba>,
     whole_url: &str,
-) -> std::result::Result<serde_json::Value, String> {
+) -> Result<serde_json::Value> {
     let meta_path = dir.join("meta.json");
     let base = if meta_path.is_file() {
-        std::fs::read(&meta_path).map_err(|e| format!("读瓦片清单失败：{e}"))?
+        std::fs::read(&meta_path).map_err(|e| AppError::fail_detail("srv.tile.metaRead", e))?
     } else {
         let full = decode()?;
         if full.w.max(full.h) < TILE_MIN {
@@ -259,16 +260,16 @@ pub fn pyramid(
             return Ok(small);
         }
         build_tiles_at(dir, root, &full)?;
-        std::fs::read(&meta_path).map_err(|e| format!("读瓦片清单失败：{e}"))?
+        std::fs::read(&meta_path).map_err(|e| AppError::fail_detail("srv.tile.metaRead", e))?
     };
-    serde_json::from_slice(&base).map_err(|e| format!("瓦片清单坏了：{e}"))
+    serde_json::from_slice(&base).map_err(|e| AppError::fail_detail("srv.tile.metaBad", e))
 }
 
 /// 瓦片清单的 tokio 入口：与派生档共用同一对槽。
 /// 首次访问那张图要切一套（一整幅解码 + 每层重采样），而编辑器进来可能一次打上好几个请求；
 /// 不限流就是 N 份全分辨率解码同时铺开。拿到槽之后 `pyramid()` 自己会先看 meta.json，
 /// 已经被别人切完的那次就直接读清单回来。
-pub async fn tiles_async(ctx: &Shared, img: Image) -> std::result::Result<serde_json::Value, String> {
+pub async fn tiles_async(ctx: &Shared, img: Image) -> Result<serde_json::Value> {
     let ctx2 = ctx.clone();
     pyramid_async(move || tiles(&ctx2, &img)).await
 }
@@ -276,12 +277,13 @@ pub async fn tiles_async(ctx: &Shared, img: Image) -> std::result::Result<serde_
 /// 切一套瓦片的公共入口：源图与「本地调整」的成图共用这一对限流槽，
 /// 因为两者的开销是同一件事——一整幅解码 + 每层重采样 + 上百张编码。
 /// `work` 由调用方决定切哪张图（调整那条要先读库里的参数）。
-pub async fn pyramid_async(work: impl FnOnce() -> std::result::Result<serde_json::Value, String> + Send + 'static) -> std::result::Result<serde_json::Value, String> {
-    let Ok(_slot) = SLOTS.acquire().await else { return Err("瓦片的限流槽已经关了".into()) };
-    tokio::task::spawn_blocking(work).await.unwrap_or_else(|e| Err(format!("瓦片线程崩了：{e}")))
+pub async fn pyramid_async(work: impl FnOnce() -> Result<serde_json::Value> + Send + 'static) -> Result<serde_json::Value> {
+    let Ok(_slot) = SLOTS.acquire().await else { return Err(AppError::fail("srv.tile.slotClosed")) };
+    // 崩了的那次拿不到返回值，只能报"线程没了"，细节是 JoinError 那句原文
+    tokio::task::spawn_blocking(work).await.map_err(|e| AppError::fail_detail("srv.tile.threadPanic", e))?
 }
 
-fn build_tiles_at(dir: &Path, root: &str, full: &Rgba) -> std::result::Result<(), String> {
+fn build_tiles_at(dir: &Path, root: &str, full: &Rgba) -> Result<()> {
     let sizes = level_sizes(full.w, full.h);
     // 从最细一层开始，逐级减半往下走：每级只重采样上一级，比每级都从 24MP 原图重采便宜得多
     let mut cur = full.clone();
@@ -289,7 +291,7 @@ fn build_tiles_at(dir: &Path, root: &str, full: &Rgba) -> std::result::Result<()
     for z in (0..sizes.len()).rev() {
         let (w, h) = sizes[z];
         if cur.w != w || cur.h != h {
-            return Err(format!("瓦片层级算不通：期望 {w}×{h}，实有 {}×{}", cur.w, cur.h));
+            return Err(AppError::bad_args("srv.tile.levelMismatch", json!({ "w": w, "h": h, "aw": cur.w, "ah": cur.h })));
         }
         let cols = w.div_ceil(TILE);
         let rows = h.div_ceil(TILE);
@@ -298,7 +300,7 @@ fn build_tiles_at(dir: &Path, root: &str, full: &Rgba) -> std::result::Result<()
             .map(|(tx, ty)| (tx * TILE, ty * TILE, TILE.min(w - tx * TILE), TILE.min(h - ty * TILE), dir.join(z.to_string()).join(format!("{tx}_{ty}.jpg"))))
             .collect();
         // 单张瓦片编码不到 1ms，但一次要出上百张，分核跑完比串行快一个数量级
-        let err: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        let err: std::sync::Mutex<Option<AppError>> = std::sync::Mutex::new(None);
         let src = &cur;
         let nt = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(jobs.len().max(1));
         std::thread::scope(|s| {

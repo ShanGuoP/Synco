@@ -232,10 +232,11 @@ async function main() {
   fs.writeFileSync(wfPath, JSON.stringify(userGraph('nostitch')));
   await req(base, 'POST', '/api/settings/workflow', { path: wfPath });
   const roles3 = await req(base, 'GET', '/api/workflow/roles');
-  ok('缺缝合就说清缺了谁', roles3.body.can_takeover === false && String(roles3.body.errors.join('')).includes('缝合'), JSON.stringify(roles3.body.errors));
+  ok('缺缝合就说清缺了谁', roles3.body.can_takeover === false
+    && (roles3.body.errors || []).some(e => e.code === 'srv.wf.roleMissing' && e.args?.role?.code === 'wf.role.stitch'), JSON.stringify(roles3.body.errors));
   const hitsBefore = mock.hits.length;
   const run3 = await submit(base, iid, settings);
-  ok('提交被拒而不是静默改用内置图', run3.skipped === true && String(run3.reason).includes('不能接管提交') && String(run3.reason).includes('缝合'), JSON.stringify(run3));
+  ok('提交被拒而不是静默改用内置图', run3.skipped === true && run3.reason === 'srv.submit.wfCannotTakeover', JSON.stringify(run3));
   ok('拒掉之后没有偷偷发给 ComfyUI', mock.hits.length === hitsBefore, `${mock.hits.length} vs ${hitsBefore}`);
 
   // ---------- 4. UI 导出：走内置图，但把原因写明 ----------
@@ -243,7 +244,7 @@ async function main() {
   fs.writeFileSync(litePath, JSON.stringify({ nodes: [{ id: 3, type: 'UNETLoader', mode: 0, widgets_values: ['u.safetensors', 'default'] }], links: [] }));
   await req(base, 'POST', '/api/settings/workflow', { path: litePath });
   const roles4 = await req(base, 'GET', '/api/workflow/roles');
-  ok('UI 导出认当不了计算图', roles4.body.is_api === false && String(roles4.body.reason).includes('UI 导出'), JSON.stringify(roles4.body.reason));
+  ok('UI 导出认当不了计算图', roles4.body.is_api === false && roles4.body.reason === 'srv.wf.uiExport', JSON.stringify(roles4.body.reason));
   const run4 = await submit(base, iid, settings);
   const r4 = await settle(base, run4.result_id);
   const g4 = (mock.hits[mock.hits.length - 1] || {}).graph || {};
@@ -254,13 +255,14 @@ async function main() {
   fs.writeFileSync(wfPath, JSON.stringify(userGraph()));
   await req(base, 'POST', '/api/settings/workflow', { path: wfPath });
   const badPut = await req(base, 'POST', '/api/workflow/roles', { roles: { ksampler: '21' } });
-  ok('把采样器指到加载图上被拒', badPut.status === 200 && (badPut.body.rejected || []).length === 1 && String(badPut.body.rejected[0]).includes('KSampler'),
+  ok('把采样器指到加载图上被拒', badPut.status === 200 && (badPut.body.rejected || []).length === 1 && badPut.body.rejected[0].args?.class === 'KSampler',
     JSON.stringify(badPut.body.rejected));
   const goodPut = await req(base, 'POST', '/api/workflow/roles', { roles: { out_final: '19' } });
   ok('指到别的类也被拒', (goodPut.body.rejected || []).length === 1, JSON.stringify(goodPut.body.rejected));
   // 同类的另一个 SaveImage 图里没有，那就用"节点不存在"这条：手输一个 999
   const ghost = await req(base, 'POST', '/api/workflow/roles', { roles: { out_final: '999' } });
-  ok('指向图里不存在的节点被拒', (ghost.body.rejected || []).length === 1 && String(ghost.body.rejected[0]).includes('999'), JSON.stringify(ghost.body.rejected));
+  ok('指向图里不存在的节点被拒', (ghost.body.rejected || []).length === 1
+    && ghost.body.rejected[0].code === 'srv.wf.roleNotInGraph' && ghost.body.rejected[0].args?.id === '999', JSON.stringify(ghost.body.rejected));
   const cleared = await req(base, 'POST', '/api/workflow/roles', { roles: { out_final: '' } });
   ok('清空等于交回自动认出', cleared.body.saved && Object.keys(cleared.body.saved).length === 0 && cleared.body.effective.out_final === '51',
     JSON.stringify({ saved: cleared.body.saved, eff: cleared.body.effective.out_final }));

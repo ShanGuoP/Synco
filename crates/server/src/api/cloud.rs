@@ -2,8 +2,8 @@
 //! M3 起：`edit` 不再收前端裁好的图和蒙版，也不再回传缝合结果——
 //! 裁切、调云端、缝合、落盘全在服务端一次做完，进度靠 `results` 行的状态机。
 
-use super::common::{bad, body_of, err, ok};
-use crate::error::{AppError, Result};
+use super::common::{bad, bad_raw, body_of, err, ok};
+use crate::error::Result;
 use crate::repo::images as rimg;
 use crate::service::cloud;
 use crate::state::Shared;
@@ -18,7 +18,7 @@ pub async fn cloud_get(State(ctx): State<Shared>) -> Response {
 
 pub async fn cloud_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
-    cloud::save(&ctx, &body).map_err(AppError::bad)?;
+    cloud::save(&ctx, &body)?;
     Ok(ok(cloud::public_settings(&ctx)))
 }
 
@@ -38,13 +38,16 @@ pub async fn cloud_edit(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
     let body = body_of(raw).await?;
     let iid = body.get("image_id").and_then(|v| v.as_i64()).unwrap_or(-1);
     if rimg::by_id(&ctx, iid)?.is_none() {
-        return Ok(err(404, "图片不存在"));
+        return Ok(err(404, "srv.canvas.noImage"));
     }
     let settings = body.get("settings").cloned().unwrap_or(Value::Object(Map::new()));
     let (rows, skipped) = crate::service::queue::enqueue(&ctx, &[iid], &settings, body.get("rerun_of").and_then(|v| v.as_i64()))?;
     if rows.is_empty() {
-        let reason = skipped.first().and_then(|v| v.get("reason")).and_then(|v| v.as_str()).unwrap_or("这张图提交不了");
-        return Ok(bad(reason));
+        // 理由可能是队列带上来的一句原文（还没交钥匙），也可能根本没有理由：后者才用钥匙
+        match skipped.first().and_then(|v| v.get("reason")).and_then(|v| v.as_str()) {
+            Some(r) => return Ok(bad_raw(r)),
+            None => return Ok(bad("srv.cloud.cantSubmit")),
+        }
     }
     crate::service::queue::pump(&ctx).await;
     Ok(ok(serde_json::json!({ "result_id": rows[0].0, "image_id": rows[0].1, "queued": true })))
@@ -55,12 +58,12 @@ pub async fn queue_post(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
     let body = body_of(raw).await?;
     let ids_in = ids_of(&body, "image_ids");
     if ids_in.is_empty() {
-        return Ok(bad("没有要提交的图片"));
+        return Ok(bad("srv.cloud.nothing"));
     }
     let settings = body.get("settings").cloned().unwrap_or(Value::Object(Map::new()));
     let prompt = settings.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if prompt.is_empty() {
-        return Ok(bad("提示词是空的，云端只会照原图描一遍"));
+        return Ok(bad("srv.cloud.promptEmpty"));
     }
     let (rows, skipped) = crate::service::queue::enqueue(&ctx, &ids_in, &settings, body.get("rerun_of").and_then(|v| v.as_i64()))?;
     crate::service::queue::pump(&ctx).await;

@@ -113,15 +113,15 @@ pub fn adjusted(ctx: &Ctx, img: &Image) -> bool {
     !load_ops(ctx, img.id).is_identity()
 }
 
-fn orig_rgba(ctx: &Ctx, img: &Image) -> std::result::Result<Rgba, String> {
-    let p = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| "原图路径不在数据目录里".to_string())?;
-    let bytes = std::fs::read(&p).map_err(|e| format!("读原图失败：{e}"))?;
+fn orig_rgba(ctx: &Ctx, img: &Image) -> Result<Rgba> {
+    let p = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| AppError::bad("srv.image.origOutside"))?;
+    let bytes = std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.origRead", e))?;
     codec::decode(&bytes)
 }
 
 /// 涂抹层：库里存的是 proxy 分辨率，按当前工作尺寸重采样后再取 alpha。
 /// 没涂过就是 `None`，美颜按全图走——正是拍板的那句"没涂 = 全图温和"。
-fn mask_plane(ctx: &Ctx, img: &Image, w: usize, h: usize) -> std::result::Result<Option<Alpha>, String> {
+fn mask_plane(ctx: &Ctx, img: &Image, w: usize, h: usize) -> Result<Option<Alpha>> {
     let Some(rel) = img.mask_path.clone().filter(|s| !s.is_empty()) else { return Ok(None) };
     if util::data_file(&ctx.data, &rel).is_none() {
         return Ok(None);
@@ -132,17 +132,20 @@ fn mask_plane(ctx: &Ctx, img: &Image, w: usize, h: usize) -> std::result::Result
 
 /// LUT 文件：只认 `data/luts/` 里的单层文件名。
 /// 名字是参数里来的，`..`、绝对路径、子目录一概不读。
-fn lut_table(ctx: &Ctx, name: &str) -> std::result::Result<Option<LutTable>, String> {
+fn lut_table(ctx: &Ctx, name: &str) -> Result<Option<LutTable>> {
     if name.is_empty() {
         return Ok(None);
     }
     let dir = ctx.data.join("luts");
     let p = dir.join(name);
     if !util::inside(&dir, &p) || p.parent().map(|x| x != dir).unwrap_or(true) {
-        return Err(format!("LUT 名字不合法：{name}"));
+        return Err(AppError::bad_args("srv.adjust.lutName", json!({ "name": name.to_string() })));
     }
-    let text = std::fs::read_to_string(&p).map_err(|e| format!("读不到这个 LUT：{e}"))?;
-    let table = photoedit_core::parse_cube(&text).map_err(|e: String| e)?;
+    let text = std::fs::read_to_string(&p).map_err(|e| AppError::detail("srv.adjust.lutRead", e))?;
+                // 细节自己也是一条带钥匙的理由：中英各查各的，不拼半句
+let table = photoedit_core::parse_cube(&text).map_err(|e| {
+            AppError::bad_args("srv.adjust.lutParse", json!({ "msg": { "code": e.code, "args": e.args } }))
+        })?;
     Ok(Some(table))
 }
 
@@ -153,11 +156,11 @@ fn shape_for(ctx: &Ctx, img: &Image) -> Option<FaceShape> {
 }
 
 /// 把参数链作用到这张图上（同步重活，调用方负责过阻塞池）
-pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> std::result::Result<Rgba, String> {
+pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> Result<Rgba> {
     let base = match grade {
         Grade::Proxy => match img.proxy_path.as_deref().and_then(|r| util::data_file(&ctx.data, r)) {
             // 有 proxy 档就读它：24MP 原图解开一次是几百毫秒，滑杆每动一下都付这个钱不值得
-            Some(p) if p.is_file() => codec::decode(&std::fs::read(&p).map_err(|e| format!("读 proxy 失败：{e}"))?)?,
+            Some(p) if p.is_file() => codec::decode(&std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.proxyRead", e))?)?,
             _ => codec::scale_to_long_edge(&orig_rgba(ctx, img)?, imagesvc::proxy_edge(ctx)),
         },
         Grade::Full => orig_rgba(ctx, img)?,
@@ -176,7 +179,7 @@ pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> std::resul
 /// 报出去的宽高是**成图那一档**（`out_size`），不是这张 proxy 档自己的：
 /// 前端拿它当画幅尺寸，报了预览档的尺寸就等于把画布缩到 proxy 那么大——图会当场小一圈，
 /// 1:1 与放大看到的也只是那张糊图。两条分支（新建与复用）必须同一口径，否则拖两下滑杆画幅会跳。
-pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Result<Built, String> {
+pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Built> {
     let h = ops_hash(&ops.to_json());
     let (rel, abs) = slot(ctx, img, "adjprev", &h);
     let (w, hh) = out_size(img, ops);
@@ -193,7 +196,7 @@ pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Resu
 
 /// 成图：原分辨率落 `_adjusted<指纹>.jpg`，并配一张 320 小档给列表用。
 /// 返回的第二个值是缩略档的相对路径（缩略档写失败不影响成图，回 `None` 就行）。
-pub fn build_render(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Result<(Built, Option<String>), String> {
+pub fn build_render(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<(Built, Option<String>)> {
     let h = ops_hash(&ops.to_json());
     let (rel, abs) = slot(ctx, img, "adjusted", &h);
     let (th_rel, th_abs) = slot(ctx, img, "adjthumb", &h);
@@ -215,7 +218,7 @@ pub fn build_render(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Resul
 /// 再跟照片一样过一遍几何段。少了后半段，转 90° 的照片配一张没转的遮罩，
 /// `InpaintCropImproved` 圈到的就是另一块地方——而且工作流不会抱怨，它只会照单画。
 /// 遮罩的笔迹同时活在 R 与 A 两条通道里（ComfyUI 读 red、内核读 alpha），所以整幅 RGBA 一起转。
-pub fn submit_mask(ctx: &Ctx, img: &Image) -> std::result::Result<Vec<u8>, String> {
+pub fn submit_mask(ctx: &Ctx, img: &Image) -> Result<Vec<u8>> {
     let ops = load_ops(ctx, img.id);
     let rel = img.mask_path.clone().unwrap_or_default();
     let mut png = imagesvc::mask_to_orig(ctx, &rel, img.w.max(1) as usize, img.h.max(1) as usize)?;
@@ -230,13 +233,13 @@ pub fn submit_mask(ctx: &Ctx, img: &Image) -> std::result::Result<Vec<u8>, Strin
 /// 预览档只有 proxy 那么粗，而 1:1 与放大要看的正是真实像素——与源图那套同一个口径，
 /// 差别只在目录多一层参数指纹：换参数就换 URL，既不会命中旧内容的 immutable 缓存，
 /// 也不会把没渲过的档位算第二遍。
-pub fn tiles(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Result<Value, String> {
+pub fn tiles(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Value> {
     let (b, _) = build_render(ctx, img, ops)?;
     let h = ops_hash(&ops.to_json());
     let abs = b.abs.clone();
     let url = format!("/file/{}", b.rel);
     let out = imagesvc::pyramid(&adj_tile_dir(ctx, img, &h), &adj_tile_rel(img, &h), || {
-        let bytes = std::fs::read(&abs).map_err(|e| format!("读成图失败：{e}"))?;
+        let bytes = std::fs::read(&abs).map_err(|e| AppError::fail_detail("srv.image.renderRead", e))?;
         codec::decode(&bytes)
     }, &url)?;
     purge_adj_tiles(ctx, img, &h);
@@ -305,7 +308,7 @@ pub fn normalize(ops: &mut EditOps, long_edge: usize) -> Vec<String> {
         let n = s.points.len();
         s.points = photoedit_core::simplify(&s.points, tol);
         if s.points.len() != n {
-            rep.push(format!("warp.strokes.points(-{}点)", n - s.points.len()));
+            rep.push(format!("warp.strokes.points(-{})", n - s.points.len()));
         }
     }
     rep
@@ -314,13 +317,13 @@ pub fn normalize(ops: &mut EditOps, long_edge: usize) -> Vec<String> {
 /// 「另存为新图」：把成图复制成一条独立图片行的原图，父图是这张。
 /// 走的是与结果行 fork 同一条谱系（`derived_from`），项目页的派生入口因此不用改。
 pub fn fork_from(ctx: &Ctx, img: &Image, built_rel: &str, w: i64, h: i64) -> Result<i64> {
-    let src = util::data_file(&ctx.data, built_rel).ok_or_else(|| AppError::bad("成图文件不在数据目录里"))?;
-    let name = format!("{}_{r4} 调整.jpg", util::now_ms(), r4 = util::r4());
+    let src = util::data_file(&ctx.data, built_rel).ok_or_else(|| AppError::bad("srv.adjust.renderGone"))?;
+    let name = format!("{}_{r4} 调整.jpg", util::now_ms(), r4 = util::r4()); // i18n-keep
     let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), name]);
     let dst = ctx.data.join(&rel);
     // 复制一份而不是改名：调整档要留在父图名下，用户回退参数时还能拿它判新
-    std::fs::copy(&src, &dst).map_err(|e| AppError::Fail(format!("另存失败：{e}")))?;
-    let id = rimg::insert_derived(ctx, img.project_id, &format!("{} 调整.jpg", label_stem(img)), &rel, w, h, img.id, 0)?;
+    std::fs::copy(&src, &dst).map_err(|e| AppError::fail_detail("srv.adjust.forkFail", e))?;
+    let id = rimg::insert_derived(ctx, img.project_id, &format!("{} 调整.jpg", label_stem(img)), &rel, w, h, img.id, 0)?; // i18n-keep
     // 项目卡片的"最近改动"要跟着走，与导入/另存同一惯例
     rproj::touch(ctx, img.project_id)?;
     Ok(id)
@@ -328,7 +331,7 @@ pub fn fork_from(ctx: &Ctx, img: &Image, built_rel: &str, w: i64, h: i64) -> Res
 
 /// 提交给 AI 重绘的输入字节（拍板 4：调整后的图，所见即所得）。
 /// 没动参数就原样交文件字节——"未调整图片的行为与 0.2.1 逐字段一致"靠的就是这个分支。
-pub fn submit_bytes(ctx: &Ctx, img: &Image) -> std::result::Result<Vec<u8>, String> {
+pub fn submit_bytes(ctx: &Ctx, img: &Image) -> Result<Vec<u8>> {
     Ok(submit_artifact(ctx, img)?.0)
 }
 
@@ -336,11 +339,11 @@ pub fn submit_bytes(ctx: &Ctx, img: &Image) -> std::result::Result<Vec<u8>, Stri
 /// 调整过的图要把**真正发出去的那一张**留在库里当结果行的原图：不然「对比原图」
 /// 拿一张没裁切、没调色的旧文件去比刚回来的成图，看着就像程序出了错。
 /// 同一套参数只写一次（文件名里有参数指纹），重复提交直接复用。
-pub fn submit_artifact(ctx: &Ctx, img: &Image) -> std::result::Result<(Vec<u8>, String), String> {
+pub fn submit_artifact(ctx: &Ctx, img: &Image) -> Result<(Vec<u8>, String)> {
     let ops = load_ops(ctx, img.id);
     if ops.is_identity() {
-        let p = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| "原图路径不在数据目录里".to_string())?;
-        return Ok((std::fs::read(&p).map_err(|e| format!("读原图失败：{e}"))?, img.orig_path.clone()));
+        let p = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| AppError::bad("srv.image.origOutside"))?;
+        return Ok((std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.origRead", e))?, img.orig_path.clone()));
     }
     let bytes = codec::encode_png(&pixels(ctx, img, &ops, Grade::Full)?);
     let (rel, abs) = slot(ctx, img, "adjinput", &ops_hash(&ops.to_json()));
@@ -351,13 +354,13 @@ pub fn submit_artifact(ctx: &Ctx, img: &Image) -> std::result::Result<(Vec<u8>, 
 }
 
 /// 提交给 AI 重绘的像素（云端缝合那一路要在内存里接着算，不能再解一次盘）
-pub fn photo(ctx: &Ctx, img: &Image) -> std::result::Result<Rgba, String> {
+pub fn photo(ctx: &Ctx, img: &Image) -> Result<Rgba> {
     photo_with(ctx, img, &load_ops(ctx, img.id))
 }
 
 /// 同上，但参数由调用方给——云端那条链一次要同时知道"有没有调整"和"调整成什么样"，
 /// 分两次读库就是把同一条查询跑两遍
-pub fn photo_with(ctx: &Ctx, img: &Image, ops: &EditOps) -> std::result::Result<Rgba, String> {
+pub fn photo_with(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Rgba> {
     if ops.is_identity() {
         return orig_rgba(ctx, img);
     }
@@ -636,11 +639,11 @@ mod tests {
         let (dir, ctx, _img) = fixture("lutpath");
         std::fs::create_dir_all(ctx.data.join("luts")).unwrap();
         for bad in ["../app.db", "luts/x.cube", "/etc/passwd"] {
-            let err = lut_table(&ctx, bad).unwrap_err();
+            let err = lut_table(&ctx, bad).unwrap_err().text();
             assert!(err.contains("不合法") || err.contains("读不到"), "{bad} → {err}");
         }
         // 名字合法但文件不存在：说"读不到"而不是崩
-        assert!(lut_table(&ctx, "没有这个.cube").unwrap_err().contains("读不到"));
+        assert!(lut_table(&ctx, "没有这个.cube").unwrap_err().text().contains("读不到"));
         std::fs::write(ctx.data.join("luts").join("ok.cube"), "LUT_1D_SIZE 2\n0 0 0\n1 1 1\n").unwrap();
         assert!(lut_table(&ctx, "ok.cube").unwrap().is_some());
         assert!(lut_table(&ctx, "").unwrap().is_none(), "没选 LUT 就是没选，不该报错");

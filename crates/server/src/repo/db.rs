@@ -4,6 +4,8 @@
 use rusqlite::Connection;
 use std::path::Path;
 
+/// 建表语句一次写完。0.3 本地精修那两张附属表（image_adjust / image_face）都是"跟着图走"的，
+/// 删图时由 api::images::image_delete 逐表清（与 results 同一惯例，不靠 REFERENCES）。
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS projects(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, settings_json TEXT DEFAULT '{}',
@@ -14,7 +16,7 @@ CREATE TABLE IF NOT EXISTS images(
   created_at TEXT DEFAULT (datetime('now','localtime')));
 CREATE TABLE IF NOT EXISTS results(
   id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER, project_id INTEGER,
-  status TEXT DEFAULT 'running', error TEXT, prompt_id TEXT,
+  status TEXT DEFAULT 'running', error TEXT, error_args TEXT, prompt_id TEXT,
   prompt TEXT, steps INTEGER, cfg REAL, seed INTEGER, orig_path TEXT,
   final_path TEXT, crop_path TEXT, maskoverlay_path TEXT,
   created_at TEXT DEFAULT (datetime('now','localtime')));
@@ -28,9 +30,6 @@ CREATE TABLE IF NOT EXISTS presets(
   prompt TEXT DEFAULT '', negative TEXT DEFAULT '', steps INTEGER, cfg REAL,
   loras_json TEXT DEFAULT '[]',
   created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT);
-
-/* 0.3 本地精修：参数链与两类人脸缓存。都是"跟着图走"的附属表，
-   删图时由 api::images::image_delete 逐表清（与 results 同一惯例，不靠 REFERENCES） */
 CREATE TABLE IF NOT EXISTS image_adjust(
   image_id INTEGER PRIMARY KEY, ops TEXT NOT NULL,
   updated_at TEXT DEFAULT (datetime('now','localtime')));
@@ -52,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_results_project ON results(project_id);
 /// 旧库补列：前五条是历史库里已有的列，中间三条是 M3 图像服务化要读的派生档，
 /// 再后面分别是提示词短语分桶、画稿/照片分桶，和这一批的**派生谱系 + 画稿快照**。
 /// 逐条按"列在不在"判重，所以老库直接升上来就行，不需要重建。
-const MIGRATIONS: [(&str, &str, &str); 13] = [
+const MIGRATIONS: [(&str, &str, &str); 14] = [
     ("results", "prompt_id", "ALTER TABLE results ADD COLUMN prompt_id TEXT"),
     ("results", "settings_json", "ALTER TABLE results ADD COLUMN settings_json TEXT"),
     ("results", "rerun_of", "ALTER TABLE results ADD COLUMN rerun_of INTEGER"),
@@ -69,6 +68,9 @@ const MIGRATIONS: [(&str, &str, &str); 13] = [
     ("images", "derived_result", "ALTER TABLE images ADD COLUMN derived_result INTEGER"),
     // 画布每一版生成时的线稿快照：不然用户接着画两笔，就再也回不到"出这张图时我画的是什么"
     ("results", "sketch_path", "ALTER TABLE results ADD COLUMN sketch_path TEXT"),
+    // 报错不再把某一语言的句子焊进库：error 存钥匙、这一列存参数，界面按当前语言查字典。
+    // 老行的 error 本身就是一句话，查不到钥匙就原样显示，所以不需要回填。
+    ("results", "error_args", "ALTER TABLE results ADD COLUMN error_args TEXT"),
 ];
 
 fn has_column(db: &Connection, table: &str, col: &str) -> rusqlite::Result<bool> {
@@ -96,10 +98,11 @@ fn heal_stale_timestamps(db: &Connection) -> rusqlite::Result<()> {
 /// 历史脏值修复：早期建项目只裁长度不 trim，纯空格能当名字存进去，
 /// 首页就出现看不见的项目、搜索也搜不到。改名入口上线时一并清一次，判据幂等。
 fn heal_blank_names(db: &Connection) -> rusqlite::Result<()> {
+    // i18n-keep 这个名字写进库里的 name 列：它是用户数据，换语言不该改写已经存着的项目名
+    const BLANK_NAME: &str = "未命名项目"; // i18n-keep
     let n = db.execute(
-        "UPDATE projects SET name='未命名项目' \
-         WHERE name IS NULL OR trim(name, ' ' || char(9) || char(10) || char(13))=''",
-        [],
+        "UPDATE projects SET name=? WHERE name IS NULL OR trim(name, ' ' || char(9) || char(10) || char(13))=''",
+        [BLANK_NAME],
     )?;
     if n > 0 {
         println!("  已给 projects 里 {n} 行空名字补上兜底显示名（早期版本没 trim 就落库）");
@@ -110,7 +113,7 @@ fn heal_blank_names(db: &Connection) -> rusqlite::Result<()> {
 /// 从文件名尾部取出来源结果号：`a 派生123.png` → 123。认不出就 None，不猜。
 /// 「派生2版.png」这种手工改过的名字必须返回 None——把 2 当成结果号就会挂到一张无关的图上。
 fn derived_rid(name: &str) -> Option<i64> {
-    let tail = name.rsplit_once("派生")?.1;
+    let tail = name.rsplit_once("派生")?.1; // i18n-keep 认的是老库文件名里的来源标记，不是界面文案
     let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() || digits.len() > 18 {
         return None;
@@ -130,7 +133,7 @@ fn derived_rid(name: &str) -> Option<i64> {
 fn heal_derived_from_names(db: &Connection) -> rusqlite::Result<()> {
     let mut rows: Vec<(i64, String)> = Vec::new();
     {
-        let mut st = db.prepare("SELECT id, name FROM images WHERE derived_from IS NULL AND name LIKE '%派生%'")?;
+        let mut st = db.prepare("SELECT id, name FROM images WHERE derived_from IS NULL AND name LIKE '%派生%'")?; // i18n-keep 同上
         let mut it = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
         while let Some(v) = it.next() {
             rows.push(v?);
@@ -153,20 +156,42 @@ fn heal_derived_from_names(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// 修图界面那一排提示词短语的出厂 7 条。以前它们是写死在前端 JS 里的字面量，
+/// 修图界面那一排提示词短语的出厂 10 条。以前它们是写死在前端 JS 里的字面量，
 /// 用户想加一条只能改代码；现在落到库里（kind='phrase'），前端从接口读。
+///
+/// 句子按三条规矩写：一条只讲一个目标状态（胶囊是并进同一句话的，堆三四条以后模型抓不住重点）；
+/// 正向里只描述"要成为什么样"，排除式说法交给负面词框——两个模型的官方写法指南都把这一条分开；
+/// 皮肤、妆容、表情这几类必须自带"轻微/自然"的限定，缺了限定模型会把它做成另一个人。
+/// i18n-keep 这些是写进库里的用户数据（短语名 + 发给模型的提示词），不是界面文案；
+/// 换语言去改种子，等于把已经躺在库里那些行的出处也改掉。
 const DEFAULT_PHRASES: &[(&str, &str)] = &[
-    ("皮肤精修", "皮肤质感细腻通透，保留毛孔与绒毛细节"),
-    ("去碎发", "去除杂乱碎发，发际线与鬓角干净"),
-    ("服装平整", "服装褶皱自然平整，材质纹理清晰"),
-    ("背景干净", "背景杂物与高光溢出消除，画面干净"),
-    ("光影统一", "光线柔和统一，与周围环境色温一致"),
-    ("手部修正", "手指结构与数量正确，关节自然"),
-    ("只改遮罩区", "只编辑遮罩区域，其余保持原样"),
+    ("皮肤质感", "皮肤保留真实毛孔与绒毛质感，光泽柔和，油光与暗沉自然减轻"), // i18n-keep
+    ("妆容清淡", "妆面轻薄自然，唇色与腮红向皮肤柔和过渡，眼妆层次清晰，与人物原有气质一致"), // i18n-keep
+    ("去碎发", "碎发收进主发束，发际线与鬓角整齐利落，露出的头皮与周围发色自然渐变"), // i18n-keep
+    ("换发型", "发际线与鬓角过渡自然，发量与头型比例协调，高光沿发束走向连续，与脸型相称"), // i18n-keep
+    ("服装平整", "衣料褶皱走向与身体姿态相符，面料纹理与印花清晰对位，缝线与版型保持原设计"), // i18n-keep
+    ("补空位", "被移除处由相邻地面与背景连续补齐，透视、纹理、色温与颗粒感和周围一致"), // i18n-keep
+    ("光影统一", "光源方向、阴影长度与色温延续画面其余部分，受光面过渡连续，明暗反差保持原片水平"), // i18n-keep
+    ("手部修正", "五指结构完整，指节弯曲符合抓握受力，指甲与手掌肤色一致，手与人物比例相称"), // i18n-keep
+    ("只改遮罩区", "只在遮罩覆盖处生成，遮罩外的五官比例、肤色、发型、表情、服装与背景原样保留"), // i18n-keep
+    ("只改遮罩区（英文）", "Change only the masked area. Keep the person's identity, facial proportions, skin tone, hairstyle, expression, outfit, pose, lighting and background exactly the same. Photorealistic, natural skin texture. No added text, watermarks or extra objects."), // i18n-keep
+];
+
+/// 上一版那 7 条的 (旧名, 旧句) → 本版 (新名, 新句)。
+/// 只改**字节完全等于旧出厂句**的行：用户润色过的一个字都不动——那是他自己写的话，
+/// 覆盖它就不是升级默认值，是覆盖用户数据。
+const PHRASE_UPGRADES: &[(&str, &str, &str, &str)] = &[
+    ("皮肤精修", "皮肤质感细腻通透，保留毛孔与绒毛细节", "皮肤质感", "皮肤保留真实毛孔与绒毛质感，光泽柔和，油光与暗沉自然减轻"), // i18n-keep
+    ("去碎发", "去除杂乱碎发，发际线与鬓角干净", "去碎发", "碎发收进主发束，发际线与鬓角整齐利落，露出的头皮与周围发色自然渐变"), // i18n-keep
+    ("服装平整", "服装褶皱自然平整，材质纹理清晰", "服装平整", "衣料褶皱走向与身体姿态相符，面料纹理与印花清晰对位，缝线与版型保持原设计"), // i18n-keep
+    ("背景干净", "背景杂物与高光溢出消除，画面干净", "补空位", "被移除处由相邻地面与背景连续补齐，透视、纹理、色温与颗粒感和周围一致"), // i18n-keep
+    ("光影统一", "光线柔和统一，与周围环境色温一致", "光影统一", "光源方向、阴影长度与色温延续画面其余部分，受光面过渡连续，明暗反差保持原片水平"), // i18n-keep
+    ("手部修正", "手指结构与数量正确，关节自然", "手部修正", "五指结构完整，指节弯曲符合抓握受力，指甲与手掌肤色一致，手与人物比例相称"), // i18n-keep
+    ("只改遮罩区", "只编辑遮罩区域，其余保持原样", "只改遮罩区", "只在遮罩覆盖处生成，遮罩外的五官比例、肤色、发型、表情、服装与背景原样保留"), // i18n-keep
 ];
 
 /// 播种一次就够：`phrases_seeded` 记在 app_settings 里，
-/// 用户在管理面板把 7 条全删了，下次启动不该又长回来。
+/// 用户在管理面板把整排全删了，下次启动不该又长回来。
 fn seed_phrases(db: &Connection) -> rusqlite::Result<()> {
     let seeded = db
         .query_row("SELECT 1 FROM app_settings WHERE key='phrases_seeded'", [], |_| Ok(true))
@@ -191,6 +216,49 @@ fn seed_phrases(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// 把出厂句子的改版落到老库上。只跑一次（`phrases_v2`），且只动没被用户改过的那些行；
+/// 新增的几条在整排被删空的库里**不补**——删空是明确意愿，不该借升级塞回去。
+fn upgrade_phrases(db: &Connection) -> rusqlite::Result<()> {
+    let done = db
+        .query_row("SELECT 1 FROM app_settings WHERE key='phrases_v2'", [], |_| Ok(true))
+        .unwrap_or(false);
+    if done {
+        return Ok(());
+    }
+    let mut n = 0;
+    for (old_name, old_text, new_name, new_text) in PHRASE_UPGRADES {
+        // 表上没有 name 唯一约束，硬改会把两个同名胶囊摆进同一排；目标名被人占着就留着旧行让他自己处置
+        let taken: i64 = db.query_row(
+            "SELECT COUNT(*) FROM presets WHERE kind='phrase' AND name=? AND name<>?",
+            [*new_name, *old_name],
+            |r| r.get(0),
+        )?;
+        if taken == 0 {
+            n += db.execute(
+                "UPDATE presets SET name=?, prompt=? WHERE kind='phrase' AND name=? AND prompt=?",
+                [*new_name, *new_text, *old_name, *old_text],
+            )? as i64;
+        }
+    }
+    let alive: i64 = db.query_row("SELECT COUNT(*) FROM presets WHERE kind='phrase'", [], |r| r.get(0))?;
+    if alive > 0 {
+        for (label, text) in DEFAULT_PHRASES {
+            let hit = db
+                .query_row("SELECT 1 FROM presets WHERE name=? AND kind='phrase'", [*label], |_| Ok(true))
+                .unwrap_or(false);
+            if !hit {
+                db.execute("INSERT INTO presets(name, kind, prompt) VALUES(?, 'phrase', ?)", (*label, *text))?;
+                n += 1;
+            }
+        }
+    }
+    db.execute("INSERT OR REPLACE INTO app_settings(key, value) VALUES('phrases_v2', '1')", [])?;
+    if n > 0 {
+        println!("  已按新写法更新 {n} 条出厂提示词短语（你自己改过的没动）");
+    }
+    Ok(())
+}
+
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
     let db = Connection::open(data_dir.join("app.db"))?;
     db.pragma_update(None, "journal_mode", "WAL")?;
@@ -208,6 +276,7 @@ pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
     heal_blank_names(&db)?;
     heal_derived_from_names(&db)?;
     seed_phrases(&db)?;
+    upgrade_phrases(&db)?;
     Ok(db)
 }
 
@@ -324,17 +393,75 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("synco-dbphrase-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = open(&dir).unwrap();
-        assert_eq!(phrase_count(&db), 7, "出厂 7 条短语没播进去");
+        assert_eq!(phrase_count(&db), 10, "出厂 10 条短语没播进去");
         assert!(has_column(&db, "presets", "kind").unwrap());
         drop(db);
         // 第二次开库不能重复插（每次启动都加一遍会越堆越多）
         let db2 = open(&dir).unwrap();
-        assert_eq!(phrase_count(&db2), 7, "重开一次就重复播种了");
+        assert_eq!(phrase_count(&db2), 10, "重开一次就重复播种了");
         // 用户在管理面板里删光，属于明确意愿，不该下次启动又复活
         db2.execute("DELETE FROM presets WHERE kind='phrase'", []).unwrap();
         seed_phrases(&db2).unwrap();
         assert_eq!(phrase_count(&db2), 0, "删光的短语被重新播出来了");
         drop(db2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 出厂句子改版怎么落到已经存在的库上：没动过的跟着改，动过的一个字不碰，
+    /// 整排被删空的也不借升级塞回去。
+    #[test]
+    fn 出厂短语升级_只改没动过的那几条() {
+        let dir = std::env::temp_dir().join(format!("synco-dbphup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 先建库，再把它摆成"上一版已经播过种"的样子
+        let db = open(&dir).unwrap();
+        db.execute("DELETE FROM presets WHERE kind='phrase'", []).unwrap();
+        db.execute("DELETE FROM app_settings WHERE key='phrases_v2'", []).unwrap();
+        for (old_name, old_text, _, _) in PHRASE_UPGRADES {
+            db.execute("INSERT INTO presets(name, kind, prompt) VALUES(?, 'phrase', ?)", [*old_name, *old_text]).unwrap();
+        }
+        // 其中「光影统一」被用户改成自己的话，「妆容清淡」是他自己建的同名条
+        db.execute("UPDATE presets SET prompt='光线再暖一点' WHERE name='光影统一' AND kind='phrase'", []).unwrap();
+        db.execute("INSERT INTO presets(name, kind, prompt) VALUES('妆容清淡','phrase','用户自己写的那一句')", []).unwrap();
+        drop(db);
+
+        let db2 = open(&dir).unwrap();
+        let got = |n: &str| -> Option<String> {
+            db2.query_row("SELECT prompt FROM presets WHERE name=? AND kind='phrase'", [n], |r| r.get(0)).ok()
+        };
+        assert_eq!(phrase_count(&db2), 10, "升级后该有 10 条");
+        assert_eq!(got("妆容清淡").as_deref(), Some("用户自己写的那一句"), "他自建的同名条被动了或被插成两条");
+        for (old_name, _, new_name, new_text) in PHRASE_UPGRADES {
+            if *old_name == "光影统一" {
+                continue;   // 这一条用户动过，走下面的单独断言
+            }
+            assert_eq!(got(new_name).as_deref(), Some(*new_text), "「{new_name}」没跟着升级");
+            // 只有真改了名的才该消失，改名那两条以外旧名就是新名
+            if old_name != new_name {
+                assert_eq!(got(old_name), None, "旧名「{old_name}」该被换掉");
+            }
+        }
+        assert_eq!(got("光影统一").as_deref(), Some("光线再暖一点"), "用户改过的句子被动了");
+        for (label, _) in DEFAULT_PHRASES {
+            assert!(got(label).is_some(), "升级后少了「{label}」");
+        }
+        drop(db2);
+
+        // 幂等：再开一次不该又插一遍，也不该把用户那句话盖回去
+        let db3 = open(&dir).unwrap();
+        assert_eq!(phrase_count(&db3), 10, "重开一次就重复补种了");
+        assert_eq!(
+            db3.query_row::<String, _, _>("SELECT prompt FROM presets WHERE name='光影统一' AND kind='phrase'", [], |r| r.get(0)).unwrap(),
+            "光线再暖一点"
+        );
+        db3.execute("DELETE FROM presets WHERE kind='phrase'", []).unwrap();
+        db3.execute("DELETE FROM app_settings WHERE key='phrases_v2'", []).unwrap();
+        drop(db3);
+
+        // 删空 = 明确意愿，升级不补
+        let db4 = open(&dir).unwrap();
+        assert_eq!(phrase_count(&db4), 0, "删空的短语被升级补回来了");
+        drop(db4);
         std::fs::remove_dir_all(&dir).ok();
     }
 

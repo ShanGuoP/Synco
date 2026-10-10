@@ -9,7 +9,7 @@ import { makeProw, makeSlider } from '../../ui/controls.js';
 import { toastErr, toastOk } from '../../ui/toast.js';
 import { confirm } from '../../ui/modal.js';
 import { icon } from '../../core/icons.js';
-import { t } from '../../core/i18n.js';
+import { dx, t } from '../../core/i18n.js';
 
 /** 与后端 photoedit-core 的 EditOps 同形：缺的字段服务端按默认补，多余字段会被拒 */
 const blankOps = () => ({
@@ -780,7 +780,7 @@ export function createAdjust(deps) {
   function buildPresets(list) {
     const items = list && list.length ? list : Object.entries(PRESET_VALUES).map(([id]) => ({ id, name: PRESET_NAMES[id] ? t(PRESET_NAMES[id]) : id }));
     fill(presetChips, el('button.chip-s', { type: 'button', text: t('ad.noPreset'), dataset: { p: '' }, onclick: () => pickPreset(null) }),
-      ...items.map(p => el('button.chip-s', { type: 'button', text: p.name, dataset: { p: p.id }, 'data-tip': t('ad.presetTip', { id: p.id }), onclick: () => pickPreset(p.id) })));
+      ...items.map(p => el('button.chip-s', { type: 'button', text: dx(p.name), dataset: { p: p.id }, 'data-tip': t('ad.presetTip', { id: p.id }), onclick: () => pickPreset(p.id) })));
     paintPreset();
   }
   function buildLuts(names) {

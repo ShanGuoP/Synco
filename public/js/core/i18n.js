@@ -22,12 +22,39 @@ const dig = key => {
   return hit === undefined ? leaf(zh, key) : hit;
 };
 
+/** 插值：数组按本语言的顿号接起来；数组里/参数里的 `{code,args}` 对象跟着一起翻 */
+function argText(v) {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map(argText).join(t('settings.sepList'));
+  if (typeof v === 'object') return dx(v.code, v.args);
+  return String(v);
+}
+
 /** 取一条文案。args 走 `{name}` 插值 */
 export function t(key, args) {
   const raw = dig(key);
   if (raw === undefined || raw === null) return `⟨${key}⟩`;
   if (typeof raw !== 'string') return raw;
-  return args ? raw.replace(/\{(\w+)\}/g, (_, k) => String(args[k] ?? '')) : raw;
+  return args ? raw.replace(/\{(\w+)\}/g, (_, k) => argText(args[k])) : raw;
+}
+
+/**
+ * 库里或上游带来的字符串：是字典里的钥匙就按当前语言取句，不是就原样显示。
+ * 两条路都真实存在——老库里的 `error` 就是一句中文，ComfyUI 带回来的原因更是谁也没翻。
+ * 对它们而言，"查不到钥匙"就是原样显示的理由，不是错误。
+ *
+ * 也接 `{code, args}` 那种结构化理由：后端一条理由一个对象（工作流校验的清单就是这一族），
+ * 句子与参数分开发，语序由各边的字典自己负责。
+ */
+export function dx(code, args) {
+  if (code && typeof code === 'object') return dx(code.code, code.args);
+  if (typeof code !== 'string' || !code) return '';
+  return has(code) ? t(code, args) : code;
+}
+
+/** 一簇理由接成一句：每一项可以是钥匙串，也可以是 `{code,args}` 对象 */
+export function dl(list, sepKey) {
+  return (Array.isArray(list) ? list : []).map(x => dx(x)).join(t(sepKey || 'settings.sepErr'));
 }
 
 /** 取一组（导航项、笔刷名单这类成条目的） */

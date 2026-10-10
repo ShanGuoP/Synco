@@ -13,7 +13,7 @@ import { newCanvas } from './canvas/index.js';
 import { emptyState } from '../ui/empty.js';
 import { submit, adopt } from '../gen.js';
 import { fmtStamp, fmtFile, fmtDims } from '../core/format.js';
-import { t } from '../core/i18n.js';
+import { dx, t } from '../core/i18n.js';
 
 let filter = 'all';
 let first = true;
@@ -410,7 +410,7 @@ async function submitSelectedCloud(ids, settings, skippedNoMask) {
     });
   } catch (e) { toastErr(t('gen.submitFail'), e.message || String(e)); return; }
   const rows = r.results || [];
-  if (!rows.length) { toastErr(t('pj.noneSubmitted'), r.skipped?.[0]?.reason || t('pj.noneSubmittedWhy')); return; }
+  if (!rows.length) { toastErr(t('pj.noneSubmitted'), dx(r.skipped?.[0]?.reason, r.skipped?.[0]?.reason_args) || t('pj.noneSubmittedWhy')); return; }
   for (const one of rows) adopt(one.result_id, one.image_id, { onDone: () => paint() });
   const skip = (r.skipped || []).length + skippedNoMask;
   toastOk(t('pj.cloudQueued', { n: rows.length }), skip ? t('pj.cloudQueuedSkip', { n: skip }) : t('pj.cloudQueuedBody'));

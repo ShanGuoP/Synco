@@ -2,7 +2,8 @@
 //! 没装 ComfyUI / 工作流路径不对都不能让服务起不来，所以这里全程不抛异常。
 
 use crate::state::Ctx;
-use serde_json::{Map, Value};
+use crate::error::AppError;
+use serde_json::{json, Map, Value};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -302,13 +303,42 @@ fn detect(d: &Value) -> Option<&'static str> {
     None
 }
 
+// 界面之外没人拼句子：一条理由 = `{code, args}`，前端逐条按当前语言查字典。
+// 清单项、角色名都是这个形状，所以「加载图找不到节点」里的角色名也跟着语言走。
+fn why(code: &str, args: Value) -> Value {
+    let mut o = Map::new();
+    o.insert("code".into(), Value::String(code.to_string()));
+    if let Value::Object(m) = args {
+        if !m.is_empty() {
+            o.insert("args".into(), Value::Object(m));
+        }
+    }
+    Value::Object(o)
+}
+
+/// 已经是一条带钥匙的错误了就直接用它自己的钥匙，别再包一句
+fn why_err(e: &AppError) -> Value {
+    let (code, args) = e.reason();
+    let mut o = Map::new();
+    o.insert("code".into(), Value::String(code));
+    if let Some(a) = args {
+        o.insert("args".into(), Value::Object(a));
+    }
+    Value::Object(o)
+}
+
+/// 角色名：`label` 存的现在就是钥匙（UNet/CLIP/VAE 这些没进字典，查不到就原样显示）
+fn role_ref(key: &str) -> Value {
+    why(role(key).map(|r| r.label).unwrap_or(key), Value::Null)
+}
+
 /// 读并解析一个工作流文件，返回（参数表，格式）。
 /// 认不出格式时给的是**明确失败**而不是空表——以前 API 导出会解析成"零项"，
 /// 而 cfgSource 照样标成 "workflow"，等于谎称参数读自你的文件。
-pub fn load_map(p: &Path) -> Result<(Map<String, Value>, &'static str), String> {
-    let text = std::fs::read_to_string(p).map_err(|e| format!("读不到工作流：{e}"))?;
-    let d: Value = serde_json::from_str(&text).map_err(|e| format!("工作流不是合法 JSON：{e}"))?;
-    let fmt = detect(&d).ok_or("这个 JSON 既没有 UI 导出的 nodes/links，也不是 API 导出的节点表（认不出是哪种工作流）")?;
+pub fn load_map(p: &Path) -> crate::error::Result<(Map<String, Value>, &'static str)> {
+    let text = std::fs::read_to_string(p).map_err(|e| AppError::detail("srv.wf.readFail", e))?;
+    let d: Value = serde_json::from_str(&text).map_err(|e| AppError::detail("srv.wf.badJson", e))?;
+    let fmt = detect(&d).ok_or_else(|| AppError::bad("srv.wf.unknownFormat"))?;
     let mut m = Map::new();
     match api_nodes(&d) {
         Some(nodes) if fmt == "api" => read_api(nodes, &mut m),
@@ -337,19 +367,19 @@ pub struct Role {
 
 /// Synco 要往工作流里填的东西全按角色寻址，不认节点号：用户挪节点、改编号都不影响。
 pub const ROLES: [Role; 13] = [
-    Role { key: "load_image", class: "LoadImage", label: "加载图", required: true },
-    Role { key: "load_mask", class: "LoadImageMask", label: "加载遮罩", required: true },
+    Role { key: "load_image", class: "LoadImage", label: "wf.role.loadImage", required: true },
+    Role { key: "load_mask", class: "LoadImageMask", label: "wf.role.loadMask", required: true },
     Role { key: "unet", class: "UNETLoader", label: "UNet", required: true },
     Role { key: "clip", class: "CLIPLoader", label: "CLIP", required: true },
     Role { key: "vae", class: "VAELoader", label: "VAE", required: true },
-    Role { key: "text_encode", class: "TextEncodeQwenImage21", label: "提示词编码", required: true },
-    Role { key: "ksampler", class: "KSampler", label: "采样器", required: true },
-    Role { key: "crop", class: "InpaintCropImproved", label: "裁切", required: true },
-    Role { key: "stitch", class: "InpaintStitchImproved", label: "缝合", required: true },
-    Role { key: "out_final", class: "SaveImage", label: "输出成图", required: true },
-    Role { key: "out_crop", class: "PreviewImage", label: "输出裁切区", required: false },
-    Role { key: "mask_viz", class: "DrawMaskOnImage", label: "遮罩可视化", required: false },
-    Role { key: "out_overlay", class: "PreviewImage", label: "输出遮罩图", required: false },
+    Role { key: "text_encode", class: "TextEncodeQwenImage21", label: "wf.role.textEncode", required: true },
+    Role { key: "ksampler", class: "KSampler", label: "wf.role.ksampler", required: true },
+    Role { key: "crop", class: "InpaintCropImproved", label: "wf.role.crop", required: true },
+    Role { key: "stitch", class: "InpaintStitchImproved", label: "wf.role.stitch", required: true },
+    Role { key: "out_final", class: "SaveImage", label: "wf.role.outFinal", required: true },
+    Role { key: "out_crop", class: "PreviewImage", label: "wf.role.outCrop", required: false },
+    Role { key: "mask_viz", class: "DrawMaskOnImage", label: "wf.role.maskViz", required: false },
+    Role { key: "out_overlay", class: "PreviewImage", label: "wf.role.outOverlay", required: false },
 ];
 
 pub fn role(key: &str) -> Option<&'static Role> {
@@ -505,16 +535,16 @@ pub fn merge_roles(g: &Map<String, Value>, saved: Option<&str>) -> Map<String, V
 ///
 /// 这一条是 M7 全部的赌注所在：缺了裁切-缝合那一对、或者成图不是从缝合出来的，
 /// 回来的是一张**重绘过的整图**，画面看着完全正常，没人会发现语义已经变了。
-pub fn validate(g: &Map<String, Value>, roles: &Map<String, Value>) -> Vec<String> {
-    let mut errs: Vec<String> = Vec::new();
+pub fn validate(g: &Map<String, Value>, roles: &Map<String, Value>) -> Vec<Value> {
+    let mut errs: Vec<Value> = Vec::new();
     let id = |k: &str| roles.get(k).and_then(|v| v.as_str()).map(str::to_string);
     for r in ROLES.iter().filter(|r| r.required) {
         let Some(nid) = id(r.key) else {
-            errs.push(format!("「{}」找不到节点（类名 {}）", r.label, r.class));
+            errs.push(why("srv.wf.roleMissing", json!({ "role": role_ref(r.key), "class": r.class })));
             continue;
         };
         if !g.contains_key(&nid) {
-            errs.push(format!("「{}」指向的节点 {nid} 不在这张图里", r.label));
+            errs.push(why("srv.wf.roleNotInGraph", json!({ "role": role_ref(r.key), "id": nid })));
         }
     }
     if !errs.is_empty() {
@@ -528,52 +558,49 @@ pub fn validate(g: &Map<String, Value>, roles: &Map<String, Value>) -> Vec<Strin
                 None => continue, // 上面已经报过
             };
             if !node.get("inputs").and_then(|v| v.as_object()).map(|o| o.contains_key(input)).unwrap_or(false) {
-                errs.push(format!("「{}」(节点 {nid}) 没有 {input} 这个输入，Synco 没法往里填", r_label(key)));
+                errs.push(why("srv.wf.roleNoInput", json!({ "role": role_ref(key), "id": nid, "input": input })));
             }
         }
     }
     if has_cycle(g) {
-        errs.push("这张图里有环（某个节点的输入绕回了自己），ComfyUI 不会执行它".into());
+        errs.push(why("srv.wf.cycle", Value::Null));
     }
     if let (Some(c), Some(s)) = (id("crop"), id("stitch")) {
         if !feeds(g, &c, &s) {
-            errs.push("缝合节点没有接在裁切节点之后：回来的图不会被贴回原图".into());
+            errs.push(why("srv.wf.stitchOrder", Value::Null));
         }
     }
     if let (Some(s), Some(f)) = (id("stitch"), id("out_final")) {
         if !feeds(g, &s, &f) {
-            errs.push("输出成图不是从缝合节点出来的（可能直接存了采样结果）：那样回来的是一张重绘过的整图，画面看着正常但语义已经变了".into());
+            errs.push(why("srv.wf.outOfStitch", Value::Null));
         }
     }
     if let (Some(li), Some(c)) = (id("load_image"), id("crop")) {
         if !feeds(g, &li, &c) {
-            errs.push("裁切节点没吃到「加载图」这条输入：提交时照片送不进你的图".into());
+            errs.push(why("srv.wf.cropNoPhoto", json!({ "role": role_ref("load_image") })));
         }
     }
     if let (Some(lm), Some(c)) = (id("load_mask"), id("crop")) {
         if !feeds(g, &lm, &c) {
-            errs.push("裁切节点没吃到「加载遮罩」这条输入：提交时蒙版送不进你的图".into());
+            errs.push(why("srv.wf.cropNoMask", json!({ "role": role_ref("load_mask") })));
         }
     }
     if let (Some(te), Some(ks)) = (id("text_encode"), id("ksampler")) {
         if !feeds(g, &te, &ks) {
-            errs.push("采样器没接提示词编码：面板里写的指令不会生效".into());
+            errs.push(why("srv.wf.noPrompt", Value::Null));
         }
     }
     // 三个输出角色指向同一个节点：那一路只会回来一张图，另外两个下载按钮是骗人的
     for (a, b) in [("out_final", "out_crop"), ("out_final", "out_overlay"), ("out_crop", "out_overlay")] {
         if let (Some(x), Some(y)) = (id(a), id(b)) {
             if x == y {
-                errs.push(format!("「{}」和「{}」指向同一个节点 {x}：那一路只会回来一张图", r_label(a), r_label(b)));
+                errs.push(why("srv.wf.sameNode", json!({ "a": role_ref(a), "b": role_ref(b), "id": x })));
             }
         }
     }
     errs
 }
 
-fn r_label(key: &str) -> String {
-    role(key).map(|r| r.label.to_string()).unwrap_or_else(|| key.to_string())
-}
 
 /// 角色映射按工作流文件各存一份（换文件不能沿用上一份的节点号）
 pub fn roles_key(path: &str) -> String {
@@ -586,14 +613,14 @@ pub fn saved_roles(ctx: &Ctx, path: &str) -> Option<String> {
 
 /// 手指覆盖先按类名校验再落库：存进去一个错类名的节点，下一次提交就会往不该填的输入里写。
 /// 返回（存下的映射，被拒的项）
-pub fn set_saved_roles(ctx: &Ctx, path: &str, roles: &Map<String, Value>) -> (Map<String, Value>, Vec<String>) {
+pub fn set_saved_roles(ctx: &Ctx, path: &str, roles: &Map<String, Value>) -> (Map<String, Value>, Vec<Value>) {
     let g = load_api_graph(Path::new(path));
     let mut kept = Map::new();
     let mut rejected = Vec::new();
     for r in ROLES.iter() {
         let Some(v) = roles.get(r.key) else { continue };
         let Some(node) = v.as_str().map(str::trim) else {
-            rejected.push(format!("「{}」的值要写成节点号字符串", r.label));
+            rejected.push(why("srv.wf.roleValue", json!({ "role": role_ref(r.key) })));
             continue;
         };
         if node.is_empty() {
@@ -603,8 +630,8 @@ pub fn set_saved_roles(ctx: &Ctx, path: &str, roles: &Map<String, Value>) -> (Ma
             Some(cls) if cls == r.class => {
                 kept.insert(r.key.into(), Value::String(node.to_string()));
             }
-            Some(cls) => rejected.push(format!("「{}」要的是 {} 节点，节点 {node} 是 {cls}", r.label, r.class)),
-            None => rejected.push(format!("「{}」指的节点 {node} 不在这张图里", r.label)),
+            Some(cls) => rejected.push(why("srv.wf.roleClass", json!({ "role": role_ref(r.key), "class": r.class, "id": node, "found": cls }))),
+            None => rejected.push(why("srv.wf.roleNotInGraph", json!({ "role": role_ref(r.key), "id": node }))),
         }
     }
     let key = roles_key(path);
@@ -621,8 +648,9 @@ pub fn set_saved_roles(ctx: &Ctx, path: &str, roles: &Map<String, Value>) -> (Ma
 struct Assessment {
     graph: Option<Map<String, Value>>,
     roles: Map<String, Value>,
-    errors: Vec<String>,
-    reason: String,
+    errors: Vec<Value>,
+    /// 当不了计算图时那句原话：钥匙给界面查，参数随钥匙走
+    reason: Value,
 }
 
 fn assess(path: &str, saved: Option<&str>) -> Assessment {
@@ -630,16 +658,16 @@ fn assess(path: &str, saved: Option<&str>) -> Assessment {
     match graph {
         Some(g) => {
             let roles = merge_roles(&g, saved);
-            Assessment { errors: validate(&g, &roles), graph: Some(g), roles, reason: String::new() }
+            Assessment { errors: validate(&g, &roles), graph: Some(g), roles, reason: Value::Null }
         }
         None => Assessment {
             graph: None,
             roles: Map::new(),
             errors: Vec::new(),
             reason: if Path::new(path).exists() {
-                "这个文件是 UI 导出（或读不出节点表），没法当计算图提交：在 ComfyUI 里用 Save (API Format) 另存一份再指过来".into()
+                why("srv.wf.uiExport", Value::Null)
             } else {
-                format!("读不到工作流文件（{path}）")
+                why("srv.wf.fileGone", json!({ "path": path.to_string() }))
             },
         },
     }
@@ -652,9 +680,9 @@ pub enum Plan {
     /// 用你文件里这张图提交（已按角色校验通过）
     Workflow { graph: Map<String, Value>, roles: Map<String, Value> },
     /// 文件不是 API 导出（或读不到）：用内置图，并把原因显示出来
-    Builtin { reason: String },
+    Builtin { reason: Value },
     /// 是你的图，但角色/结构对不上：拒绝提交
-    Refused { errors: Vec<String> },
+    Refused { errors: Vec<Value> },
 }
 
 pub fn plan_at(path: &str, saved: Option<&str>) -> Plan {
@@ -671,7 +699,7 @@ pub fn plan(ctx: &Ctx) -> Plan {
 }
 
 /// 设置里那张角色表：节点清单 + 自动预填 + 存过的手指 + 生效值 + 校验结论
-pub fn roles_view(ctx: &Ctx) -> Result<Value, String> {
+pub fn roles_view(ctx: &Ctx) -> crate::error::Result<Value> {
     let p = workflow_path(ctx);
     let saved_raw = saved_roles(ctx, &p);
     let a = assess(&p, saved_raw.as_deref());
@@ -703,16 +731,17 @@ pub fn roles_view(ctx: &Ctx) -> Result<Value, String> {
         "saved": Value::Object(saved_map),
         "effective": Value::Object(a.roles),
         "errors": a.errors,
-        "reason": a.reason,
+        "reason": a.reason.get("code").cloned().unwrap_or(Value::Null),
+        "reason_args": a.reason.get("args").cloned().unwrap_or(Value::Null),
         "can_takeover": can_takeover,
     }))
 }
 
 /// 把文件里的节点摊平成可比对的 `(节点号, 类名, 输入名)` 列表，两种格式同一套出口
-pub fn inspect(p: &Path) -> Result<Value, String> {
-    let text = std::fs::read_to_string(p).map_err(|e| format!("读不到工作流：{e}"))?;
-    let d: Value = serde_json::from_str(&text).map_err(|e| format!("工作流不是合法 JSON：{e}"))?;
-    let fmt = detect(&d).ok_or("这个 JSON 既不是 ComfyUI 的 UI 导出，也不是 API 导出")?;
+pub fn inspect(p: &Path) -> crate::error::Result<Value> {
+    let text = std::fs::read_to_string(p).map_err(|e| AppError::detail("srv.wf.readFail", e))?;
+    let d: Value = serde_json::from_str(&text).map_err(|e| AppError::detail("srv.wf.badJson", e))?;
+    let fmt = detect(&d).ok_or_else(|| AppError::bad("srv.wf.unknownFormatShort"))?;
     let mut rows: Vec<Value> = Vec::new();
     if fmt == "api" {
         if let Some(o) = api_nodes(&d) {
@@ -808,9 +837,9 @@ pub fn get_cfg(ctx: &Ctx) -> Value {
 
     let mut cfg = builtin();
     let mut source = "builtin";
-    let mut error: Option<String> = None;
+    let mut error: Option<Value> = None;
     if mtime == 0 {
-        error = Some("工作流文件不存在".into());
+        error = Some(why("srv.wf.fileMissing", Value::Null));
     } else {
         match load_map(Path::new(&p)) {
             Ok((mut wf, fmt)) => {
@@ -819,10 +848,12 @@ pub fn get_cfg(ctx: &Ctx) -> Value {
                 if fmt == "litegraph" {
                     let crop = wf.get("crop_widgets").cloned().unwrap_or(Value::Null);
                     if !crop.is_null() && !crop_shape_ok(&crop, &dget("crop_widgets")) {
-                        error = Some(format!(
-                            "工作流里 InpaintCropImproved 的控件与内置基线对不上（内置 {} 项，工作流 {} 项），裁切参数改用内置值",
-                            dget("crop_widgets").as_array().map(|a| a.len()).unwrap_or(0),
-                            crop.as_array().map(|a| a.len()).unwrap_or(0)
+                        error = Some(why(
+                            "srv.wf.cropShape",
+                            json!({
+                                "want": dget("crop_widgets").as_array().map(|a| a.len()).unwrap_or(0),
+                                "got": crop.as_array().map(|a| a.len()).unwrap_or(0),
+                            }),
                         ));
                         wf.insert("crop_widgets".into(), Value::Null);
                     }
@@ -839,21 +870,26 @@ pub fn get_cfg(ctx: &Ctx) -> Value {
                 if got > 0 {
                     source = "workflow";
                 } else {
-                    error = Some(format!(
-                        "认出了{}格式，但文件里没有本管线认识的节点参数（UNETLoader / KSampler / TextEncodeQwenImage21 这些一个都没找到）",
-                        if fmt == "api" { "API 导出" } else { "UI 导出" }
+                    error = Some(why(
+                        "srv.wf.noParams",
+                        json!({ "kind": fmt_name(fmt) }),
                     ));
                 }
             }
-            Err(e) => error = Some(e.chars().take(200).collect()),
+            Err(e) => error = Some(why_err(&e)),
         }
     }
     cfg.insert("cfgSource".into(), Value::String(source.into()));
     cfg.insert("workflowPath".into(), Value::String(p.clone()));
-    cfg.insert("workflowError".into(), match error { Some(e) => Value::String(e), None => Value::Null });
+    cfg.insert("workflowError".into(), error.unwrap_or(Value::Null));
     let out = Value::Object(cfg);
     *ctx.cfg.lock().unwrap_or_else(|e| e.into_inner()) = Some(Cache { path: p, mtime, cfg: out.clone() });
     out
+}
+
+/// `api` / `litegraph` 两种格式的名字也交钥匙（那句"认出了×格式"里要用）
+fn fmt_name(fmt: &str) -> Value {
+    why(if fmt == "api" { "wf.format.api" } else { "wf.format.ui" }, Value::Null)
 }
 
 /// 供 setup.rs 用：把 defaults.json 里的下载基准取出来
@@ -864,6 +900,11 @@ pub fn sources() -> Map<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 清单比对钥匙而不是句子：措辞改了不该让单测红
+    fn codes(list: &[Value]) -> Vec<String> {
+        list.iter().map(|e| e["code"].as_str().unwrap_or("").to_string()).collect()
+    }
 
     fn tmp_json(name: &str, body: &str) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("synco-wf-{name}-{}.json", std::process::id()));
@@ -986,7 +1027,7 @@ mod tests {
     #[test]
     fn 坏文件不抛只回错误串() {
         let p = tmp_json("noperm", "not json at all");
-        assert!(load_map(&p).unwrap_err().contains("合法 JSON"));
+        assert!(load_map(&p).unwrap_err().text().contains("合法 JSON"));
         assert!(inspect(&p).is_err());
         std::fs::remove_file(p).ok();
     }
@@ -1063,7 +1104,7 @@ mod tests {
         // 手工把两路输出指到同一个节点也要拦
         let dup = merge_roles(&g, Some(r#"{"out_crop":"17"}"#));
         let errs = validate(&g, &dup);
-        assert!(errs.iter().any(|e| e.contains("同一个节点")), "{errs:?}");
+        assert!(codes(&errs).contains(&"srv.wf.sameNode".into()), "{errs:?}");
     }
 
     #[test]
@@ -1073,13 +1114,13 @@ mod tests {
         g.insert("77".into(), serde_json::json!({"class_type":"LoadImage","inputs":{"image":"另一张.png"}}));
         g.insert("16".into(), serde_json::json!({"class_type":"InpaintStitchImproved","inputs":{"stitcher":["77",0],"inpainted_image":["77",1]}}));
         let errs = validate(&g, &auto_roles(&g));
-        assert!(errs.iter().any(|e| e.contains("缝合节点没有接在裁切")), "{errs:?}");
+        assert!(codes(&errs).contains(&"srv.wf.stitchOrder".into()), "{errs:?}");
 
         // 99 号那个 SaveImage 存的是没缝回去的采样结果：手指到它头上就得拦住
         let g2 = wf();
         let roles = merge_roles(&g2, Some(r#"{"out_final":"99"}"#));
         let errs2 = validate(&g2, &roles);
-        assert!(errs2.iter().any(|e| e.contains("输出成图不是从缝合节点出来的")), "{errs2:?}");
+        assert!(codes(&errs2).contains(&"srv.wf.outOfStitch".into()), "{errs2:?}");
     }
 
     #[test]
@@ -1089,7 +1130,7 @@ mod tests {
         let p = tmp_json("nostitch", &Value::Object(g).to_string());
         match plan_at(&p.to_string_lossy(), None) {
             Plan::Refused { errors } => {
-                assert!(errors.iter().any(|e| e.contains("缝合") && e.contains("找不到节点")), "{errors:?}")
+                assert!(errors.iter().any(|e| e["code"] == "srv.wf.roleMissing" && e["args"]["role"]["code"] == "wf.role.stitch"), "{errors:?}")
             }
             other => panic!("缺必需角色应该拒绝，拿到的是 {other:?}"),
         }
@@ -1101,7 +1142,7 @@ mod tests {
     fn ui_导出走内置图并把原因带出来() {
         let p = tmp_json("uilite", LITE);
         match plan_at(&p.to_string_lossy(), None) {
-            Plan::Builtin { reason } => assert!(reason.contains("UI 导出"), "{reason}"),
+            Plan::Builtin { reason } => assert_eq!(reason["code"], "srv.wf.uiExport", "{reason}"),
             other => panic!("UI 导出应该是 Builtin，拿到 {other:?}"),
         }
         std::fs::remove_file(p).ok();
@@ -1115,15 +1156,15 @@ mod tests {
         let roles = merge_roles(&g, Some(r#"{"out_final":"99"}"#));
         assert_eq!(roles["out_final"], Value::String("99".into()));
         let errs = validate(&g, &roles);
-        assert!(errs.iter().any(|e| e.contains("输出成图")), "{errs:?}");
+        assert!(codes(&errs).contains(&"srv.wf.outOfStitch".into()), "{errs:?}");
         // 指到不存在的节点：merge_roles 照收（它是手指的入口），由 validate 判死
         let roles2 = merge_roles(&g, Some(r#"{"out_final":"777"}"#));
         let errs2 = validate(&g, &roles2);
-        assert!(errs2.iter().any(|e| e.contains("777")), "{errs2:?}");
+        assert!(errs2.iter().any(|e| e["code"] == "srv.wf.roleNotInGraph" && e["args"]["id"] == "777"), "{errs2:?}");
         // 指错类名（把采样器指到 LoadImage 上）：注入用的输入名根本不存在
         let roles3 = merge_roles(&g, Some(r#"{"ksampler":"1"}"#));
         let errs3 = validate(&g, &roles3);
-        assert!(errs3.iter().any(|e| e.contains("没有 seed")), "{errs3:?}");
+        assert!(errs3.iter().any(|e| e["code"] == "srv.wf.roleNoInput" && e["args"]["input"] == "seed"), "{errs3:?}");
         // 空串 = 交回自动认出；这里 17 已被摘掉，所以那个键干脆不存在
         g.remove("17");
         g.remove("99");
@@ -1137,7 +1178,7 @@ mod tests {
         g.insert("14".into(), serde_json::json!({"class_type":"KSampler","inputs":{"model":["14",0],"positive":["11",0],"negative":["11",1],"latent_image":["13",0],"seed":7,"steps":18,"cfg":2.5}}));
         assert!(has_cycle(&g));
         let errs = validate(&g, &auto_roles(&g));
-        assert!(errs.iter().any(|e| e.contains("环")), "{errs:?}");
+        assert!(codes(&errs).contains(&"srv.wf.cycle".into()), "{errs:?}");
     }
 
     #[test]

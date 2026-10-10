@@ -13,6 +13,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const { codeLines } = require('./lib/code-lines.js');
+const { DONE_I18N_RS, uiCopy, isConsoleOnly } = require('./lib/i18n-ledger.js');
 const rel = p => path.relative(ROOT, p).replace(/\\/g, '/');
 const CJK_IN_STRING = /["'`][^"'`\n]*[\u4e00-\u9fff]/;
 
@@ -58,14 +59,37 @@ if (!onlyZh.length && !onlyEn.length) console.log('  ✓ 中英键位一一对�
 
 // 引用扫描：源码里任何被引号包住的完整键名都算引用（t('a.b')、data-i18n="a.b"、
 // 数组里的 ['zh','a.b'] 都算）；模板拼出来的 `nav.${k}` 那种只能按前缀认。
+// Rust 也算引用方：服务端交出去的 srv.* 钥匙就写在那边的源码里。
 const sources = walk(path.join(ROOT, 'public', 'js')).filter(f => f.endsWith('.js'));
 const html = path.join(ROOT, 'public', 'index.html');
-const hay = sources.map(f => fs.readFileSync(f, 'utf8')).join('\n') + '\n' + fs.readFileSync(html, 'utf8');
+const rsFiles = [];
+const walkRs = dir => {
+  let es;
+  try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of es) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walkRs(p);
+    else if (e.name.endsWith('.rs')) rsFiles.push(p);
+  }
+};
+walkRs(path.join(ROOT, 'crates'));
+walkRs(path.join(ROOT, 'src-tauri'));
+// 后端只算代码行：文档注释里举的例子（`bad_args("srv.adjust.clamped", …)`）不是真引用
+const rsCode = rsFiles.map(f => codeLines(f).map(x => x.line).join('\n')).join('\n');
+const hay = sources.map(f => fs.readFileSync(f, 'utf8')).join('\n') + '\n' + fs.readFileSync(html, 'utf8') + '\n' + rsCode;
 const quoted = new Set((hay.match(/["'`][\w.]+["'`]/g) || []).map(s => s.slice(1, -1)));
 const dynPrefixes = (hay.match(/["'`][\w.]*\.\$\{/g) || []).map(m => m.slice(1, -3) + '.');
 const unused = kz.filter(k => !quoted.has(k) && !dynPrefixes.some(p => k.startsWith(p)));
 if (unused.length) warn(`${unused.length} 条键在代码里找不到直接引用（可能是动态键，也可能真没人用）：${unused.slice(0, 8).join(', ')}`);
 else console.log('  ✓ 字典里没有悬空键');
+
+// 后端交出去的钥匙：Rust 源码里出现的 "srv.*" 必须两份字典都有，否则界面只能看到裸钥匙
+const rsCodes = new Set();
+for (const m of rsCode.matchAll(/"(srv\.[A-Za-z0-9_.]+)"/g)) rsCodes.add(m[1]);
+const zhSet = new Set(kz), enSet = new Set(ke);
+const rsMissing = [...rsCodes].filter(k => !zhSet.has(k) || !enSet.has(k));
+if (rsMissing.length) bad(`${rsMissing.length} 把 Rust 用到的钥匙不在字典里（界面会看到裸钥匙名）：${rsMissing.slice(0, 6).join(', ')}`);
+else console.log(`  ✓ Rust 用到的 ${rsCodes.size} 把 srv.* 钥匙都在字典里`);
 
 // 引用检查：搬过的文件必须真的 import 了取文案的入口。
 // 批量把 '中文' 换成 t('a.b') 时最容易漏的就是这一行——语法、R6、键位对齐全都照样绿，
@@ -105,6 +129,26 @@ const total = counts.reduce((s, c) => s + c.n, 0);
 console.log(`\n待搬：${counts.length} 个文件 · 约 ${total} 行中文字面量`);
 for (const c of counts) console.log(`  ${String(c.n).padStart(4)} 行  ${c.file}  (首处 :${c.first})`);
 if (!counts.length) console.log('  ✓ 前端界面文案已全部外置');
+
+/* 后端账（I4）：Rust 里直接进界面的中文。只报数、不判失败——这一格的收法与前端不同：
+   服务端要改成 {code, args} 让字典当唯一文案来源，动一条就得同步改 harness 里那条中文断言，
+   所以进度要看得见，但一条跑得红的规矩只会让人学会无视它。
+   判据与 R7 同一份（lib/i18n-ledger.js）：注释、日志/panic 通道、i18n-keep 那种磁盘内容都不算，
+   控制台程序（src/bin/、examples/）整份按通道排除。#[cfg(test)] 之后也不算——那是断言。 */
+const rsRows = [];
+for (const f of rsFiles) {
+  if (isConsoleOnly(rel(f))) continue;
+  const src = fs.readFileSync(f, 'utf8');
+  const cut = src.indexOf('#[cfg(test)]');
+  const before = new Set((cut < 0 ? src : src.slice(0, cut)).split(/\r?\n/).map((_, i) => i + 1));
+  const hits = codeLines(f).filter(x => before.has(x.n) && uiCopy(x.line, x.raw) && /"[^"\n]*[\u4e00-\u9fff]/.test(x.line));
+  if (hits.length) rsRows.push({ file: rel(f), n: hits.length, first: hits[0].n });
+}
+rsRows.sort((a, b) => b.n - a.n);
+const rsTotal = rsRows.reduce((s, r) => s + r.n, 0);
+console.log(`\n后端待搬（界面文案那一路，crates/ + src-tauri/）：${rsRows.length} 个文件 · ${rsTotal} 行中文字面量`);
+for (const r of rsRows) console.log(`  ${String(r.n).padStart(4)} 行  ${r.file}  (首处 :${r.first})`);
+if (!rsRows.length) console.log(`  ✓ 后端界面文案已全部交给字典（账本 ${DONE_I18N_RS.length} 个文件；日志与运维菜单按通道另算）`);
 
 if (fails) {
   console.log(`\n字典体检失败 ${fails} 项。`);

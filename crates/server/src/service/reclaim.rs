@@ -2,7 +2,7 @@
 //! 规则：连判三轮才认连不上、映射了的输出一张不缺才算成、
 //! 没有 prompt_id 的 running 一律判"缝合前断掉"。
 
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::models::dto;
 use crate::repo::results as rres;
 use crate::service::{backend, cloud, comfy};
@@ -19,7 +19,7 @@ pub(crate) fn judge_cloud(ctx: &Shared, id: i64) -> bool {
     if ctx.job_live(id) && !ctx.job_overdue(id, cloud::grace_ms(ctx)) {
         return false;
     }
-    ctx.mark_error(id, "这一张云端没走完（请求断了或超时），重新提交一张");
+    ctx.mark_error(id, "srv.reclaim.cloudStalled", serde_json::Value::Null);
     true
 }
 
@@ -55,16 +55,17 @@ pub async fn settle(ctx: &Shared, id: i64) -> Result<Option<Value>> {
                             }
                         };
                         if over_limit {
-                            ctx.mark_error(id, &format!("连不上 ComfyUI（{}）：{}", backend::active_url(ctx), detail));
+                            ctx.mark_error_of(id, &detail);
                         }
                     }
                     comfy::Check::Queued => {} // 队列里还排着：这轮什么都不做
                     comfy::Check::Running => {}
                     comfy::Check::Lost => ctx.mark_error(
                         id,
-                        "ComfyUI 已经不认这条任务（多半随它重启，或被点了\"清空历史\"丢了），重新提交一张",
+                        "srv.reclaim.lostTaskRetry",
+                        serde_json::Value::Null,
                     ),
-                    comfy::Check::Error(detail) => ctx.mark_error(id, &detail),
+                    comfy::Check::Error(detail) => ctx.mark_error(id, &detail, serde_json::Value::Null),
                     comfy::Check::Done(images) => {
                         download_mapped(ctx, id, pid, &images, &outs).await?;
                     }
@@ -85,7 +86,7 @@ async fn download_mapped(ctx: &Shared, id: i64, pid: i64, images: &[comfy::Tagge
     let need = outs.required_tags();
     let missing: Vec<&str> = need.iter().copied().filter(|t| !by_tag.contains_key(*t)).collect();
     if !missing.is_empty() {
-        ctx.mark_error(id, &format!("ComfyUI 少了输出：{}", missing.join("、")));
+        ctx.mark_error(id, "srv.reclaim.missingOut", serde_json::json!({ "tags": missing }));
         return Ok(());
     }
     std::fs::create_dir_all(ctx.data.join("projects").join(pid.to_string())).ok();
@@ -98,27 +99,28 @@ async fn download_mapped(ctx: &Shared, id: i64, pid: i64, images: &[comfy::Tagge
         ])
     };
     let mut files: Vec<(&str, String)> = Vec::new();
-    let mut fail = String::new();
+    let mut fail: Option<AppError> = None;
     for tag in &need {
         let rel = rel_of(tag);
         if let Err(e) = comfy::download_to(ctx, &by_tag[*tag], &ctx.data.join(&rel)).await {
-            fail = e;
+            fail = Some(e);
             break;
         }
         files.push((tag, rel));
     }
-    if !fail.is_empty() {
+    if let Some(e) = fail {
         for (_, rel) in &files {
             let _ = std::fs::remove_file(ctx.data.join(rel));
         }
-        ctx.mark_error(id, &format!("回传成图失败：{fail}"));
+        // 回传那层已经有自己的钥匙（连不上 / 超时 / 写盘失败），原样落库，不再包一句中文
+        ctx.mark_error_of(id, &e);
         return Ok(());
     }
     ctx.misses.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     let get = |tag: &str| files.iter().find(|(t, _)| t == &tag).map(|(_, r)| r.as_str());
     // 成图必在（need 一定带着它）；空路径进库就变成"卡片在、点开是空的"
     let Some(final_rel) = get("final") else {
-        ctx.mark_error(id, "成图没有落盘");
+        ctx.mark_error(id, "srv.reclaim.noFinal", serde_json::Value::Null);
         return Ok(());
     };
     if !rres::set_files_done(ctx, id, final_rel, get("crop"), get("maskoverlay"))? {
@@ -175,7 +177,7 @@ pub fn spawn_advancer(ctx: &Shared) {
                     Some(_) => {
                         let t0 = *seen.entry(*id).or_insert_with(util::now_ms);
                         if util::now_ms().saturating_sub(t0) > LOCAL_LIMIT_MS {
-                            ctx.mark_error(*id, "本机这一张超过 60 分钟没落定（ComfyUI 那边多半卡住了），重新提交一张");
+                            ctx.mark_error(*id, "srv.reclaim.localStuck", serde_json::Value::Null);
                             continue;
                         }
                         let _ = settle(&ctx, *id).await;
@@ -211,7 +213,7 @@ pub async fn reclaim_running(ctx: &Shared) -> Result<usize> {
     }
     if !backend::probe(ctx, &backend::active_url(ctx)).await.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
         for (id, _) in &local {
-            ctx.mark_error(*id, &format!("工坊重启时连不上 ComfyUI（{}）", backend::active_url(ctx)));
+            ctx.mark_error(*id, "srv.reclaim.restartNoComfy", serde_json::json!({ "url": backend::active_url(ctx) }));
         }
         return Ok(n + local.len());
     }
@@ -224,7 +226,7 @@ pub async fn reclaim_running(ctx: &Shared) -> Result<usize> {
                 let c = comfy::check_comfy(ctx, pid, &outs).await;
                 // 队列和 history 都查不到 = 这条任务随 ComfyUI 重启或被"清空历史"没了；连不上时不轻下结论
                 if matches!(c, comfy::Check::Lost) {
-                    ctx.mark_error(*id, "ComfyUI 已经不认这条任务（多半随它重启，或被点了\"清空历史\"丢了）");
+                    ctx.mark_error(*id, "srv.reclaim.lostTask", serde_json::Value::Null);
                     n += 1;
                     continue;
                 }

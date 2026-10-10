@@ -22,9 +22,40 @@ enum Dim {
     Three,
 }
 
+/// `.cube` 解析失败的位置。核心不知道语言包长什么样，只交出一把钥匙与几个数——
+/// 句子由字典给（服务端把它塞进 `srv.adjust.lutParse` 的 `{detail}` 参数里，中英各查各的）。
+#[derive(Debug, Clone)]
+pub struct CubeError {
+    pub code: &'static str,
+    pub args: serde_json::Value,
+}
+
+impl CubeError {
+    fn of(code: &'static str, args: serde_json::Value) -> Self {
+        CubeError { code, args }
+    }
+
+    /// 某一行的问题：行号是这句里唯一的参数
+    fn line(code: &'static str, n: usize) -> Self {
+        Self::of(code, serde_json::json!({ "line": n + 1 }))
+    }
+
+    /// 整份文件的问题（缺声明、域写反）
+    fn whole(code: &'static str) -> Self {
+        Self::of(code, serde_json::json!({}))
+    }
+}
+
+impl std::fmt::Display for CubeError {
+    /// 日志与控制台看的是"钥匙 + 参数"：核心这一层没有语言可判，拼句子要等到界面或服务端
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.code, self.args)
+    }
+}
+
 /// 解析 `.cube` 文本。只认标准关键字，其余行（注释、空行、自定义头部）忽略；
 /// 数值残缺或尺寸对不上直接报错，不做"尽力而为"的半张表。
-pub fn parse_cube(src: &str) -> Result<Lut, String> {
+pub fn parse_cube(src: &str) -> Result<Lut, CubeError> {
     let mut dim = None;
     let mut size = 0usize;
     let mut min = [0.0f32, 0.0, 0.0];
@@ -41,8 +72,8 @@ pub fn parse_cube(src: &str) -> Result<Lut, String> {
         };
         match head.to_ascii_uppercase().as_str() {
             "TITLE" => {}
-            "DOMAIN_MIN" => min = triple(rest).ok_or_else(|| format!("第 {} 行 DOMAIN_MIN 不是三个数", n + 1))?,
-            "DOMAIN_MAX" => max = triple(rest).ok_or_else(|| format!("第 {} 行 DOMAIN_MAX 不是三个数", n + 1))?,
+            "DOMAIN_MIN" => min = triple(rest).ok_or_else(|| CubeError::line("lut.domainMin", n))?,
+            "DOMAIN_MAX" => max = triple(rest).ok_or_else(|| CubeError::line("lut.domainMax", n))?,
             "LUT_1D_SIZE" => {
                 size = parse_size(rest, n)?;
                 dim = Some(Dim::One);
@@ -64,28 +95,28 @@ pub fn parse_cube(src: &str) -> Result<Lut, String> {
                 Dim::Three => size * size * size * 3,
             };
             if data.len() > need {
-                return Err(format!("第 {} 行起数据超出声明尺寸", n + 1));
+                return Err(CubeError::line("lut.overflow", n));
             }
         }
     }
-    let dim = dim.ok_or("没有 LUT_1D_SIZE / LUT_3D_SIZE 声明")?;
+    let dim = dim.ok_or_else(|| CubeError::whole("lut.noSize"))?;
     let need = match dim {
         Dim::One => size * 3,
         Dim::Three => size * size * size * 3,
     };
     if data.len() != need {
-        return Err(format!("数据只有 {} 个分量，声明需要 {}", data.len(), need));
+        return Err(CubeError::of("lut.fewComponents", serde_json::json!({ "got": data.len(), "need": need })));
     }
     if !(min[0] < max[0] && min[1] < max[1] && min[2] < max[2]) {
-        return Err("DOMAIN_MIN 必须严格小于 DOMAIN_MAX".to_string());
+        return Err(CubeError::whole("lut.domainOrder"));
     }
     Ok(Lut { dim, size, min, max, data })
 }
 
-fn parse_size(rest: &str, n: usize) -> Result<usize, String> {
-    let v: usize = rest.trim().parse().map_err(|_| format!("第 {} 行尺寸不是整数", n + 1))?;
+fn parse_size(rest: &str, n: usize) -> Result<usize, CubeError> {
+    let v: usize = rest.trim().parse().map_err(|_| CubeError::line("lut.sizeNotInt", n))?;
     if !(2..=256).contains(&v) {
-        return Err(format!("第 {} 行尺寸 {v} 超出 2..256", n + 1));
+        return Err(CubeError::of("lut.sizeRange", serde_json::json!({ "line": n + 1, "value": v })));
     }
     Ok(v)
 }

@@ -3,7 +3,7 @@
 //! 以前这一栏读的是本机 `.git` 的提交历史，装到别人机器上就是空的（那句"打包态不带 .git"
 //! 的解释就是这么来的）。改成从仓库的 Releases 拉，装了安装包的人也知道每一版改了什么。
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -72,11 +72,11 @@ pub async fn list() -> Value {
                     *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((now(), v.clone()));
                     v
                 }
-                Ok(_) => return out("GitHub 回的不是一个列表"),
-                Err(e) => return out(&format!("读不动 GitHub 的回复：{e}")),
+                Ok(_) => return out("srv.release.notList", json!({})),
+                Err(e) => return out("srv.release.badBody", json!({ "msg": e.to_string() })),
             },
-            Ok(r) => return out(&format!("GitHub 回了 {}", r.status().as_u16())),
-            Err(e) => return out(&format!("连不上 GitHub：{e}")),
+            Ok(r) => return out("srv.release.http", json!({ "code": r.status().as_u16() })),
+            Err(e) => return out("srv.release.connect", json!({ "msg": e.to_string() })),
         },
     };
     let latest = rows.iter().find(|r| !r.get("prerelease").and_then(Value::as_bool).unwrap_or(false)).cloned().unwrap_or(Value::Null);
@@ -88,13 +88,20 @@ pub async fn list() -> Value {
     ]))
 }
 
-fn out(error: &str) -> Value {
-    Value::Object(Map::from_iter([
+/// 拉取失败的三种形状分开说；界面拿钥匙查当前语言那一句
+fn out(code: &str, args: Value) -> Value {
+    let mut o = Map::from_iter([
         ("repo".into(), Value::String(REPO_URL.into())),
         ("releases".into(), Value::Array(Vec::new())),
         ("latest".into(), Value::Null),
-        ("error".into(), Value::String(error.into())),
-    ]))
+        ("error".into(), Value::String(code.to_string())),
+    ]);
+    if let Value::Object(m) = args {
+        if !m.is_empty() {
+            o.insert("error_args".into(), Value::Object(m));
+        }
+    }
+    Value::Object(o)
 }
 
 #[cfg(test)]

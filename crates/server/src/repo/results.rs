@@ -19,7 +19,7 @@ pub fn by_id(ctx: &Ctx, id: i64) -> Result<Option<ResultRow>> {
 pub fn list_for_image(ctx: &Ctx, image_id: i64, limit: i64) -> Result<Vec<Value>> {
     repo::all(
         ctx,
-        "SELECT id,status,error,prompt,steps,cfg,seed,settings_json,rerun_of,backend,model,final_path,crop_path,maskoverlay_path,thumb_path,sketch_path,created_at
+        "SELECT id,status,error,error_args,prompt,steps,cfg,seed,settings_json,rerun_of,backend,model,final_path,crop_path,maskoverlay_path,thumb_path,sketch_path,created_at
          FROM results WHERE image_id=? ORDER BY id DESC LIMIT ?",
         &[repo::i(image_id), repo::i(limit)],
     )
@@ -30,7 +30,7 @@ pub fn list_for_image(ctx: &Ctx, image_id: i64, limit: i64) -> Result<Vec<Value>
 pub fn list_for_project(ctx: &Ctx, pid: i64, limit: i64) -> Result<Vec<Value>> {
     repo::all(
         ctx,
-        "SELECT id,image_id,project_id,status,error,prompt,steps,cfg,seed,settings_json,rerun_of,backend,model,
+        "SELECT id,image_id,project_id,status,error,error_args,prompt,steps,cfg,seed,settings_json,rerun_of,backend,model,
                 final_path,crop_path,maskoverlay_path,thumb_path,sketch_path,created_at
          FROM results WHERE project_id=? ORDER BY id DESC LIMIT ?",
         &[repo::i(pid), repo::i(limit)],
@@ -153,7 +153,7 @@ pub fn set_queued(ctx: &Ctx, id: i64) -> Result<()> {
 /// 返回**这一枪是不是我抢到的**：`pump` 可以在入队、每个 worker 收尾、启动三处并发跑，
 /// 没有 `AND status='queued'` 的话两个泵都会把同一行判给"自己"，云端就重绘两次、钱花两次。
 pub fn mark_running(ctx: &Ctx, id: i64) -> Result<bool> {
-    let n = repo::run(ctx, "UPDATE results SET status='running', error=NULL WHERE id=? AND status='queued'", &[repo::i(id)])?;
+    let n = repo::run(ctx, "UPDATE results SET status='running', error=NULL, error_args=NULL WHERE id=? AND status='queued'", &[repo::i(id)])?;
     Ok(n == 1)
 }
 
@@ -169,7 +169,7 @@ pub fn list_queued(ctx: &Ctx) -> Result<Vec<i64>> {
 pub fn list_active(ctx: &Ctx) -> Result<Vec<Value>> {
     repo::all(
         ctx,
-        "SELECT id,image_id,project_id,status,error,prompt,backend,model,settings_json,created_at
+        "SELECT id,image_id,project_id,status,error,error_args,prompt,backend,model,settings_json,created_at
          FROM results WHERE status IN ('queued','running') ORDER BY id",
         &[],
     )
@@ -254,7 +254,7 @@ pub fn set_refs(ctx: &Ctx, id: i64, rels: &[String]) -> Result<()> {
         Some(m) => {
             m.insert("refs".into(), Value::Array(arr));
         }
-        None => return Err(crate::error::AppError::Fail("这一行的参数快照不是对象，参考图记不进去".into())),
+        None => return Err(crate::error::AppError::fail("srv.result.snapNotObject")),
     }
     repo::run(ctx, "UPDATE results SET settings_json=? WHERE id=?", &[repo::s(&obj.to_string()), repo::i(id)])?;
     Ok(())
@@ -279,7 +279,7 @@ mod tests {
         set_queued(&ctx, id).unwrap();
         assert!(mark_running(&ctx, id).unwrap(), "queued → running 该抢到");
         assert!(!mark_running(&ctx, id).unwrap(), "同一行不能被两个泵各领一次");
-        ctx.mark_error(id, "已手动中断");
+        ctx.mark_error(id, "已手动中断", serde_json::Value::Null);
         assert!(!set_done(&ctx, id, &format!("projects/{pid}/r.png"), None).unwrap(), "迟到的落定不该把中断的行改回 done");
         let row = value_by_id(&ctx, id).unwrap().unwrap();
         assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("error"));

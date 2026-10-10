@@ -31,7 +31,18 @@
     "comfyEntry": "设置 · {host}",
     "statsLine": "{projects} 个项目 · {images} 张图",
     "guideTitle": "修图流程",
-    "guideSub": "导入 → 涂抹 → 提交 → 对比"
+    "guideSub": "导入 → 涂抹 → 提交 → 对比",
+    "src": {
+      "env": "环境变量 SYNCO_DATA",
+      "remembered": "上次选定的目录",
+      "nearby": "就近找到的老库",
+      "cwd": "当前目录下的老库",
+      "legacy": "改名前那版的位置（LOCALAPPDATA\\PixFish）",
+      "portable": "exe 同目录（绿色模式）",
+      "default": "默认位置（还没有资料）",
+      "picked": "刚选定的目录",
+      "copied": "刚复制过去的新目录"
+    }
   },
   "settings": {
     "appearance": {
@@ -496,12 +507,12 @@
     "title": "提示词短语",
     "name": "名字",
     "content": "内容",
-    "namePh": "胶囊上的字，如 皮肤精修",
+    "namePh": "胶囊上的字，如 皮肤质感",
     "textPh": "真正并进指令的那句话",
     "needName": "先起个名字",
     "emptyTitle": "内容是空的",
     "emptyBody": "短语总得并进指令点什么",
-    "intro": "这些胶囊点一下就把那句话并进正向指令，再点一下移出。默认给了 7 条常用的，改成什么都行。",
+    "intro": "这些胶囊点一下就把那句话并进正向指令，再点一下移出。默认给了 10 条常用的，一条只讲一个目标状态，改成什么都行。",
     "newOne": "新建短语",
     "count": "{n} 条",
     "noneYet": "一条短语也没有。点「新建短语」写一句常用的，之后它就常驻在右栏。",
@@ -519,7 +530,7 @@
   },
   "pre": {
     "summary": "{steps}步 · CFG{cfg} · LoRA {lora}",
-    "namePh": "如 皮肤精修常用",
+    "namePh": "如 皮肤质感常用",
     "nameHint": "只存提示词、负面、步数、CFG 与 LoRA 链；种子不进预设。",
     "newPh": "描述要改成什么样，一段一个主体一个动作",
     "negPh": "多余的手指、塑料感皮肤、噪点…",
@@ -1167,5 +1178,311 @@
     "delWarn": "磁盘上的文件也会清掉，不可恢复。",
     "deleted": "项目已删除",
     "delFail": "删除失败"
+  },
+  "srv": {
+    "common": {
+      "bodyTooLarge": "一次传的图片太大（已收 {got} MB，上限 {cap} MB）",
+      "badJson": "请求体不是合法 JSON：{why}",
+      "idNotNumber": "id 不是数字",
+      "batchMax": "一次最多导 {cap} 张（这次 {got} 张），分几批导进来",
+      "mkdirFail": "建目录失败：{msg}",
+      "nameEmpty": "文件名是空的",
+      "dataEmpty": "图片数据是空的",
+      "writeFail": "写入失败：{msg}",
+      "badDims": "图片尺寸不对（报的是 {w}×{h}），换一张或重新导出再导",
+      "noProject": "项目不存在",
+      "noResult": "没有这条记录",
+      "copyFail": "复制失败：{msg}",
+      "respFail": "响应构造失败"
+    },
+    "backend": {
+      "noAnswer": "无应答",
+      "versionOld": "未知（老版本，无版本接口）",
+      "emptyAnswer": "空应答",
+      "notComfy": "应答了，但不是 ComfyUI",
+      "timeout": "连 ComfyUI 超时（{url}）：{msg}",
+      "connect": "连不上 ComfyUI（{url}）：{msg}",
+      "send": "ComfyUI 请求失败（{url}）：{msg}",
+      "http": "ComfyUI HTTP {code}"
+    },
+    "canvas": {
+      "noImage": "没有这张画稿",
+      "refsGone": "参考图的文件不在磁盘上了（{missing}），撤下它再提交",
+      "notSketch": "这不是画稿",
+      "pngBadNoOverwrite": "画稿不是能解码的 PNG，这次没有覆盖已有画稿",
+      "emptyNoOverwrite": "画稿是空的，这次没有覆盖",
+      "needPrompt": "画布生成只看提示词，先写要生成什么",
+      "sketchGone": "画稿文件不在磁盘上，重画一版再提交",
+      "needCloud": "画布生成要走云端：先到设置 → 云端生成填 base_url、模型名与 API key",
+      "wrongOwner": "这条记录不是这张画布的",
+      "idsNumber": "image_ids 里要放数字 id",
+      "noRefsInVersion": "这一版没带参考图",
+      "noRefsGiven": "没说要加哪几张参考图",
+      "capDropped": "参考图最多 {cap} 张，多出来的已经撤下",
+      "capGiven": "参考图最多 {cap} 张（这次给了 {got} 张）",
+      "badPathNoOverwrite": "库里这一行的画稿路径不是合法的相对路径，这次没有覆盖",
+      "sketchGoneRaw": "画稿文件不在磁盘上",
+      "needResultId": "要带 result_id",
+      "noSnapshot": "这一版没留画稿快照（快照功能上线之前生成的那些版本没有）",
+      "snapGone": "快照文件已经不在盘上了",
+      "snapBadPng": "快照不是能解码的 PNG，没有覆盖当前画稿",
+      "snapEmpty": "快照是空的，没有覆盖当前画稿",
+      "mkdirFail": "建目录失败：{msg}"
+    },
+    "cloud": {
+      "cantSubmit": "这张图提交不了",
+      "nothing": "没有要提交的图片",
+      "promptEmpty": "提示词是空的，云端只会照原图描一遍",
+      "noBase": "云端还没配置 base_url（设置 → 云端）",
+      "noModel": "云端还没填模型名",
+      "noKey": "云端还没填 API key",
+      "fileOver": "要发出去的图里有 {mb} MB 的一份，超过单文件上限 {cap} MB：换小一点的图，或把尺寸胶囊调小一档",
+      "totalOver": "这一次要发 {mb} MB 图像，超过合计上限 {cap} MB：少带几张参考图",
+      "notJson": "云端应答不是 JSON：{detail}",
+      "b64Empty": "云端应答里的 b64_json 是空的",
+      "urlFail": "云端给了地址但取不回图 HTTP {code}",
+      "noImage": "云端应答里没有图：{detail}",
+      "upstream": "云端 HTTP {code}：{detail}",
+      "noUrl": "还没填 base_url",
+      "timeout": "云端请求超时（{url}）：{msg}",
+      "connect": "连不上云端（{url}）：{msg}",
+      "send": "云端请求失败（{url}）：{msg}",
+      "probeFail": "云端探活失败：{msg}"
+    },
+    "preset": {
+      "needName": "给预设起个名字",
+      "needPhrase": "给短语起个名字",
+      "dupName": "已经有同名预设了",
+      "dupPhrase": "已经有同名短语了",
+      "phraseEmpty": "这句短语要并入指令，内容是空的就没法保存",
+      "missing": "预设不存在"
+    },
+    "export": {
+      "batchMax": "一次最多导出 {cap} 张（这次传了 {got} 张），分批导"
+    },
+    "util": {
+      "poolDead": "线程池上那次磁盘活没跑完（线程崩了或被取消）"
+    },
+    "reclaim": {
+      "cloudStalled": "这一张云端没走完（请求断了或超时），重新提交一张",
+      "lostTaskRetry": "ComfyUI 已经不认这条任务（多半随它重启，或被点了\"清空历史\"丢了），重新提交一张",
+      "lostTask": "ComfyUI 已经不认这条任务（多半随它重启，或被点了\"清空历史\"丢了）",
+      "missingOut": "ComfyUI 少了输出：{tags}",
+      "noFinal": "成图没有落盘",
+      "localStuck": "本机这一张超过 60 分钟没落定（ComfyUI 那边多半卡住了），重新提交一张",
+      "restartNoComfy": "工坊重启时连不上 ComfyUI（{url}）"
+    },
+    "result": {
+      "cancelled": "已取消：云端那次请求撤不回来，结果不再采用",
+      "noResult": "没有这条结果",
+      "snapNotObject": "这一行的参数快照不是对象，参考图记不进去"
+    },
+    "submit": {
+      "needIds": "要带 project_id 或 image_id",
+      "imageGone": "图片已不存在",
+      "isSketch": "这是画稿，请在画布里点「生成」",
+      "fullNeedsCloud": "整图重绘只走云端。本机 ComfyUI 那条要整图，请把没有裁切/缝合节点的工作流导成 API 再指过来",
+      "noMask": "未涂遮罩",
+      "origGone": "原图文件已不在磁盘上（data/projects 被清过？）",
+      "maskGone": "遮罩文件已不在磁盘上，重涂一次再提交",
+      "wfCannotTakeover": "你的工作流不能接管提交：{errors}",
+      "comfyRejected": "ComfyUI 拒收：{msg}",
+      "settled": "这条已经落定了",
+      "byHand": "已手动中断",
+      "cancelNoNotify": "已标记取消，但没通知到 ComfyUI（{errs}）",
+      "stillRunning": "这条还在生成中，等它落定再删",
+      "noCopyable": "这条记录还没有成图可复制"
+    },
+    "settings": {
+      "noWorkflowPath": "还没设置工作流文件路径",
+      "exportAbsNeeded": "要填以盘符开头的绝对路径，例如 D:\\导出\\成图",
+      "exportNotWritable": "目录不可写：{msg}",
+      "noExportIds": "没有要导出的结果",
+      "exportUnset": "还没设置导出目录（设置 → 导出目录）",
+      "noResultFile": "这条没有成图",
+      "nameTaken": "{file} 之后连续重名到第 {n} 次，让不开了"
+    },
+    "adjust": {
+      "sketchPath": "画稿不走本地调整：那是画布自己的链路",
+      "lutOutside": "LUT 只能选 data/luts 里的那一层文件",
+      "untouchedRender": "还没动过任何滑杆，先调一下再落盘",
+      "untouchedFork": "这张图还没调整，另存为新图没有意义",
+      "lutName": "LUT 名字不合法：{name}",
+      "lutRead": "读不到这个 LUT：{msg}",
+      "lutParse": "这个 LUT 读不懂：{msg}",
+      "renderGone": "成图文件不在数据目录里",
+      "forkFail": "另存失败：{msg}",
+      "badOpsJson": "参数不是合法 JSON：{msg}"
+    },
+    "image": {
+      "rowBroken": "这张图的响应构不出来（库里的行坏了）",
+      "maskBadPng": "遮罩不是能解码的 PNG，这次没有覆盖已有遮罩",
+      "badFormat": "认不出图片格式：{msg}",
+      "decoderFail": "建解码器失败：{msg}",
+      "dimsOut": "图片尺寸超出能处理的范围（{w}×{h}；上限长边 {edge}、总像素 {px}）",
+      "decodeFail": "解码失败：{msg}",
+      "noParent": "派生档路径没有父目录",
+      "slotWrite": "写 {path} 失败：{msg}",
+      "slotMove": "落位 {path} 失败：{msg}",
+      "origGone": "原图文件已不在磁盘上：{path}",
+      "origRead": "读原图失败：{msg}",
+      "maskRead": "读遮罩失败：{msg}",
+      "refFold": "参考图 {w}×{h} 折不进云端允许的框（长边≤{edge}、比例≤3:1、像素 655360~8294400）",
+      "refNotInLib": "那张图已经不在库里了",
+      "refNotOnDisk": "那张图的文件不在磁盘上了：{name}",
+      "refRead": "读那张图失败：{msg}",
+      "refSnapGone": "这一版的参考图文件已经不在磁盘上了",
+      "refSnapRead": "读参考图快照失败：{msg}",
+      "refFileGone": "参考图文件不在磁盘上了：{path}",
+      "refCopy": "复制参考图失败：{msg}",
+      "origOutside": "原图路径不在数据目录里",
+      "proxyRead": "读 proxy 失败：{msg}",
+      "renderRead": "读成图失败：{msg}"
+    },
+    "project": {
+      "nameEmpty": "项目名不能是空的"
+    },
+    "tile": {
+      "metaRead": "读瓦片清单失败：{msg}",
+      "metaBad": "瓦片清单坏了：{msg}",
+      "slotClosed": "瓦片的限流槽已经关了",
+      "threadPanic": "瓦片线程崩了：{msg}",
+      "levelMismatch": "瓦片层级算不通：期望 {w}×{h}，实有 {aw}×{ah}"
+    },
+    "queue": {
+      "imageGone": "图片已不存在，这一张没法跑",
+      "cropPanic": "裁切线程崩了：{msg}",
+      "stitchPanic": "缝合线程崩了：{msg}",
+      "noInk": "遮罩上没有可用笔迹，涂一处再提交",
+      "cropUnfit": "裁切区的尺寸/比例超出云端允许范围（长边≤3840、比例≤3:1、像素 65.5 万~829 万）",
+      "byHand": "已手动中断，这一张的结果不再采用",
+      "finalWrite": "写成图失败：{msg}",
+      "canvasPanic": "画布线程崩了：{msg}",
+      "refReadPanic": "读参考图的那次没跑完：{msg}",
+      "diskPanic": "落盘线程崩了：{msg}",
+      "sketchUnread": "读不到画稿：{path}",
+      "sketchRead": "读画稿失败：{msg}",
+      "canvasZero": "画布尺寸是 0",
+      "canvasOut": "画布 {w}×{h} 超出云端允许范围（长边≤{edge}、比例≤{ratio}:1、像素 {min}~{max}）",
+      "wholeFold": "整张图 {w}×{h} 折不进云端允许的框（长边≤{edge}、比例≤{ratio}:1、像素 {min}~{max}）",
+      "origUnread": "读不到原图",
+      "cloudEmpty": "云端回来的图是空的",
+      "wholePanic": "整图线程崩了：{msg}"
+    },
+    "comfy": {
+      "noSteps": "请求里没带采样步数",
+      "noCfg": "请求里没带 CFG",
+      "stepsBad": "采样步数不合法（{n}）：这一路要 1–200 步，云端的结果没有步数，回填后请先补上",
+      "cfgBad": "CFG 不合法（{n}）：这一路要 0–30",
+      "timeout": "连 ComfyUI 超时（{url}）：{msg}",
+      "connect": "连不上 ComfyUI（{url}）：{msg}",
+      "send": "ComfyUI 请求失败（{url}）：{msg}",
+      "http": "ComfyUI HTTP {code}：{detail}",
+      "notJson": "ComfyUI 的应答不是 JSON（HTTP {code}）：{detail}",
+      "download": "回传成图失败 HTTP {code}",
+      "roleNoNode": "角色「{role}」没配上节点",
+      "roleNotInGraph": "角色「{role}」指的节点 {id} 不在这张图里",
+      "noInputs": "节点 {id} 没有 inputs",
+      "noInput": "节点 {id} 没有 {key} 这个输入"
+    },
+    "wf": {
+      "readFail": "读不到工作流：{msg}",
+      "badJson": "工作流不是合法 JSON：{msg}",
+      "unknownFormat": "这个 JSON 既没有 UI 导出的 nodes/links，也不是 API 导出的节点表（认不出是哪种工作流）",
+      "unknownFormatShort": "这个 JSON 既不是 ComfyUI 的 UI 导出，也不是 API 导出",
+      "roleMissing": "「{role}」找不到节点（类名 {class}）",
+      "roleNotInGraph": "「{role}」指向的节点 {id} 不在这张图里",
+      "roleNoInput": "「{role}」(节点 {id}) 没有 {input} 这个输入，Synco 没法往里填",
+      "cycle": "这张图里有环（某个节点的输入绕回了自己），ComfyUI 不会执行它",
+      "stitchOrder": "缝合节点没有接在裁切节点之后：回来的图不会被贴回原图",
+      "outOfStitch": "输出成图不是从缝合节点出来的（可能直接存了采样结果）：那样回来的是一张重绘过的整图，画面看着正常但语义已经变了",
+      "cropNoPhoto": "裁切节点没吃到「{role}」这条输入：提交时照片送不进你的图",
+      "cropNoMask": "裁切节点没吃到「{role}」这条输入：提交时蒙版送不进你的图",
+      "noPrompt": "采样器没接提示词编码：面板里写的指令不会生效",
+      "sameNode": "「{a}」和「{b}」指向同一个节点 {id}：那一路只会回来一张图",
+      "roleValue": "「{role}」的值要写成节点号字符串",
+      "roleClass": "「{role}」要的是 {class} 节点，节点 {id} 是 {found}",
+      "uiExport": "这个文件是 UI 导出（或读不出节点表），没法当计算图提交：在 ComfyUI 里用 Save (API Format) 另存一份再指过来",
+      "fileGone": "读不到工作流文件（{path}）",
+      "fileMissing": "工作流文件不存在",
+      "cropShape": "工作流里 InpaintCropImproved 的控件与内置基线对不上（内置 {want} 项，工作流 {got} 项），裁切参数改用内置值",
+      "noParams": "认出了{kind}格式，但文件里没有本管线认识的节点参数（UNETLoader / KSampler / TextEncodeQwenImage21 这些一个都没找到）"
+    },
+    "app": {
+      "dataLocked": "这个数据目录已经有另一个 Synco 在用了：回到已经开着的那个窗口即可（再双击图标会把它叫到前面）",
+      "taskPanic": "服务任务崩了：{msg}"
+    },
+    "shell": {
+      "absNeeded": "要填以盘符开头的绝对路径，例如 D:\\修图资料",
+      "absDirNeeded": "目标目录要填绝对路径",
+      "sameDir": "来源与目标是同一个目录",
+      "targetHasLibrary": "那边已经有一个库了，不敢往里盖：换一个空目录，或自己先清干净",
+      "mkdirFail": "建目标目录失败：{msg}",
+      "confMkdirFail": "建配置目录失败：{msg}",
+      "writeFail": "写 {path} 失败：{msg}",
+      "dirReadFail": "读 {path} 失败：{msg}",
+      "copyFail": "复制 {path} 失败：{msg}",
+      "browserFail": "叫不动系统浏览器：{msg}",
+      "urlTooLong": "这条链接长得离谱",
+      "urlScheme": "只能打开 http/https 链接",
+      "urlChars": "这条链接里有不该出现的字符，没敢直接打开",
+      "mkdirAt": "建 {path} 失败：{msg}"
+    },
+    "url": {
+      "empty": "地址不能为空",
+      "bad": "地址格式不对",
+      "scheme": "只支持 http / https",
+      "credentials": "地址里不要带账号密码",
+      "query": "地址里不要带查询参数",
+      "baseEmpty": "base_url 不能为空",
+      "baseBad": "base_url 格式不对",
+      "noHost": "base_url 缺主机名",
+      "baseCredentials": "base_url 里不要带账号密码",
+      "baseQuery": "base_url 里不要带查询参数"
+    },
+    "release": {
+      "notList": "GitHub 回的不是一个列表",
+      "badBody": "读不动 GitHub 的回复：{msg}",
+      "http": "GitHub 回了 {code}",
+      "connect": "连不上 GitHub：{msg}"
+    }
+  },
+  "wf": {
+    "role": {
+      "loadImage": "加载图",
+      "loadMask": "加载遮罩",
+      "textEncode": "提示词编码",
+      "ksampler": "采样器",
+      "crop": "裁切",
+      "stitch": "缝合",
+      "outFinal": "输出成图",
+      "outCrop": "输出裁切区",
+      "maskViz": "遮罩可视化",
+      "outOverlay": "输出遮罩图"
+    },
+    "format": {
+      "api": "API 导出",
+      "ui": "UI 导出"
+    }
+  },
+  "setup": {
+    "pack": {
+      "cropStitch": "局部重绘裁切与缝合",
+      "kjNodes": "遮罩叠加绘制"
+    },
+    "slot": {
+      "unet": "主模型",
+      "clip": "文本编码器"
+    }
+  },
+  "lut": {
+    "domainMin": "第 {line} 行的 DOMAIN_MIN 不是三个数",
+    "domainMax": "第 {line} 行的 DOMAIN_MAX 不是三个数",
+    "sizeNotInt": "第 {line} 行的尺寸不是整数",
+    "sizeRange": "第 {line} 行的尺寸 {value} 超出 2..256",
+    "noSize": "没有 LUT_1D_SIZE / LUT_3D_SIZE 声明",
+    "overflow": "第 {line} 行起数据超出声明尺寸",
+    "fewComponents": "数据只有 {got} 个分量，声明需要 {need} 个",
+    "domainOrder": "DOMAIN_MIN 必须严格小于 DOMAIN_MAX"
   }
 }

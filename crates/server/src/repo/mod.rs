@@ -50,7 +50,8 @@ fn row_value(names: &[String], row: &rusqlite::Row) -> Value {
             ValueRef::Integer(n) => Value::from(n),
             ValueRef::Real(x) => Value::from(x),
             ValueRef::Text(t) => Value::String(String::from_utf8_lossy(t).into_owned()),
-            ValueRef::Blob(b) => Value::String(format!("<blob {} 字节>", b.len())),
+            // 库里的 BLOB 不该出现在 JSON 里：给一句 ASCII 的形状描述，日志与界面都不会把中文当文案
+            ValueRef::Blob(b) => Value::String(format!("<blob {} bytes>", b.len())),
         };
         m.insert(name.clone(), v);
     }

@@ -1,6 +1,6 @@
 //! 路由薄层：只做参数解析、状态码与响应形状；业务在 `crate::service`，读写在 `crate::repo`。
 
-use super::common::{bad, body_of, ok};
+use super::common::{bad, bad_args, body_of, ok};
 use crate::service::workflow as cfg;
 use crate::error::{AppError, Result};
 use crate::repo;
@@ -11,7 +11,7 @@ use crate::util;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::response::Response;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use std::path::{Path, PathBuf};
 
@@ -66,21 +66,15 @@ pub async fn workflow_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Respo
 pub async fn workflow_inspect(State(ctx): State<Shared>) -> Result<Response> {
     let p = cfg::workflow_path(&ctx);
     if p.trim().is_empty() {
-        return Ok(bad("还没设置工作流文件路径"));
+        return Ok(bad("srv.settings.noWorkflowPath"));
     }
-    match cfg::inspect(Path::new(&p)) {
-        Ok(v) => Ok(ok(v)),
-        Err(e) => Ok(bad(e)),
-    }
+    Ok(ok(cfg::inspect(Path::new(&p))?))
 }
 
 /// 角色映射表：这个文件里有哪些节点、自动认出了谁、你手指过谁、还差什么。
 /// 接管提交之前，人得先看得见这张表对不对。
 pub async fn workflow_roles_get(State(ctx): State<Shared>) -> Result<Response> {
-    match cfg::roles_view(&ctx) {
-        Ok(v) => Ok(ok(v)),
-        Err(e) => Ok(bad(e)),
-    }
+    Ok(ok(cfg::roles_view(&ctx)?))
 }
 
 /// 存手指覆盖。类名对不上的一律不入库并逐条给理由——存进去一个错类名的节点，
@@ -90,10 +84,7 @@ pub async fn workflow_roles_post(State(ctx): State<Shared>, raw: Bytes) -> Resul
     let p = cfg::workflow_path(&ctx);
     let roles = body.get("roles").and_then(|v| v.as_object()).cloned().unwrap_or_default();
     let (kept, rejected) = cfg::set_saved_roles(&ctx, &p, &roles);
-    let view = match cfg::roles_view(&ctx) {
-        Ok(v) => v,
-        Err(e) => return Ok(bad(e)),
-    };
+    let view = cfg::roles_view(&ctx)?;
     let mut out = view.as_object().cloned().unwrap_or_default();
     out.insert("saved".into(), serde_json::Value::Object(kept));
     out.insert("rejected".into(), serde_json::json!(rejected));
@@ -115,7 +106,7 @@ pub(crate) fn get_export_dir(ctx: &Shared) -> String {
 /// 绝对路径 + 可写探测：建目录、写探针文件再删掉。U 盘拔了这类情况在导出时报错而不是保存时。
 /// 盘符/UNC 前缀必须验原始字符串——先 resolve 再判 isAbsolute 的话，
 /// 相对路径已经被补成 CWD 下的绝对路径，防线就失效了。
-pub(crate) fn probe_export_dir(dir: &str) -> (bool, String, Option<PathBuf>) {
+pub(crate) fn probe_export_dir(dir: &str) -> (bool, &'static str, Option<Value>, Option<PathBuf>) {
     let raw = dir.trim();
     let abs = {
         let b = raw.as_bytes();
@@ -124,7 +115,7 @@ pub(crate) fn probe_export_dir(dir: &str) -> (bool, String, Option<PathBuf>) {
         drive || unc
     };
     if !abs {
-        return (false, "要填以盘符开头的绝对路径，例如 D:\\导出\\成图".into(), None);
+        return (false, "srv.settings.exportAbsNeeded", None, None);
     }
     let p = Path::new(raw).to_path_buf();
     match std::fs::create_dir_all(&p).and_then(|_| {
@@ -132,8 +123,9 @@ pub(crate) fn probe_export_dir(dir: &str) -> (bool, String, Option<PathBuf>) {
         std::fs::write(&probe, "ok")?;
         std::fs::remove_file(&probe)
     }) {
-        Ok(_) => (true, String::new(), Some(p)),
-        Err(e) => (false, format!("目录不可写：{}", e.to_string().chars().take(120).collect::<String>()), None),
+        Ok(_) => (true, "", None, Some(p)),
+        Err(e) => (false, "srv.settings.exportNotWritable",
+            Some(json!({ "msg": e.to_string().chars().take(120).collect::<String>() })), None),
     }
 }
 
@@ -147,9 +139,9 @@ pub async fn export_get(State(ctx): State<Shared>) -> Response {
 
 pub async fn export_dir_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
-    let (okp, e, p) = probe_export_dir(body.get("dir").and_then(|v| v.as_str()).unwrap_or(""));
+    let (okp, code, args, p) = probe_export_dir(body.get("dir").and_then(|v| v.as_str()).unwrap_or(""));
     if !okp {
-        return Ok(bad(e));
+        return Ok(bad_args(code, args.unwrap_or(Value::Null)));
     }
     let p = p.unwrap();
     rset::put(&ctx, "export_dir", &p.to_string_lossy()).map_err(|e| e.to_string())?;
@@ -171,33 +163,33 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
         })
         .collect();
     if ids.is_empty() {
-        return Ok(bad("没有要导出的结果"));
+        return Ok(bad("srv.settings.noExportIds"));
     }
     // 一次导出的张数上限：body 那 80MB 限的是字节不是条数，一万个 id 能把 CPU 与磁盘 IO 排满
     const EXPORT_MAX: usize = 500;
     if ids.len() > EXPORT_MAX {
-        return Ok(bad(format!("一次最多导出 {EXPORT_MAX} 张（这次传了 {} 张），分批导", ids.len())));
+        return Ok(bad_args("srv.export.batchMax", json!({ "cap": EXPORT_MAX, "got": ids.len() })));
     }
     let dir = get_export_dir(&ctx);
     if dir.is_empty() {
-        return Ok(bad("还没设置导出目录（设置 → 导出目录）"));
+        return Ok(bad("srv.settings.exportUnset"));
     }
-    let (okp, e, p) = probe_export_dir(&dir);
+    let (okp, code, args, p) = probe_export_dir(&dir);
     if !okp {
-        return Ok(bad(e));
+        return Ok(bad_args(code, args.unwrap_or(Value::Null)));
     }
     let p = p.unwrap();
     let mut out: Vec<Value> = Vec::new();
     for id in ids {
         let Some(r) = rres::value_by_id(&ctx, id)? else {
-            out.push(serde_json::json!({ "id": id, "skipped": true, "reason": "这条没有成图" }));
+            out.push(serde_json::json!({ "id": id, "skipped": true, "reason": "srv.settings.noResultFile" }));
             continue;
         };
         let final_path = r.get("final_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
         // 库里的 rel 走统一校验再取路径：状态对得上但文件指在 data/ 外（被改过的库、链接）也不导
         let final_src = util::data_file(&ctx.data, &final_path);
         if r.get("status").and_then(|v| v.as_str()) != Some("done") || final_src.is_none() {
-            out.push(serde_json::json!({ "id": id, "skipped": true, "reason": "这条没有成图" }));
+            out.push(serde_json::json!({ "id": id, "skipped": true, "reason": "srv.settings.noResultFile" }));
             continue;
         }
         let final_src = final_src.unwrap();
@@ -225,7 +217,7 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
                         Ok(_) => break,
                         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                             if n >= 1000 {
-                                return Err(AppError::Fail(format!("{file} 之后连续重名到第 {n} 次，让不开了")));
+                                return Err(AppError::fail_args("srv.settings.nameTaken", json!({ "file": file, "n": n })));
                             }
                             file = format!("{stem}_#{id}({n}).png");
                             n += 1;

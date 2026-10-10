@@ -3,7 +3,7 @@
 import { el } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { api } from '../core/api.js';
-import { t as tr } from '../core/i18n.js';
+import { dx, t as tr } from '../core/i18n.js';
 import { store } from '../state.js';
 import { toastOk, toastErr, toastBusy } from './toast.js';
 
@@ -57,7 +57,7 @@ export function createBackendsPane() {
         el('span.dot', { class: `dot ${r.current ? 'dot--mask' : r.ok ? 'dot--done' : 'dot--err'}` }),
         el('div.be-row__main', {},
           el('b.be-row__url.nowrap', { text: r.url, title: r.url }),
-          el('span.be-row__meta', { text: r.ok ? meta(r) : (r.error || tr('be.unreachable')) }),
+          el('span.be-row__meta', { text: r.ok ? meta(r) : (dx(r.error, r.error_args) || tr('be.unreachable')) }),
           r.label ? el('span.be-row__label', { text: r.label }) : null),
         el('div.be-row__acts', {}, ...acts));
     }));
@@ -99,7 +99,7 @@ export function createBackendsPane() {
         toastOk(tr('be.probeOk'), `${r.url} · ${r.probe.ms}ms`);
         lastFound = [...lastFound.filter(x => x.url !== r.url), { ...r.probe, url: r.url }];
       } else {
-        toastErr(tr('be.probeFail'), r.probe?.error || tr('be.noReply'));
+        toastErr(tr('be.probeFail'), dx(r.probe?.error, r.probe?.error_args) || tr('be.noReply'));
       }
       await rebuild();
     } catch (e) { toastErr(tr('be.regFail'), e.message); }

@@ -48,7 +48,7 @@ pub async fn setup_script(State(ctx): State<Shared>, raw: Bytes) -> Result<Respo
         None => setup::root_setting(&ctx),
     };
     let proxy = body.get("proxy").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let r = setup::write_script(&ctx, &root, &proxy).map_err(|e| AppError::bad(e))?;
+    let r = setup::write_script(&ctx, &root, &proxy).map_err(AppError::bad_msg)?;
     let manifest = r.get("manifest").cloned().unwrap_or(Value::Null);
     Ok(ok(serde_json::json!({
         "dir": r["dir"], "bat": r["bat"], "ps1": r["ps1"],
