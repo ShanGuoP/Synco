@@ -7,7 +7,7 @@
 use crate::ops::{Auto, Stroke, Tool, Warp};
 use crate::px::{sample, Pad};
 use moving_least_squares::deform_similarity;
-use stitch_core::{par::par_chunks_mut, Rgba};
+use px_core::{par::par_chunks_mut, Rgba};
 
 /// 滑杆满档时，一个笔画步长最多搬掉半径的多少比例。
 /// 超过这个量就会把采样点推出盘外，等于自己咬自己的输出。
@@ -471,7 +471,7 @@ pub fn apply(img: &Rgba, warp: &Warp, shape: Option<&FaceShape>) -> Rgba {
 mod tests {
     use super::*;
     use crate::ops::{Auto, Stroke, Tool, Warp};
-    use stitch_core::Rgba;
+    use px_core::Rgba;
 
     /// 画一张有唯一特征的图：中央一条竖亮带，位置可量
     fn striped(w: usize, h: usize) -> Rgba {

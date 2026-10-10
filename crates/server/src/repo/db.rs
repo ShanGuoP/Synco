@@ -263,6 +263,9 @@ pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
     let db = Connection::open(data_dir.join("app.db"))?;
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "foreign_keys", "ON")?;
+    // 跨进程等锁：本进程内靠那把 Mutex，但同一个库被第二个进程打开时（`synco-tools` 的体检与补齐
+    // 就在外面跑），没有这一句就是一撞 WAL 写锁立刻 SQLITE_BUSY——那句报错只有开发者读得懂
+    db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch(SCHEMA)?;
     for (table, col, ddl) in MIGRATIONS {
         if !has_column(&db, table, col)? {
@@ -278,6 +281,19 @@ pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
     seed_phrases(&db)?;
     upgrade_phrases(&db)?;
     Ok(db)
+}
+
+/// 资料页要的两条计数。**取一次就撒手**：连接全局只有一个，握着它去遍历整棵 `data/`
+/// （几十 GB 瓦片走一遍）期间，所有走库的 HTTP handler——含 2.5s 一次的队列轮询——都在排队。
+pub fn library_counts(ctx: &crate::state::Ctx) -> (i64, i64) {
+    let db = ctx.db();
+    let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    (count("SELECT count(*) FROM projects"), count("SELECT count(*) FROM images"))
+}
+
+/// 把 WAL 合回主文件。复制资料目录前必须走一次，否则拷过去的是半个库 + 一份没人认领的 `-wal`。
+pub fn checkpoint_truncate(ctx: &crate::state::Ctx) {
+    let _ = ctx.db().execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
 }
 
 #[cfg(test)]

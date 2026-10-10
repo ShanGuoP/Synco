@@ -1,9 +1,9 @@
 //! 拉普拉斯金字塔多频段融合：低频取对方的、高频留自己的，接缝处才不会露色块或露边。
 //! alpha=1 处严格等于校正后的模型输出，alpha=0 处严格等于原图像素——未涂区域零漂移就是这么来的。
 
-use crate::buffer::{Alpha, Box2, Rgba};
-use crate::par::par_chunks_mut;
-use crate::resize::{crop_scale_alpha, crop_scale_rgba, grow_rgba, half_alpha, half_rgba, to_u8};
+use px_core::buffer::{Alpha, Box2, Rgba};
+use px_core::par::par_chunks_mut;
+use px_core::resize::{crop_scale_alpha, crop_scale_rgba, grow_rgba, half_alpha, half_rgba, to_u8};
 
 /// 第 i 层上的包围盒：`Math.floor(box.x / 2^i)` 起，`Math.ceil((box.x+box.w)/2^i)` 止
 fn box_at(l0: &Box2, i: usize) -> Box2 {

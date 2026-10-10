@@ -1,13 +1,13 @@
 //! 裁切-缝合主流程：把遮罩包围盒外扩成裁切区发给模型，回来再折回整图。
 //! 服务端拿到的是解码后的像素数组，PNG 编解码在 `crates/server` 里做，内核不碰 IO。
 
-use crate::buffer::{Alpha, Box2, Rgba};
+use px_core::buffer::{Alpha, Box2, Rgba};
 use crate::color::color_match;
 use crate::geom::{fit_size, Fit};
 use crate::mask::{dilate, ink_bbox, paste_alpha};
-use crate::par::par_chunks_mut;
+use px_core::par::par_chunks_mut;
 use crate::pyramid::{pyramid_blend, pyramid_blend_boxed};
-use crate::resize::{crop_scale_alpha, crop_scale_rgba, to_u8};
+use px_core::resize::{crop_scale_alpha, crop_scale_rgba, to_u8};
 
 pub const DEFAULT_CROP_EDGE: u32 = 1024;
 pub const DEFAULT_EXPAND: f64 = 96.0;
@@ -253,7 +253,7 @@ fn composite_over(dst: &mut Rgba, src: &Rgba, dx: usize, dy: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::Alpha;
+    use px_core::buffer::Alpha;
 
     /// 渐变原图 + 一块涂抹，够代表真实形状
     fn scene(w: usize, h: usize) -> (Rgba, Alpha) {

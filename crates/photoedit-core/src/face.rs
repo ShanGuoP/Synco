@@ -97,8 +97,8 @@ pub fn crop_suggestion(fw: usize, fh: usize, face: &FaceBox, ratio: f32) -> [f32
 
 /// F2 的自动美颜区：脸框外扩一圈、扣掉眼与嘴附近的圆。
 /// 返回与 `img` 同尺寸的 alpha 平面（255 = 参与磨皮）。
-pub fn beauty_region(w: usize, h: usize, faces: &[FaceBox]) -> stitch_core::Alpha {
-    let mut a = stitch_core::Alpha::new(w, h);
+pub fn beauty_region(w: usize, h: usize, faces: &[FaceBox]) -> px_core::Alpha {
+    let mut a = px_core::Alpha::new(w, h);
     for f in faces {
         let pad_x = f.w * 0.08;
         let pad_y = f.h * 0.08;

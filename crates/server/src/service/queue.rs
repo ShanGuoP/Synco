@@ -11,26 +11,17 @@ use crate::{img::codec, service::imagesvc, service::refs, util};
 use serde_json::{json, Map, Value};
 use stitch_core::{build_crop_payload, stitch_crop, Build, StitchParams};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
-use tokio::sync::Semaphore;
 
 /// 并发上限就是云端设置里那个 concurrency 的刻度，钳在 1–6
 pub const CONCURRENCY_MAX: usize = 6;
 
-static GATE: OnceLock<Semaphore> = OnceLock::new();
-/// 已经发出去的坑位数，也就是本进程在飞的云端任务数
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-
-fn gate() -> &'static Semaphore {
-    GATE.get_or_init(|| Semaphore::new(0))
-}
-
 /// 在飞计数的 RAII 守卫：任务里 panic 走 unwind 时也要把这一格还回去，
 /// 普通语句会被 unwind 跳过，所以不能写成 fetch_sub。
-struct InFlight;
+/// 计数住在 `Ctx::live` 而不是模块级 static——单测各自造 Ctx 才互不干扰。
+struct InFlight(std::sync::Arc<AtomicUsize>);
 impl Drop for InFlight {
     fn drop(&mut self) {
-        LIVE.fetch_sub(1, Ordering::AcqRel);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -44,16 +35,14 @@ impl Drop for InFlight {
 /// 这三步（读在飞 → 读可得 → 补/削）本身没有原子性：入队、worker 收尾、启动恢复三处都会叫
 /// `pump`，两个线程同时读到同一个 `available_permits` 就会各补一次，实际并发比设置里的高。
 /// 闸门是 tokio 的、`try_acquire` 是原子的，所以只要把这段对齐过程串起来就够了。
-static GATE_SYNC: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn sync_gate(want: usize) {
-    let _serial = GATE_SYNC.lock().unwrap_or_else(|e| e.into_inner());
-    let target = want.saturating_sub(LIVE.load(Ordering::Acquire));
-    let have = gate().available_permits();
+fn sync_gate(ctx: &Shared, want: usize) {
+    let _serial = ctx.gate_sync.lock().unwrap_or_else(|e| e.into_inner());
+    let target = want.saturating_sub(ctx.live.load(Ordering::Acquire));
+    let have = ctx.gate.available_permits();
     if target > have {
-        gate().add_permits(target - have);
+        ctx.gate.add_permits(target - have);
     } else if have > target {
-        gate().forget_permits(have - target);
+        ctx.gate.forget_permits(have - target);
     }
 }
 
@@ -144,14 +133,15 @@ pub async fn snapshot(ctx: &Shared) -> Result<Value> {
 pub fn pump(ctx: &Shared) -> std::pin::Pin<Box<dyn std::future::Future<Output = usize> + Send + '_>> {
     Box::pin(async move {
         let want = cloud::settings(ctx).concurrency.clamp(1, CONCURRENCY_MAX as i64) as usize;
-        sync_gate(want);
+        sync_gate(ctx, want);
         let ids = match rres::list_queued(ctx) {
             Ok(v) => v,
             Err(_) => return 0,
         };
         let mut started = 0usize;
         for id in ids {
-            let Ok(permit) = gate().try_acquire() else { break };
+            // owned permit：守卫要能跟着 task 一起进 `'static` 的盒子里，借 `&Semaphore` 的那种活不过这层
+            let Ok(permit) = ctx.gate.clone().try_acquire_owned() else { break };
             // 登记与改状态都同步做在这一步：任务真正开跑前前端就可能来轮询，
             // 那时它看到的必须已经是"本进程在飞"，否则会被 judge_cloud 判成僵尸
             ctx.job_begin(id);
@@ -166,14 +156,14 @@ pub fn pump(ctx: &Shared) -> std::pin::Pin<Box<dyn std::future::Future<Output = 
                 Ok(true) => {}
             }
             let ctx = ctx.clone();
-            LIVE.fetch_add(1, Ordering::AcqRel);
+            ctx.live.fetch_add(1, Ordering::AcqRel);
             let task: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> = Box::pin(async move {
-                /* 收尾顺序是要害：`sync_gate` 算的是 `want − LIVE`，而 LIVE 由 `_live` 在退出作用域时减。
+                /* 收尾顺序是要害：`sync_gate` 算的是 `want − 在飞数`，而在飞数由 `_live` 在退出作用域时减。
                    以前它一直挂到整个 task 结束，于是这一次收尾泵看到的是"这一张还在飞"：
                    并发=1 时 target 算成 0，会把刚 `drop(permit)` 还回来的那个坑位又 forget 掉，
                    排在前面的 queued 行就此没人叫——整批停在第二张，直到下次入队或重启才动。 */
                 {
-                    let _live = InFlight;
+                    let _live = InFlight(ctx.live.clone());
                     run_job(&ctx, id).await;
                 }
                 drop(permit);
@@ -513,22 +503,29 @@ mod tests {
 
     /// 并发从 3 下调到 1 时若还有 3 张在飞：增量式调整一个许可也削不掉，
     /// 等它们跑完 available 会回到 3（设置写串行、实际同发 3 张），再往上调还能冲破上限。
+    /// 闸门与在飞计数都挂在各自新建的 `Ctx` 上——它们曾是模块级 static，
+    /// 于是这条测试与任何碰闸门的测试都有顺序依赖，跑的顺序一变结论就变。
     #[test]
     fn 在飞时下调并发不会漏发也不冲破上限() {
-        sync_gate(3);
-        assert_eq!(gate().available_permits(), 3);
-        let held: Vec<_> = (0..3).map(|_| gate().try_acquire().unwrap()).collect();
-        LIVE.fetch_add(3, Ordering::AcqRel);
-        sync_gate(1);
-        assert_eq!(gate().available_permits(), 0, "三张在飞时不该还有空位");
+        let dir = std::env::temp_dir().join(format!("synco-gate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::state::Ctx::new(dir.clone(), dir.clone(), crate::repo::db::open(&dir).unwrap());
+        sync_gate(&ctx, 3);
+        assert_eq!(ctx.gate.available_permits(), 3);
+        let held: Vec<_> = (0..3).map(|_| ctx.gate.clone().try_acquire_owned().unwrap()).collect();
+        ctx.live.fetch_add(3, Ordering::AcqRel);
+        sync_gate(&ctx, 1);
+        assert_eq!(ctx.gate.available_permits(), 0, "三张在飞时不该还有空位");
         drop(held);
-        LIVE.fetch_sub(3, Ordering::AcqRel);
-        sync_gate(1);
-        assert_eq!(gate().available_permits(), 1, "释放之后只留一个坑");
-        sync_gate(6);
-        assert_eq!(gate().available_permits(), 6, "上调要能一路开到上限");
-        sync_gate(1);
-        assert_eq!(gate().available_permits(), 1);
+        ctx.live.fetch_sub(3, Ordering::AcqRel);
+        sync_gate(&ctx, 1);
+        assert_eq!(ctx.gate.available_permits(), 1, "释放之后只留一个坑");
+        sync_gate(&ctx, 6);
+        assert_eq!(ctx.gate.available_permits(), 6, "上调要能一路开到上限");
+        sync_gate(&ctx, 1);
+        assert_eq!(ctx.gate.available_permits(), 1);
+        drop(ctx);   // 连接还开着的时候 Windows 删不掉 app.db
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 建画布时按同一口径拒过，提交时再判一次：库里可能躺着别的入口写进来的行

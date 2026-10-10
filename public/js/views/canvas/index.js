@@ -9,6 +9,7 @@ import { encodeMask } from '../../core/maskEncode.js';
 import { dx, t } from '../../core/i18n.js';
 import { store, loadProject, loadPhrases } from '../../state.js';
 import { go } from '../../core/router.js';
+import { hold } from '../../core/guard.js';
 import { toastOk, toastErr, toastBusy } from '../../ui/toast.js';
 import { confirm, modal } from '../../ui/modal.js';
 import { makeSlider } from '../../ui/controls.js';
@@ -295,14 +296,17 @@ function paintRefs(list) {
 
 /** 整组替换：撤一张、清空都走这条。服务端只删"这次不再认"的那些文件 */
 async function setRefs(paths) {
+  const same = hold(() => c.imgId);
   try {
     const d = await api.canvasSetRefs(c.imgId, paths);
+    if (!same()) return;
     paintRefs(d.refs || []);
-  } catch (e) { toastErr(t('cv.slotFail'), e.message); refreshRefs(); }
+  } catch (e) { if (!same()) return; toastErr(t('cv.slotFail'), e.message); refreshRefs(); }
 }
 
 async function refreshRefs() {
-  try { const d = await api.canvas(c.imgId); paintRefs(d.refs || []); } catch { /* 集合读不到就维持屏幕上那一版 */ }
+  const same = hold(() => c.imgId);
+  try { const d = await api.canvas(c.imgId); if (same()) paintRefs(d.refs || []); } catch { /* 集合读不到就维持屏幕上那一版 */ }
 }
 
 const isImgFile = f => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|bmp|avif)$/i.test(f.name || '');
@@ -319,20 +323,24 @@ async function addRefFiles(files) {
   }
   if (!payloads.length) return;
   const busy = toastBusy(t('cv.refBusy'));
+  const same = hold(() => c.imgId);
   try {
     const d = await api.canvasAddRefs(c.imgId, { files: payloads.map(p => ({ b64: p.b64 })) });
     busy.close();
+    if (!same()) return;      // 换画布了：这一组 refs 是上一张的
     paintRefs(d.refs || []);
-  } catch (e) { busy.close(); toastErr(t('cv.refFail'), e.message); refreshRefs(); }
+  } catch (e) { busy.close(); if (!same()) return; toastErr(t('cv.refFail'), e.message); refreshRefs(); }
 }
 
 async function addRefIds(ids) {
   if (!ids.length) return;
   if (c.refMax - c.refList.length <= 0) { toastErr(t('cv.refMax', { n: c.refMax }), t('cv.refFullPick')); return; }
+  const same = hold(() => c.imgId);
   try {
     const d = await api.canvasAddRefs(c.imgId, { image_ids: ids.slice(0, c.refMax - c.refList.length) });
+    if (!same()) return;
     paintRefs(d.refs || []);
-  } catch (e) { toastErr(t('cv.refFail'), e.message); refreshRefs(); }
+  } catch (e) { if (!same()) return; toastErr(t('cv.refFail'), e.message); refreshRefs(); }
 }
 
 /** 从本项目已有的图里挑：加进来的是**复制的一份**，原图后来被删也不影响"这一版参考了哪张" */
@@ -356,11 +364,14 @@ async function restoreRow(r) {
   rerunFrom = r.id;
   c.compare.hide();
   if (!r.refs?.length) { line(t('cv.readyRerun', { id: r.id })); return; }
+  const same = hold(() => c.imgId);
   try {
     const d = await api.canvasAddRefs(c.imgId, { from_result: r.id });
+    if (!same()) return;      // 换画布了：参考图与那行提示都不该落在新这张上
     paintRefs(d.refs || []);
     line(t('cv.refsMoved', { id: r.id, n: d.refs.length }));
   } catch (e) {
+    if (!same()) return;
     toastErr(t('cv.refsFail'), e.message);
     line(t('cv.refsPartial', { msg: String(e.message || '').slice(0, 60) }), true);
   }
@@ -505,14 +516,17 @@ async function takeSketch(r) {
   });
   if (!ok) return;
   const busy = toastBusy(t('cv.sketchBusy'));
+  const imgId = c.imgId;
+  const same = hold(() => c.imgId);
   try {
     /* 先把屏幕上的笔迹冲出去再让服务端写回快照：不冲的话随后那次 load() 会带着"取回前那版"
        的 pending 笔迹 POST 回 /sketch，把刚写回的快照当场盖掉，而提示仍然说"已取回" */
     await c.painter.flush();
-    await api.useSketch(c.imgId, r.id);
+    await api.useSketch(imgId, r.id);
     busy.close();
+    if (!same()) return;      // 换画布了：这张的快照已经取回，但屏幕上不是它了
     c.compare.hide();
-    await load(c.imgId);
+    await load(imgId);
     setFlag(t('cv.sketchDoneFlag'), 'ok');
     toastOk(t('cv.sketchDoneToast'), t('cv.sketchDone', { id: r.id }));
   } catch (e) {
@@ -522,6 +536,8 @@ async function takeSketch(r) {
 }
 
 async function delResult(r) {
+  const imgId = c.imgId;
+  const same = hold(() => c.imgId);
   const ok = await confirm({
     title: t('ed.delRecTitle', { id: r.id }),
     text: r.final_url ? t('cv.delRecText') : t('cv.delRecOnly'),
@@ -530,7 +546,8 @@ async function delResult(r) {
   if (!ok) return;
   try {
     await api.delResult(r.id);
-    const d = await api.canvas(c.imgId);
+    const d = await api.canvas(imgId);
+    if (!same()) return;      // 删完回来已经不是这张了：别把上一张的历史条画上去
     syncResults(d.results || []);
     toastOk(t('ed.recDeleted'), `#${r.id}`);
   } catch (e) { toastErr(t('ed.delFail'), e.message); }

@@ -44,9 +44,9 @@ const DONE_I18N_RS = [
   'crates/server/src/state.rs', 'crates/server/src/text.rs', 'crates/server/src/util.rs',
   'crates/server/src/version.rs', 'crates/server/src/web/assets.rs', 'crates/server/src/web/csp.rs',
   'crates/server/src/web/files.rs', 'crates/server/src/web/guard.rs', 'crates/server/src/web/mod.rs',
-  'crates/stitch-core/src/buffer.rs', 'crates/stitch-core/src/color.rs', 'crates/stitch-core/src/geom.rs',
-  'crates/stitch-core/src/lib.rs', 'crates/stitch-core/src/mask.rs', 'crates/stitch-core/src/par.rs',
-  'crates/stitch-core/src/pyramid.rs', 'crates/stitch-core/src/resize.rs', 'crates/stitch-core/src/stitch.rs',
+  'crates/px-core/src/buffer.rs', 'crates/stitch-core/src/color.rs', 'crates/stitch-core/src/geom.rs',
+  'crates/stitch-core/src/lib.rs', 'crates/stitch-core/src/mask.rs', 'crates/px-core/src/par.rs',
+  'crates/stitch-core/src/pyramid.rs', 'crates/px-core/src/resize.rs', 'crates/stitch-core/src/stitch.rs',
   'src-tauri/build.rs', 'src-tauri/src/main.rs',
 ];
 

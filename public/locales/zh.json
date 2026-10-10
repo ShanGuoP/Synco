@@ -1192,6 +1192,7 @@
       "badDims": "图片尺寸不对（报的是 {w}×{h}），换一张或重新导出再导",
       "noProject": "项目不存在",
       "noResult": "没有这条记录",
+      "noImage": "这张图不存在",
       "copyFail": "复制失败：{msg}",
       "respFail": "响应构造失败"
     },

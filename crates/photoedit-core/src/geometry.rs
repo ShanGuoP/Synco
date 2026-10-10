@@ -7,7 +7,7 @@
 
 use crate::ops::{Fill, Geometry};
 use crate::px::{corner_avg, sample, Pad};
-use stitch_core::{par::par_chunks_mut, Alpha, Rgba};
+use px_core::{par::par_chunks_mut, Alpha, Rgba};
 
 /// 按 `Geometry` 走一遍：翻转 → 旋转（90° 步进无损，余下小角度双线性）→ 裁切
 pub fn apply(img: &Rgba, g: &Geometry) -> Rgba {
@@ -200,7 +200,7 @@ fn band_rows(h: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stitch_core::Rgba;
+    use px_core::Rgba;
 
     /// 非对称测试图：每个像素的 R 通道编码它的 x，G 编码 y，一眼能看出映射对不对
     fn grid(w: usize, h: usize) -> Rgba {

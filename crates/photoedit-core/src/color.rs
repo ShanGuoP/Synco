@@ -6,7 +6,7 @@
 
 use crate::ops::Color;
 use crate::px::{luma, q8, srgb_to_linear, linear_to_srgb, Plane};
-use stitch_core::{par::par_chunks_mut, Rgba};
+use px_core::{par::par_chunks_mut, Rgba};
 
 /// 曝光满档 = 1.5 EV
 pub const EXPOSURE_EV: f32 = 1.5;
@@ -273,7 +273,7 @@ pub fn preset(name: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stitch_core::Rgba;
+    use px_core::Rgba;
 
     fn flat(r: u8, g: u8, b: u8, w: usize, h: usize) -> Rgba {
         let mut img = Rgba::new(w, h);

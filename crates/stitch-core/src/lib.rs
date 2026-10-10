@@ -1,13 +1,15 @@
 //! 缝合内核的公共出口。取值条件（阈值、夹逼区间、闭开区间）由各模块的回归测试钉住，
 //! 改任何一段先看对应 tests 里的断言。
+//!
+//! 缓冲、行带并行与重采样住在 `px-core`（`photoedit-core` 也用那一层）；这里只 re-export，
+//! 让 `stitch_core::Rgba` 这类老写法继续有效——两边必须是同一个类型，跨层的图与蒙版才传得动。
 
-pub mod buffer;
+pub use px_core::{buffer, par, resize};
+
 pub mod color;
 pub mod geom;
 pub mod mask;
-pub mod par;
 pub mod pyramid;
-pub mod resize;
 pub mod stitch;
 
 pub use buffer::{Alpha, Box2, Rgba};

@@ -4,7 +4,15 @@
 import { dx, t } from './i18n.js';
 
 export class ApiError extends Error {
-  constructor(msg, status) { super(msg); this.name = 'ApiError'; this.status = status || 0; }
+  /** `code` 是服务端那把钥匙，`args` 是它的参数。分支要认这两样，别认 `message`——
+   *  message 是按界面语言拼出来的译文，改措辞或换语言都会把控制流带走。 */
+  constructor(msg, status, code = '', args = null) {
+    super(msg);
+    this.name = 'ApiError';
+    this.status = status || 0;
+    this.code = code;
+    this.args = args;
+  }
 }
 
 /** 服务端错误里有两样东西：`code` 是语言包里的钥匙，`error` 是拼出来的中文兜底。
@@ -27,7 +35,7 @@ async function request(path, { method = 'GET', body, signal } = {}) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-  if (!res.ok) throw new ApiError(errText(data, res.status), res.status);
+  if (!res.ok) throw new ApiError(errText(data, res.status), res.status, data?.code || '', data?.args ?? null);
   return data;
 }
 

@@ -3,8 +3,7 @@
 use super::common::{bad, bad_args, body_of, ok};
 use crate::service::workflow as cfg;
 use crate::error::{AppError, Result};
-use crate::repo;
-use crate::repo::{results as rres, settings as rset};
+use crate::repo::{images as rimg, results as rres, settings as rset};
 use crate::service::backend;
 use crate::state::Shared;
 use crate::util;
@@ -194,8 +193,7 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
         }
         let final_src = final_src.unwrap();
         let iid = r.get("image_id").and_then(|v| v.as_i64()).unwrap_or(0);
-        let src = repo::one(&ctx, "SELECT name FROM images WHERE id=?", &[repo::i(iid)])?;
-        let name = src.as_ref().and_then(|s| s.get("name").and_then(|v| v.as_str())).unwrap_or("photo").to_string();
+        let name = rimg::name_and_size(&ctx, iid)?.map(|(n, _, _)| n).unwrap_or_else(|| "photo".to_string());
         let stem: String = {
             let cleaned: String = util::stem_of(&name)
                 .chars()

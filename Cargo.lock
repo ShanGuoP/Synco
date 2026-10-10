@@ -3285,9 +3285,9 @@ name = "photoedit-core"
 version = "0.3.1"
 dependencies = [
  "moving-least-squares",
+ "px-core",
  "serde",
  "serde_json",
- "stitch-core",
 ]
 
 [[package]]
@@ -3523,6 +3523,13 @@ name = "pulp-wasm-simd-flag"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
+
+[[package]]
+name = "px-core"
+version = "0.3.1"
+dependencies = [
+ "fast_image_resize",
+]
 
 [[package]]
 name = "pxfm"
@@ -4591,6 +4598,7 @@ version = "0.3.1"
 dependencies = [
  "fast_image_resize",
  "imageproc",
+ "px-core",
 ]
 
 [[package]]

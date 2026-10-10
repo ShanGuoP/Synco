@@ -23,6 +23,7 @@ import { createFilmstrip } from '../../views/editor/filmstrip.js';
 import { createCompare } from './compare.js';
 import { fmtFile, fmtDims } from '../../core/format.js';
 import { beforeSwitch, dx, t } from '../../core/i18n.js';
+import { hold } from '../../core/guard.js';
 
 let ctx = null;   // 当前编辑器上下文（只建一次，切图复用）
 let rerunFrom = null;       // 下一次提交是「哪条结果的重跑」
@@ -814,8 +815,10 @@ async function onJobSettled(r) {
   if (r.status !== 'done') { ctx.params.line(r.error ? dx(r.error, r.error_args).slice(0, 120) : t('ed.genFailNote'), true); return; }
   ctx.params.stages.finish(true);
   ctx.params.line(t('ed.doneDrag'));
+  const same = hold(() => ctx.imgId);
   try {
     const info = await api.image(ctx.imgId);
+    if (!same()) return;   // 这一阵里切了图：别把上一张的结果画到当前这张上
     ctx.info = info;
     ctx.history.setResults(info.results, info.last?.id);
     if (info.last?.status === 'done') showCompare(info.last);
@@ -901,7 +904,7 @@ async function exportCurrent() {
   } catch (e) {
     busy.close();
     const m = String(e.message || e);
-    if (/导出目录/.test(m)) {
+    if (e.code === 'srv.settings.exportUnset') {
       toastErr(t('ed.exportUnset'), t('ed.exportUnsetBody'));
       settingsModal('export');
     } else toastErr(t('ed.exportFail'), m);

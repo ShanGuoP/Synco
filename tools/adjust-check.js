@@ -144,6 +144,11 @@ async function main() {
     const g0 = await req(base, 'GET', `/api/images/${imgId}/adjust`);
     ok('GET adjust 回全默认', g0.status === 200 && g0.body.ops?.color?.exposure === 0 && g0.body.ops?.v === 1, JSON.stringify(g0.body).slice(0, 200));
     ok('面板数据带预设与 LUT 名单', Array.isArray(g0.body.presets) && g0.body.presets.length >= 8 && Array.isArray(g0.body.luts), JSON.stringify(g0.body.presets || []).slice(0, 80));
+    // 摆滑杆的数值必须由后端下发：前端曾经自己抄一份 PRESET_VALUES，两份一漂就是"界面摆在 A、出图是 B"
+    const ps0 = g0.body.presets || [];
+    ok('每条预设都带滑杆数值', ps0.every(p => p.color && typeof p.color.exposure === 'number'), JSON.stringify(ps0[0] || {}).slice(0, 120));
+    const mono0 = ps0.find(p => p.id === 'mono') || {};
+    ok('下发值与 color::preset 同一张表', mono0.color && mono0.color.saturation === -100 && mono0.color.contrast === 40, JSON.stringify(mono0.color || {}));
 
     /* ---- 2. POST adjust：越界要夹逼并记账 ---- */
     const s1 = await req(base, 'POST', `/api/images/${imgId}/adjust`, { ops: { color: { exposure: 900, contrast: -30 }, beauty: { smooth: 45, by_mask: false } } });

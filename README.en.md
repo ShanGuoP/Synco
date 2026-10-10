@@ -276,7 +276,7 @@ cargo test --workspace       # stitching core and service regressions
 node tools/api-check.js      # endpoint sweep + path-traversal regression; spins up its own isolated instance
 node tools/cloud-e2e.js      # cloud path end to end against a fake cloud; spends none of your quota
 node tools/comfy-e2e.js      # local path against a fake ComfyUI: workflow takeover and role mapping
-node tools/lint-layers.js    # seven layering rules, incl. "files that hand copy to the dictionary may not hardcode it"
+node tools/lint-layers.js    # eight layering rules, incl. "files that hand copy to the dictionary may not hardcode it"
 node tools/i18n-check.js     # zh/en key parity and how much interface text is still untranslated
 ```
 

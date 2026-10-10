@@ -69,14 +69,14 @@ pub async fn project_rename(State(ctx): State<Shared>, APath(id): APath<String>,
     }
     let name = util::clip(raw_name, 60);
     if rproj::rename(&ctx, pid, &name)? == 0 {
-        return Ok(err(404, "no project"));
+        return Ok(err(404, "srv.common.noProject"));
     }
     Ok(ok(serde_json::json!({ "ok": true, "name": name })))
 }
 
 pub async fn project_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let pid = path_id(&id)?;
-    let Some(proj) = rproj::by_id(&ctx, pid)? else { return Ok(err(404, "no project")) };
+    let Some(proj) = rproj::by_id(&ctx, pid)? else { return Ok(err(404, "srv.common.noProject")) };
     let out: Vec<Value> = rimg::list_for_project_rows(&ctx, pid)?
         .iter()
         .map(|row| dto::image_row_json(&ctx, row))
@@ -98,7 +98,7 @@ pub async fn project_delete(State(ctx): State<Shared>, APath(id): APath<String>)
             rels.push(m);
         }
     }
-    rels.extend(rres::list_paths(&ctx, "project_id=?", repo::i(pid))?);
+    rels.extend(rres::paths_for_project(&ctx, pid)?);
     // 三张调整附属表靠子查询找归属，必须赶在 images 行没之前清
     repo::adjust::clear_project(&ctx, pid)?;
     rimg::delete_for_project(&ctx, pid)?;
@@ -136,7 +136,7 @@ pub async fn images_add(State(ctx): State<Shared>, APath(id): APath<String>, raw
 }
 
 pub async fn project_settings_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
-    let Some(row) = rproj::by_id(&ctx, path_id(&id)?)? else { return Ok(err(404, "no project")) };
+    let Some(row) = rproj::by_id(&ctx, path_id(&id)?)? else { return Ok(err(404, "srv.common.noProject")) };
     let raw = row.get("settings_json").and_then(|v| v.as_str()).unwrap_or("{}");
     let parsed = serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::Object(Map::new()));
     Ok(ok(parsed))
@@ -146,7 +146,7 @@ pub async fn project_settings_set(State(ctx): State<Shared>, APath(id): APath<St
     let body = body_of(raw).await?;
     let pid = path_id(&id)?;
     if rproj::set_settings(&ctx, pid, &body.to_string())? == 0 {
-        return Ok(err(404, "no project"));
+        return Ok(err(404, "srv.common.noProject"));
     }
     Ok(ok(serde_json::json!({ "ok": true })))
 }

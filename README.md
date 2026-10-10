@@ -261,7 +261,7 @@ cargo test --workspace       # 缝合内核与服务的回归
 node tools/api-check.js      # 接口扫查 + 路径穿越回归，自己起隔离实例，不碰你的数据
 node tools/cloud-e2e.js      # 云端链路端到端，用假云端，不消耗你的额度
 node tools/comfy-e2e.js      # 本机那条：用假 ComfyUI 验工作流接管与角色映射
-node tools/lint-layers.js    # 分层纪律七条，含"已交钥匙的文件不许再写中文文案"
+node tools/lint-layers.js    # 分层纪律八条，含"已交钥匙的文件不许再写中文文案"
 node tools/i18n-check.js     # 中英键位对齐、还剩多少界面文案没进语言包
 ```
 

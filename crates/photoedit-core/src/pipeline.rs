@@ -13,7 +13,7 @@ use crate::geometry;
 use crate::lut;
 use crate::ops::EditOps;
 use crate::warp::{self, FaceShape};
-use stitch_core::{Alpha, Rgba};
+use px_core::{Alpha, Rgba};
 
 /// 链的可选输入。都是引用：内核不认领内存，也不去磁盘找东西。
 #[derive(Default)]
@@ -50,7 +50,7 @@ pub fn apply_chain(img: &Rgba, ops: &EditOps, chain: &Chain) -> Rgba {
 mod tests {
     use super::*;
     use crate::ops::{self, Color, Geometry, Slider, Stroke};
-    use stitch_core::Rgba;
+    use px_core::Rgba;
 
     fn ramp(w: usize, h: usize) -> Rgba {
         let mut img = Rgba::new(w, h);
@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn 恒等参数逐位直出() {
         let img = ramp(64, 33);
-        let (ops, _) = EditOps::parse(ops::DEFAULT_JSON).unwrap();
+        let (ops, _) = EditOps::parse(ops::default_json()).unwrap();
         assert_eq!(apply_chain(&img, &ops, &Chain::default()), img);
         // 一条空笔画也不该触发变形段
         let mut o = ops.clone();
@@ -167,12 +167,12 @@ mod tests {
         // 它们的档位一致性由各自的算子测试与真实预览路径负责。
         o.color = Color { contrast: Slider(-20), saturation: Slider(40), ..Default::default() };
         let big = gradient(320, 200);
-        let small = stitch_core::resize_rgba(&big, 80, 50);
+        let small = px_core::resize_rgba(&big, 80, 50);
         let a = apply_chain(&small, &o, &Chain::default());
         let b = apply_chain(&big, &o, &Chain::default());
         // 裁切之后两侧画幅不同档，先把大的缩到小的那个尺寸再比
         assert_eq!((b.w, b.h), (a.w * 4, a.h * 4), "裁切框在两档上没按同一比例落位：{}×{} vs {}×{}", b.w, b.h, a.w, a.h);
-        let b_small = stitch_core::resize_rgba(&b, a.w, a.h);
+        let b_small = px_core::resize_rgba(&b, a.w, a.h);
         let mut diff = 0f64;
         for i in 0..a.w * a.h {
             for c in 0..3 {

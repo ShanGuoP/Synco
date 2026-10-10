@@ -222,8 +222,14 @@ impl Default for EditOps {
     }
 }
 
-/// 库里存的 JSON 与全默认之间的判据：管线与"AI 重绘输入域"都靠它决定要不要动手
-pub const DEFAULT_JSON: &str = r#"{"v":1,"geometry":{"crop":null,"rotate_deg":0.0,"flip_h":false,"flip_v":false,"fill":"edge"},"warp":{"strokes":[],"auto":{"face_slim":0,"eye_big":0,"nose_slim":0,"chin":0}},"color":{"exposure":0,"contrast":0,"highlights":0,"shadows":0,"temp":0,"tint":0,"saturation":0,"vibrance":0,"clarity":0,"sharpen":0,"preset":null},"beauty":{"smooth":0,"brighten":0,"sharpen":0,"by_mask":false},"lut":null}"#;
+/// 全默认那一份 JSON 现算，不再手写。手写这份漂过一次：0.3 给美颜加了四个滑杆（texture / blemish /
+/// even_tone / de_shine），常量里的 `beauty` 段还停在三个。它被 `to_json()` 当序列化失败的兜底，
+/// 也当测试里"这就是默认值"的输入——所以由 `EditOps::default()` 算出来，加字段不需要再改第二处。
+static DEFAULT_JSON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn default_json() -> &'static str {
+    DEFAULT_JSON.get_or_init(|| serde_json::to_string(&EditOps::default()).unwrap_or_else(|_| "{}".into()))
+}
 
 impl EditOps {
     /// 解析 + 夹逼。返回 `(参数, 被夹过的字段名)`；结构不对直接报字符串。
@@ -237,7 +243,7 @@ impl EditOps {
 
     /// 落库用的紧凑 JSON（字段序固定，判新与 ETag 都依赖它稳定）
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| DEFAULT_JSON.to_string())
+        serde_json::to_string(self).unwrap_or_else(|_| default_json().to_string())
     }
 
     pub fn is_identity(&self) -> bool {
@@ -442,7 +448,7 @@ mod tests {
 
     #[test]
     fn 默认参数就是恒等() {
-        let (ops, rep) = EditOps::parse(DEFAULT_JSON).unwrap();
+        let (ops, rep) = EditOps::parse(default_json()).unwrap();
         assert!(rep.is_empty(), "默认参数不该被夹：{rep:?}");
         assert!(ops.is_identity());
     }
@@ -495,7 +501,7 @@ mod tests {
 
     #[test]
     fn 往返稳定() {
-        let (ops, _) = EditOps::parse(DEFAULT_JSON).unwrap();
+        let (ops, _) = EditOps::parse(default_json()).unwrap();
         assert_eq!(ops.to_json(), EditOps::default().to_json());
         let raw = r#"{"v":1,"geometry":{"crop":[0.1,0.2,0.3,0.4],"rotate_deg":0.0,"flip_h":true,"flip_v":false,"fill":"avg"},"warp":{"strokes":[],"auto":{"face_slim":0,"eye_big":0,"nose_slim":0,"chin":0}},"color":{"exposure":0,"contrast":0,"highlights":0,"shadows":0,"temp":0,"tint":0,"saturation":0,"vibrance":0,"clarity":0,"sharpen":0,"preset":null},"beauty":{"smooth":0,"brighten":0,"sharpen":0,"by_mask":false},"lut":null}"#;
         let (a, _) = EditOps::parse(raw).unwrap();

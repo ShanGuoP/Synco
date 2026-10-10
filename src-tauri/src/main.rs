@@ -180,13 +180,9 @@ fn abs_path(s: &str) -> Option<PathBuf> {
 
 impl Shell {
     fn info(&self, ctx: &synco_server::state::Shared) -> DirInfo {
-        // 两条计数各取一次连接就撒手：这把守卫不能在 dir_bytes 遍历整棵 data/ 期间还握着——
-        // SQLite 连接全局只有一个，几十 GB 瓦片走一遍的工夫里，所有走库的 HTTP handler（含队列轮询）都在排队
-        let (projects, images) = {
-            let db = ctx.db();
-            let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
-            (count("SELECT count(*) FROM projects"), count("SELECT count(*) FROM images"))
-        };
+        // 两条计数在 DAO 里各取一次连接就撒手：这把守卫不能在 dir_bytes 遍历整棵 data/ 期间还握着——
+        // 连接全局只有一个，几十 GB 瓦片走一遍的工夫里，所有走库的 HTTP handler（含队列轮询）都在排队
+        let (projects, images) = synco_server::repo::db::library_counts(ctx);
         DirInfo {
             path: self.data.to_string_lossy().replace('\\', "/"),
             source: self.source,
@@ -233,7 +229,7 @@ fn copy_data_to(to: String, state: State<'_, Shell>, ctx: State<'_, synco_server
         return Err(only("srv.shell.targetHasLibrary"));
     }
     // 复制前把 WAL 合回主文件，否则拷过去的是半个库 + 一份没人认领的 -wal
-    let _ = ctx.db().execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
+    synco_server::repo::db::checkpoint_truncate(ctx.inner());
     fs::create_dir_all(&dst).map_err(|e| why("srv.shell.mkdirFail", serde_json::json!({ "msg": e.to_string() })))?;
     let (files, bytes) = copy_tree(&state.data, &dst)?;
     remember_data(&dst)?;

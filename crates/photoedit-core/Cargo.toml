@@ -9,4 +9,4 @@ rust-version.workspace = true
 moving-least-squares = "0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
-stitch-core = { path = "../stitch-core" }
+px-core = { path = "../px-core" }

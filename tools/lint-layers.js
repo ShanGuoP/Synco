@@ -63,6 +63,18 @@ const RULES = [
     bans: [['rusqlite', /\brusqlite\b/]],
   },
   {
+    // 通用执行器与取锁已经收成 pub(in crate::repo) / pub(crate)，编译期拦住大半；
+    // 这一条补上正则还拦得住的那半：直接握连接、把 SQL 文本或 where 片段递出 DAO。
+    id: 'R8', title: 'SQL 只写在 repo（api/ 与 service/ 禁取连接、通用执行器与 SQL 文本）',
+    files: () => ['api', 'service'].flatMap(d => walk(path.join(ROOT, 'crates', 'server', 'src', d)).filter(f => f.endsWith('.rs'))),
+    bans: [
+      ['连接句柄 ctx.db()', /\.db\s*\(\s*\)/],
+      ['repo 通用执行器', /\brepo::(one|all|all_on|run|insert_id)\s*\(/],
+      ['SQL 文本', /"(SELECT|UPDATE|INSERT|DELETE|PRAGMA|WITH)\s/],
+      ['where 片段', /"[A-Za-z_]+=[?]"/],
+    ],
+  },
+  {
     id: 'R2', title: 'repo 不碰 HTTP（repo/*.rs 禁 axum / reqwest）',
     files: () => walk(path.join(ROOT, 'crates', 'server', 'src', 'repo')).filter(f => f.endsWith('.rs')),
     bans: [['axum', /\baxum\b/], ['reqwest', /\breqwest\b/]],

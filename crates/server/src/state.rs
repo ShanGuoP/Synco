@@ -4,6 +4,7 @@
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -36,6 +37,16 @@ pub struct Ctx {
     /// 两轮会各自下载一套文件，先落的那套没人认领
     pub downloading: Mutex<HashSet<i64>>,
     pub cfg: Mutex<Option<crate::service::workflow::Cache>>,
+    /// 云端并发闸：许可数每轮由 `queue::sync_gate` 对齐成「设置里的并发 − 在飞数」，
+    /// 起点是 0——没泵之前谁也别想发出去
+    pub gate: Arc<tokio::sync::Semaphore>,
+    /// 已经发出去的坑位数，也就是本进程在飞的云端任务数
+    pub live: Arc<AtomicUsize>,
+    /// 把「读在飞 → 读可得 → 补/削」三步串起来的那把小锁：这三步本身没有原子性
+    pub gate_sync: Mutex<()>,
+    /// 同时最多两份派生档在加工：一次全分辨率解码就是 100MB 级，让阻塞池随便铺开会把内存压穿，
+    /// 比慢几秒严重得多
+    pub slots: Arc<tokio::sync::Semaphore>,
     pub http: reqwest::Client,
 }
 
@@ -54,6 +65,10 @@ impl Ctx {
             jobs: Mutex::new(HashMap::new()),
             downloading: Mutex::new(HashSet::new()),
             cfg: Mutex::new(None),
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            live: Arc::new(AtomicUsize::new(0)),
+            gate_sync: Mutex::new(()),
+            slots: Arc::new(tokio::sync::Semaphore::const_new(2)),
         })
     }
 
@@ -62,25 +77,20 @@ impl Ctx {
     ///
     /// ⚠️ 这把锁不可重入：`repo::run(ctx, sql, &[repo::s(&util::now_localtime(&ctx.db()))])`
     /// 这种"参数里再取一次锁"的写法会当场死锁（对拍第一轮就被这条卡住），要先把值取成局部变量。
-    pub fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
+    ///
+    /// 收不到 `pub(in crate::repo)`——可见性只能往祖先收，不能限给兄弟模块，所以只能到 `pub(crate)`：
+    /// 壳层（`src-tauri`）已经摸不到连接，crate 内"绕过执行器直接握锁"由 R1 盯着。
+    /// 编译期真正拦住的是另一头：`repo::one/all/run/insert_id` 与 SQL 值构造器都是
+    /// `pub(in crate::repo)`，出了 DAO 拼不出一条能跑的 SQL。
+    pub(crate) fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// 把一行判死并写下原因。**存的是钥匙 + 参数**，不是某一语言的句子：
-    /// 库里的东西要能跟着界面语言走，老库里的整句中文也照样读得出来（查不到钥匙就原样显示）。
+    /// 把一行判死并写下原因。这里只管两件自己的事：清掉这行的"读不到文件"计数，
+    /// 落库那半交给 `repo::results::mark_failed`（句子与参数怎么进库，DAO 的事）。
     pub fn mark_error(&self, id: i64, code: &str, args: serde_json::Value) {
         self.misses.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-        let truncated: String = code.chars().take(400).collect();
-        // 没参数就存 NULL，别存一个 "{}" 让读侧去猜
-        let args = match args {
-            serde_json::Value::Object(m) if !m.is_empty() => Some(serde_json::Value::Object(m).to_string()),
-            _ => None,
-        };
-        // 只推进还在排/还在跑的行：已经 done 的那张不该被一次迟到的判死改成 error
-        let _ = self
-            .db()
-            .prepare_cached("UPDATE results SET status=?, error=?, error_args=? WHERE id=? AND status IN ('running','queued')")
-            .and_then(|mut st| st.execute(("error", truncated.as_str(), args.as_deref(), id)));
+        crate::repo::results::mark_failed(self, id, code, args);
     }
 
     /// 用另一把错误的钥匙与参数判死这一行：嵌套失败（快照没写成，这一版就没有）原样传钥匙，不包句子。

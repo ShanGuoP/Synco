@@ -4,9 +4,9 @@
 //! 关键是"取 max"而不是"二值化后再膨胀"——抗锯齿边和半擦除残留的半透明值要原样往外传播，
 //! 抬成全墨会让外扩比名义半径多吃一圈，贴回权重跟着偏。
 
-use crate::buffer::{Alpha, Box2};
-use crate::par::par_chunks_mut;
-use crate::resize::to_u8;
+use px_core::buffer::{Alpha, Box2};
+use px_core::par::par_chunks_mut;
+use px_core::resize::to_u8;
 use imageproc::distance_transform::Norm;
 use imageproc::image::GrayImage;
 use imageproc::morphology::dilate as ip_dilate;

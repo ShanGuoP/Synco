@@ -1,9 +1,9 @@
 //! 色彩统计校正：把重绘区的均值/方差贴回原图，接缝才不会一眼看出是补的。
 //! 只在"外扩带"（模型该原样画回来、但用户没涂）上统计，逐通道对齐 mean/σ。
 
-use crate::buffer::{Alpha, Rgba};
-use crate::par::{par_chunks_mut, par_reduce};
-use crate::resize::to_u8;
+use px_core::buffer::{Alpha, Rgba};
+use px_core::par::{par_chunks_mut, par_reduce};
+use px_core::resize::to_u8;
 
 #[derive(Default, Clone, Copy)]
 struct Acc {

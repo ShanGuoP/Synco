@@ -6,7 +6,7 @@
 
 use crate::ops::Beauty;
 use crate::px::{luma, q8_flat, q8, to_ycbcr, Plane};
-use stitch_core::{par::par_chunks_mut, Alpha, Rgba};
+use px_core::{par::par_chunks_mut, Alpha, Rgba};
 
 /// 双边滤波的邻域半径随强度从 2 走到 8
 pub const BILATERAL_MIN_R: usize = 2;
@@ -133,13 +133,13 @@ fn smooth_luma(img: &Rgba, y: &mut [f32], msk: &Option<Vec<f32>>, strength: f32,
     } else {
         (w, h)
     };
-    let small = stitch_core::resize_alpha(&plane, sw, sh);
+    let small = px_core::resize_alpha(&plane, sw, sh);
     let radius = BILATERAL_MIN_R + ((BILATERAL_MAX_R - BILATERAL_MIN_R) as f32 * strength).round() as usize;
     let spatial = radius as f32 * 0.6;
     let range = 8.0 + 40.0 * strength;
     let smoothed = bilateral(&small.v, sw, sh, radius, spatial, range);
     // 升回原尺寸后与本地亮度做差，差值就是"被抹掉的高频"
-    let up = stitch_core::resize_alpha(&Alpha::from_vec(sw, sh, smoothed), w, h);
+    let up = px_core::resize_alpha(&Alpha::from_vec(sw, sh, smoothed), w, h);
     let base = DETAIL_KEEP + (TEXTURE_MAX - DETAIL_KEEP) * texture;
     let keep = base + (1.0 - base) * (1.0 - strength);
     for i in 0..w * h {
@@ -346,7 +346,7 @@ pub fn box_blur_u8(src: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::ops::{Beauty, Slider};
-    use stitch_core::Alpha;
+    use px_core::Alpha;
 
     /// 合成"皮肤块"：底色 180 上加确定性噪声，再叠一条硬边缘当下颌线
     fn skin(w: usize, h: usize) -> Rgba {

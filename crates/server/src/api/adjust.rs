@@ -40,7 +40,7 @@ async fn photo_of(ctx: &Shared, id: i64) -> Result<Option<Image>> {
 /// 读参数（含预设表与盘上 LUT 名单）。无记录回全默认——前端滑杆要有个起点。
 pub async fn adjust_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "no image")) };
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let data = adjust::panel(&ctx, img.id)?;
     // 关键点没检出过时明确说 false，面板据此把一键塑形那排滑杆灰掉，
     // 而不是让用户拖一根"看着动了其实没用"的杆
@@ -60,7 +60,7 @@ pub async fn adjust_get(State(ctx): State<Shared>, APath(id): APath<String>) -> 
 pub async fn adjust_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
     let iid = path_id(&id)?;
-    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "no image")) };
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let payload = ops_of_body(&body).to_string();
     let long_edge = img.w.max(img.h).max(1) as usize;
     let ctx2 = ctx.clone();
@@ -84,7 +84,7 @@ pub async fn adjust_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
 pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
     let iid = path_id(&id)?;
-    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "no image")) };
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     // 带 ops 就按这一次的参数渲（滑杆还没落库也能先看），不带就读库里那份
     let inline = body.get("ops").filter(|v| v.is_object()).map(|v| v.to_string());
     let ctx2 = ctx.clone();
@@ -114,7 +114,7 @@ pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, r
 /// 成图：原分辨率落 `_adjusted<指纹>.jpg`（immutable）。同步返回，实测超 3 秒再考虑挪进任务队列。
 pub async fn render_post(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "no image")) };
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let ctx2 = ctx.clone();
     let out = util::blocking(move || -> Result<Value> {
         let ops = adjust::load_ops(&ctx2, img.id);
@@ -140,7 +140,7 @@ pub async fn render_post(State(ctx): State<Shared>, APath(id): APath<String>) ->
 /// 另存为新图：先落成图，再复制一份注册成新的图片行（起始参数为空），并补它自己的派生档。
 pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "no image")) };
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let ctx2 = ctx.clone();
     let out = util::blocking(move || -> Result<Value> {
         let ops = adjust::load_ops(&ctx2, img.id);
@@ -173,9 +173,10 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
 /// 参数还是空的就直接回源图那一套，前端不必自己分辨屏幕上摆的是哪一张。
 pub async fn tiles_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "no image")) };
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     // 与源图瓦片同一对限流槽、同一条阻塞池：一次请求是一整幅解码 + 每层重采样 + 上百张编码
-    let out = imagesvc::pyramid_async(move || {
+    let slot = ctx.clone();
+    let out = imagesvc::pyramid_async(&slot, move || {
         let ops = adjust::load_ops(&ctx, img.id);
         if ops.is_identity() {
             return imagesvc::tiles(&ctx, &img);

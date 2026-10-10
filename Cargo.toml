@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/stitch-core", "crates/photoedit-core", "crates/server", "src-tauri"]
+members = ["crates/px-core", "crates/stitch-core", "crates/photoedit-core", "crates/server", "src-tauri"]
 
 [workspace.package]
 version = "0.3.1"

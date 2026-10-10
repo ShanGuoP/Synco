@@ -144,16 +144,12 @@ pub fn derive(ctx: &Ctx, img: &Image) -> Result<bool> {
 /// 存量补空当：一次最多补这么多张，免得打开一个 500 张的项目就把 CPU 占满
 const BACKFILL_BATCH: i64 = 400;
 
-/// 同时最多两份派生档在加工：一次全分辨率解码就是 100MB 级，
-/// 让阻塞池随便铺开会把内存压穿，比慢几秒严重得多。
-static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
-
 /// 后台补一张图的派生档：导入和"首次读到这张图"都走这条，接口不等着它
 pub fn spawn_derive(ctx: &Shared, img: Image) {
     let ctx = ctx.clone();
     let rel = img.orig_path.clone();
     tokio::spawn(async move {
-        let Ok(_slot) = SLOTS.acquire().await else { return };
+        let Ok(_slot) = ctx.slots.clone().acquire_owned().await else { return };
         // derive 里是一次全分辨率解码加两档重编码，秒级 CPU：留在当前 worker 上等于
         // 把一整条连接按住（桌面壳与服务同进程，窗口会跟着卡），所以要过一道阻塞池
         let ran = util::blocking(move || derive(&ctx, &img)).await;
@@ -271,14 +267,15 @@ pub fn pyramid(
 /// 已经被别人切完的那次就直接读清单回来。
 pub async fn tiles_async(ctx: &Shared, img: Image) -> Result<serde_json::Value> {
     let ctx2 = ctx.clone();
-    pyramid_async(move || tiles(&ctx2, &img)).await
+    pyramid_async(ctx, move || tiles(&ctx2, &img)).await
 }
 
 /// 切一套瓦片的公共入口：源图与「本地调整」的成图共用这一对限流槽，
 /// 因为两者的开销是同一件事——一整幅解码 + 每层重采样 + 上百张编码。
 /// `work` 由调用方决定切哪张图（调整那条要先读库里的参数）。
-pub async fn pyramid_async(work: impl FnOnce() -> Result<serde_json::Value> + Send + 'static) -> Result<serde_json::Value> {
-    let Ok(_slot) = SLOTS.acquire().await else { return Err(AppError::fail("srv.tile.slotClosed")) };
+/// 槽位在 `Ctx::slots` 上而不是模块级 static：单测各造各的 Ctx，量出来的耗时才不被别人抢槽污染。
+pub async fn pyramid_async(ctx: &Shared, work: impl FnOnce() -> Result<serde_json::Value> + Send + 'static) -> Result<serde_json::Value> {
+    let Ok(_slot) = ctx.slots.clone().acquire_owned().await else { return Err(AppError::fail("srv.tile.slotClosed")) };
     // 崩了的那次拿不到返回值，只能报"线程没了"，细节是 JoinError 那句原文
     tokio::task::spawn_blocking(work).await.map_err(|e| AppError::fail_detail("srv.tile.threadPanic", e))?
 }

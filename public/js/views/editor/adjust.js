@@ -10,6 +10,7 @@ import { toastErr, toastOk } from '../../ui/toast.js';
 import { confirm } from '../../ui/modal.js';
 import { icon } from '../../core/icons.js';
 import { dx, t } from '../../core/i18n.js';
+import { hold } from '../../core/guard.js';
 
 /** 与后端 photoedit-core 的 EditOps 同形：缺的字段服务端按默认补，多余字段会被拒 */
 const blankOps = () => ({
@@ -44,20 +45,6 @@ const BEAUTY_KEYS = [
   ['sharpen', 'ad.sharpen', 'ad.beautySharpenTip'],
 ];
 const BRUSHES = [['push', 'ad.push', 'ad.pushTip'], ['pucker', 'ad.pucker', 'ad.puckerTip'], ['bloat', 'ad.bloat', 'ad.bloatTip'], ['restore', 'ad.restore', 'ad.restoreTip']];
-
-/** 预设就是一组滑杆值，和后端 color::preset 同一份表（改这里要同步改那边） */
-const PRESET_VALUES = {
-  clean: { exposure: 6, contrast: 10, vibrance: 12, clarity: 6, sharpen: 14 },
-  warm: { exposure: 8, highlights: -12, shadows: 14, temp: 34, vibrance: 10 },
-  film: { contrast: 22, highlights: -18, shadows: 20, temp: 12, saturation: -14, clarity: 10 },
-  mono: { contrast: 40, saturation: -100, clarity: 24, sharpen: 20 },
-  cool: { exposure: 4, temp: -32, tint: -6, vibrance: 8 },
-  soft: { exposure: 10, contrast: -12, highlights: -10, shadows: 18, temp: 10, saturation: -10, clarity: -14 },
-  crisp: { contrast: 26, shadows: -10, clarity: 30, sharpen: 26, vibrance: 14 },
-  teal: { contrast: 18, shadows: 12, temp: -22, tint: 10, saturation: 12 },
-  faded: { exposure: 8, contrast: -28, shadows: 26, saturation: -22 },
-  night: { exposure: -14, contrast: 20, shadows: -16, temp: -26, tint: -10, clarity: 18 },
-};
 
 /** 滑杆拖动时每帧一次全图重算付不起 */
 const PREVIEW_MS = 150;
@@ -289,10 +276,9 @@ export function createAdjust(deps) {
     dirty = true;
     commit();
   }
-  function pickPreset(id) {
-    const d = PRESET_VALUES[id] || {};
-    ops.color = { exposure: 0, contrast: 0, highlights: 0, shadows: 0, temp: 0, tint: 0, saturation: 0, vibrance: 0, clarity: 0, sharpen: 0, preset: id || null };
-    for (const k of Object.keys(d)) ops.color[k] = d[k];
+  /** 预设的滑杆值随面板数据一起下来（`p.color`），这里不再存一份表 */
+  function pickPreset(p) {
+    ops.color = { ...blankOps().color, ...(p?.color || {}), preset: p?.id || null };
     paintPaints();
     touch();
   }
@@ -432,7 +418,8 @@ export function createAdjust(deps) {
       paintWarpBtn();
       // 框要画在"其它都算完、只有没裁"的那一张上，坐标系才和用户看到的画面一致
       const uncropped = { ...ops, geometry: { ...ops.geometry, crop: null } };
-      api.adjustPreviewWith(idOf(), uncropped).then(p => { if (mode === 'crop') applyPreview(p, true); }).catch(e => line(t('ad.cropBaseFail', { msg: short(e) })));
+      const same = hold(idOf);
+      api.adjustPreviewWith(idOf(), uncropped).then(p => { if (mode === 'crop' && same()) applyPreview(p, true); }).catch(e => line(t('ad.cropBaseFail', { msg: short(e) })));
       line(t('ad.cropHint'));
     } else if (m === 'warp') {
       mode = 'warp';
@@ -745,7 +732,6 @@ export function createAdjust(deps) {
     paintPaints();
     paintGeo();
     setBrush(tool);
-    buildPresets();
     try {
       const r = await api.adjust(info.id);
       if (idOf() !== info.id) return;
@@ -778,9 +764,8 @@ export function createAdjust(deps) {
   }
 
   function buildPresets(list) {
-    const items = list && list.length ? list : Object.entries(PRESET_VALUES).map(([id]) => ({ id, name: PRESET_NAMES[id] ? t(PRESET_NAMES[id]) : id }));
     fill(presetChips, el('button.chip-s', { type: 'button', text: t('ad.noPreset'), dataset: { p: '' }, onclick: () => pickPreset(null) }),
-      ...items.map(p => el('button.chip-s', { type: 'button', text: dx(p.name), dataset: { p: p.id }, 'data-tip': t('ad.presetTip', { id: p.id }), onclick: () => pickPreset(p.id) })));
+      ...(list || []).map(p => el('button.chip-s', { type: 'button', text: dx(p.name), dataset: { p: p.id }, 'data-tip': t('ad.presetTip', { id: p.id }), onclick: () => pickPreset(p) })));
     paintPreset();
   }
   function buildLuts(names) {
@@ -815,5 +800,3 @@ export function createAdjust(deps) {
     if (dirty) await commit();
   }
 }
-
-const PRESET_NAMES = { clean: 'ad.pnClean', warm: 'ad.pnWarm', film: 'ad.pnFilm', mono: 'ad.pnMono', cool: 'ad.pnCool', soft: 'ad.pnSoft', crisp: 'ad.pnCrisp', teal: 'ad.pnTeal', faded: 'ad.pnFaded', night: 'ad.pnNight' };

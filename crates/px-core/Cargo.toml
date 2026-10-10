@@ -1,0 +1,9 @@
+[package]
+name = "px-core"
+description = "像素层底座：RGBA 与单通道缓冲、行带并行、重采样与取整口径——stitch-core 与 photoedit-core 共用，不含任何缝合语义"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fast_image_resize = { version = "6.1.0", features = ["rayon"] }

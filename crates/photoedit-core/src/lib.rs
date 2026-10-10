@@ -19,6 +19,6 @@ pub use color::{apply as apply_color, preset, PRESETS};
 pub use face::{beauty_region, crop_suggestion, nms, FaceBox};
 pub use geometry::apply as apply_geometry;
 pub use lut::{apply as apply_lut, parse_cube, CubeError, Lut as LutTable};
-pub use ops::{Auto, Beauty, Color, EditOps, Fill, Geometry, Lut as LutRef, Slider, Stroke, Tool, Warp, DEFAULT_JSON, SLIDER_MAX, SLIDER_MIN};
+pub use ops::{Auto, Beauty, Color, EditOps, Fill, Geometry, Lut as LutRef, Slider, Stroke, Tool, Warp, default_json, SLIDER_MAX, SLIDER_MIN};
 pub use pipeline::{apply_chain, Chain};
 pub use warp::{control_pairs, simplify, FaceShape};

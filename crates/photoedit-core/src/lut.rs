@@ -3,7 +3,7 @@
 //! 3D 用三线性插值，插值前先按 `DOMAIN_MIN/MAX` 把输入搬回 0..1——
 //! 很多导出工具会把域写成非 0..1，忽视这一步会让整张图偏色。
 
-use stitch_core::{par::par_chunks_mut, Rgba};
+use px_core::{par::par_chunks_mut, Rgba};
 
 /// 一张已解析的 LUT
 #[derive(Debug)]
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn 恒等表过完不变() {
         let lut = parse_cube(&identity3d(17)).unwrap();
-        let img = stitch_core::Rgba::new(8, 4);
+        let img = px_core::Rgba::new(8, 4);
         let mut img = img;
         for (i, p) in img.px.chunks_exact_mut(4).enumerate() {
             let v = i as u32;
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn 强度为零就是原图() {
         let lut = parse_cube(&identity3d(4)).unwrap();
-        let mut img = stitch_core::Rgba::new(2, 1);
+        let mut img = px_core::Rgba::new(2, 1);
         img.px.copy_from_slice(&[10, 200, 40, 255, 250, 3, 77, 128]);
         assert_eq!(apply(&img, &lut, 0.0), img);
     }

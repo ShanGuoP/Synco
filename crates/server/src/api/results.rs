@@ -169,13 +169,13 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
 pub async fn result_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     Ok(match rres::value_by_id(&ctx, path_id(&id)?)? {
         Some(v) => ok(dto::result_json(&ctx, &v)),
-        None => err(404, "no result"),
+        None => err(404, "srv.common.noResult"),
     })
 }
 
 pub async fn interrupt_post(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let rid = path_id(&id)?;
-    let Some(r) = rres::by_id(&ctx, rid)? else { return Ok(err(404, "no result")) };
+    let Some(r) = rres::by_id(&ctx, rid)? else { return Ok(err(404, "srv.common.noResult")) };
     if !r.running() {
         return Ok(bad("srv.submit.settled"));
     }
@@ -200,7 +200,7 @@ pub async fn interrupt_post(State(ctx): State<Shared>, APath(id): APath<String>)
 
 pub async fn result_delete(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let rid = path_id(&id)?;
-    let Some(r) = rres::by_id(&ctx, rid)? else { return Ok(err(404, "no result")) };
+    let Some(r) = rres::by_id(&ctx, rid)? else { return Ok(err(404, "srv.common.noResult")) };
     // 云端行先按超时判一次：判死了就允许删，别让"生成中"永久挡着垃圾桶
     if r.running() && !reclaim::judge_cloud(&ctx, rid) {
         return Ok(bad("srv.submit.stillRunning"));

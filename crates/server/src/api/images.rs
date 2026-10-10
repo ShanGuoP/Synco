@@ -13,7 +13,7 @@ use serde_json::Value;
 
 pub async fn image_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "no image")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.common.noImage")) };
     // 纯读：状态推进在服务端那条推进器上（service::reclaim::spawn_advancer），
     // 不再让一次 GET 顺带把云端僵尸判死——跨站页面用一个 <img> 就能驱动写库
     if img.thumb_path.is_none() {
@@ -36,7 +36,7 @@ pub async fn image_get(State(ctx): State<Shared>, APath(id): APath<String>) -> R
 /// 档还没补出来时回 `thumb_url: null` + `pending: true`，前端按既有约定回落 orig_url。
 pub async fn thumb_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "no image")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.common.noImage")) };
     Ok(ok(match img.thumb_path.clone() {
         Some(rel) => serde_json::json!({ "thumb_url": format!("/file/{rel}") }),
         None => {
@@ -49,7 +49,7 @@ pub async fn thumb_get(State(ctx): State<Shared>, APath(id): APath<String>) -> R
 /// 瓦片清单：首次访问会当场切一套（原图不可变，之后 immutable）
 pub async fn tiles_get(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "no image")) };
+    let Some(img) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.common.noImage")) };
     // 限流与"派生档同时在制不超过两份"是同一条纪律，见 imagesvc::tiles_async
     match imagesvc::tiles_async(&ctx, img).await {
         Ok(v) => Ok(ok(v)),
@@ -79,7 +79,7 @@ pub async fn image_delete(State(ctx): State<Shared>, APath(id): APath<String>) -
         if let Some(m) = i.mask_path.clone().filter(|s| !s.is_empty()) {
             rels.push(m);
         }
-        rels.extend(rres::list_paths(&ctx, "image_id=?", crate::repo::i(iid))?);
+        rels.extend(rres::paths_for_image(&ctx, iid)?);
         rres::delete_for_image(&ctx, iid)?;
         rimg::delete(&ctx, iid)?;
         // 本地调整的三张附属表只存 image_id，行没了就再没人知道这些参数是谁的
@@ -108,7 +108,7 @@ pub async fn image_delete(State(ctx): State<Shared>, APath(id): APath<String>) -
 pub async fn mask_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
     let iid = path_id(&id)?;
-    let Some(i) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "no image")) };
+    let Some(i) = rimg::by_id(&ctx, iid)? else { return Ok(err(404, "srv.common.noImage")) };
     let b64 = body.get("b64").and_then(|v| v.as_str()).unwrap_or("");
     let mut mask_rel: Option<String> = None;
     if !b64.is_empty() {

@@ -383,7 +383,10 @@ pub fn panel(ctx: &Ctx, id: i64) -> Result<Value> {
         }
     }
     luts.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    let presets: Vec<Value> = photoedit_core::PRESETS.iter().map(|(k, label)| json!({ "id": k, "name": label })).collect();
+    // 预设的数值只有 color::preset 那一份：前端摆滑杆要的是同一组数，不再抄一遍表
+    let presets: Vec<Value> = photoedit_core::PRESETS.iter()
+        .filter_map(|(k, label)| photoedit_core::preset(k).map(|c| json!({ "id": k, "name": label, "color": c })))
+        .collect();
     Ok(json!({ "ops": ops, "luts": luts, "presets": presets }))
 }
 
@@ -629,7 +632,13 @@ mod tests {
         assert_eq!(v["luts"].as_array().unwrap().len(), 2, "LUT 名单混进了非 .cube：{v:?}");
         // 名单按小写排序，A 在 B 前
         assert_eq!(v["luts"].as_array().unwrap()[0].as_str().unwrap(), "A.cube");
-        assert!(v["presets"].as_array().unwrap().len() >= 8);
+        let ps = v["presets"].as_array().unwrap();
+        assert!(ps.len() >= 8);
+        // 数值随面板一起下来：前端摆滑杆读这一份，不再自己抄一张表
+        assert!(ps.iter().all(|p| p["name"].as_str().is_some() && p["color"].as_object().is_some()), "有预设没带数值：{ps:?}");
+        let clean = ps.iter().find(|p| p["id"].as_str() == Some("clean")).unwrap();
+        assert_eq!(clean["color"]["exposure"].as_i64(), Some(6), "预设数值与 color::preset 对不上：{clean}");
+        assert!(clean["color"]["preset"].is_null(), "预设自己不该带 preset 字段：{clean}");
         assert_eq!(v["ops"]["v"].as_i64(), Some(1));
         cleanup(ctx, &dir);
     }

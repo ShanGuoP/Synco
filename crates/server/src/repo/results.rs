@@ -157,6 +157,23 @@ pub fn mark_running(ctx: &Ctx, id: i64) -> Result<bool> {
     Ok(n == 1)
 }
 
+/// 把一行判死并写下原因。**存的是钥匙 + 参数**，不是某一语言的句子：库里的东西要能跟着界面语言走，
+/// 老库里已经存着整句中文的那些也照样读得出来（查不到钥匙就原样显示）。
+/// 进库前截到 400 字——上游原文可能长得多，而这一列要参与列表渲染。
+/// 同样只推进还在排/还在跑的行：已经 done 的那张不该被一次迟到的判死改成 error。
+pub fn mark_failed(ctx: &Ctx, id: i64, code: &str, args: Value) {
+    let truncated: String = code.chars().take(400).collect();
+    // 没参数就存 NULL，别存一个 "{}" 让读侧去猜
+    let args = match args {
+        Value::Object(m) if !m.is_empty() => Some(Value::Object(m).to_string()),
+        _ => None,
+    };
+    let _ = ctx
+        .db()
+        .prepare_cached("UPDATE results SET status=?, error=?, error_args=? WHERE id=? AND status IN ('running','queued')")
+        .and_then(|mut st| st.execute(("error", truncated.as_str(), args.as_deref(), id)));
+}
+
 /// 队列里的行按提交顺序推进
 pub fn list_queued(ctx: &Ctx) -> Result<Vec<i64>> {
     Ok(repo::all(ctx, "SELECT id FROM results WHERE status='queued' ORDER BY id", &[])?
@@ -194,7 +211,7 @@ pub fn delete(ctx: &Ctx, id: i64) -> Result<()> {
 /// 把这些行记着的五类 PNG 路径取出来。**只查不删**：调用方先删行、再按这份清单删文件。
 /// 顺序反过来的话一旦断在中途，库里就挂着指向空气的记录（卡片在、点开是空的）——
 /// 而这样最多多留几个没人认领的文件，盘上多一张照片不会骗人。
-pub fn list_paths(ctx: &Ctx, where_sql: &str, arg: repo::SqlValue) -> Result<Vec<String>> {
+fn paths_matching(ctx: &Ctx, where_sql: &str, arg: repo::SqlValue) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for r in repo::all(
         ctx,
@@ -208,6 +225,16 @@ pub fn list_paths(ctx: &Ctx, where_sql: &str, arg: repo::SqlValue) -> Result<Vec
         }
     }
     Ok(out)
+}
+
+/// 一张图名下的五类产物路径
+pub fn paths_for_image(ctx: &Ctx, image_id: i64) -> Result<Vec<String>> {
+    paths_matching(ctx, "image_id=?", repo::i(image_id))
+}
+
+/// 一个项目名下的五类产物路径
+pub fn paths_for_project(ctx: &Ctx, project_id: i64) -> Result<Vec<String>> {
+    paths_matching(ctx, "project_id=?", repo::i(project_id))
 }
 
 pub fn delete_for_image(ctx: &Ctx, image_id: i64) -> Result<()> {

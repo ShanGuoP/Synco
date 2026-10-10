@@ -1192,6 +1192,7 @@
       "badDims": "Bad image dimensions (reported {w}×{h}) — try another file or re-export it",
       "noProject": "That project doesn’t exist",
       "noResult": "That record doesn’t exist",
+      "noImage": "That image doesn’t exist",
       "copyFail": "Copy failed: {msg}",
       "respFail": "Could not build the response"
     },

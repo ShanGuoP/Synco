@@ -172,25 +172,20 @@ pub async fn probe(ctx: &Ctx, raw_url: &str) -> Value {
 }
 
 pub fn list_custom(ctx: &Ctx) -> Vec<Value> {
-    repo::all(ctx, "SELECT url, label, added_at FROM backends ORDER BY added_at", &[]).unwrap_or_default()
+    repo::backends::list(ctx)
 }
 
 pub fn add_custom(ctx: &Ctx, raw_url: &str, label: Option<&str>) -> crate::error::Result<String> {
     let url = norm_url(raw_url)?;
     let lbl = label.map(|l| clip(l, 40)).filter(|l| !l.is_empty());
-    repo::run(
-        ctx,
-        "INSERT INTO backends(url,label) VALUES(?,?) ON CONFLICT(url) DO UPDATE SET label=excluded.label",
-        &[repo::s(&url), repo::si(lbl.as_deref())],
-    )
-    ?;
+    repo::backends::upsert(ctx, &url, lbl.as_deref())?;
     Ok(url)
 }
 
 /// 移除登记。生效中的那条要一起回落，否则之后所有提交与取图都往一个不存在的地址打
 pub fn remove_custom(ctx: &Ctx, raw_url: &str) -> crate::error::Result<String> {
     let url = norm_url(raw_url)?;
-    repo::run(ctx, "DELETE FROM backends WHERE url=?", &[repo::s(&url)])?;
+    repo::backends::remove(ctx, &url)?;
     if active_url(ctx) == url {
         repo::settings::del(ctx, "comfy_active")?;
     }
