@@ -179,6 +179,10 @@ html[data-appearance="glass"] .settings-workspace { inset: var(--topbar-h) 0 var
 /* 设置打开期间，露在层外的壳（左栏/顶栏/状态条）一律不接指针：既不退出设置，
    也不在层后面偷偷换页（只能点 ❌ 退出，用户规范）。窗口三颗键是系统窗控，不在此列。 */
 html[data-appearance="glass"]:has(.mask.settings-workspace) :is(.rail, .topbar, .workspace-status) { pointer-events: none; }
+/* 顶栏本体要保留命中：无边框窗口的拖动靠 data-tauri-drag-region，整条屏蔽会连"拖窗口"一起废掉。
+   屏蔽的是顶栏里的控件（面包屑/搜索/徽章/按钮），三颗窗控键除外 */
+html[data-appearance="glass"]:has(.mask.settings-workspace) .topbar { pointer-events: auto; }
+html[data-appearance="glass"]:has(.mask.settings-workspace) .topbar > * { pointer-events: none; }
 html[data-appearance="glass"]:has(.mask.settings-workspace) .topbar .wctl { pointer-events: auto; }
 html[data-appearance="glass"] .settings-workspace > .modal { width: 100%; height: 100%; max-height: none; display: flex; flex-direction: column; border: 0; border-radius: 0; background: var(--bg-app); box-shadow: none; backdrop-filter: none; }
 html[data-appearance="glass"] .settings-workspace .modal__hd { flex: 0 0 auto; border-bottom: 1px solid var(--line); padding: var(--s-3) var(--s-5); }
