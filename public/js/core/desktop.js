@@ -69,10 +69,18 @@ const glyph = inner => `<svg class="icon icon--sm" viewBox="0 0 12 12" aria-hidd
 /**
  * 无边框窗口的三颗键，画进给定右槽；浏览器版直接不动（拿不到 __TAURI__.window）。
  * 拖动与双击最大化由壳注入的 data-tauri-drag-region 处理，这里只管三颗键。
+ *
+ * 三颗键有"整个会话莫名消失、重启才回来"的前科，而现有代码里没有任何人会摘掉它们——
+ * 按两条防线兜底：__TAURI__ 晚到就限时重试；挂上之后盯着宿主，谁把右区重排了就把键挂回去。
+ * 重复调用幂等（已有 .wctl 直接返回），所以重试/自愈/正常装配可以互相叠加。
  */
-export function mountWindowControls(host) {
+export function mountWindowControls(host, attempts = 0) {
+  if (!host || host.querySelector('.wctl')) return;
   const W = tauri()?.window;
-  if (!host || !W?.getCurrentWindow) return;
+  if (!W?.getCurrentWindow) {
+    if (attempts < 20) setTimeout(() => mountWindowControls(host, attempts + 1), 500);
+    return;
+  }
   const w = W.getCurrentWindow();
   const btn = (label, inner, onclick, mod = '') => el(`button.wctl__b${mod}`, {
     type: 'button', 'aria-label': label, 'data-tip': label, html: glyph(inner), onclick,
@@ -94,4 +102,7 @@ export function mountWindowControls(host) {
   }).catch(() => {});
   sync();
   w.onResized(sync).catch(() => {});
+  // 自愈：宿主的孩子被重排且三颗键不在了就挂回去；重挂本身也会触发本观察器，幂等挡住递归
+  new MutationObserver(() => { if (!host.querySelector('.wctl')) mountWindowControls(host); })
+    .observe(host, { childList: true });
 }
