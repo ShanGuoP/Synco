@@ -30,3 +30,6 @@ $RECYCLE.BIN/
 # 字体子集的本地辅助：字表与生成脚本，不入库（重生成办法见 README 字体段）
 /tools/make-font-chars.py
 /tools/font-chars.txt
+
+# 设计参考图的草稿目录：本地产物，不进仓库
+output/

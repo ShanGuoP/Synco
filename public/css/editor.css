@@ -64,6 +64,7 @@
 body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
 
 /* ---------------- 横向工具条 ---------------- */
+.ed-tools__context { display: none; }
 .ed-tools {
   grid-area: tools; display: flex; align-items: center; gap: 2px;
   padding: 0 var(--s-4); overflow-x: auto; overflow-y: hidden;

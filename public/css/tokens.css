@@ -20,6 +20,9 @@
   --bg-card-hi:    #fffdf8;
   --bg-field:      #fdfaf4;
   --bg-canvas:     #26262a;   /* 画布四周保留中性深底，判色才准 */
+  --on-canvas:     #f3f4f6;
+  --canvas-overlay: rgba(20, 20, 22, .8);
+  --canvas-line:   rgba(255, 255, 255, .25);
   --bg-ink:        #211f1c;   /* 只留给主按钮这类实心块 */
 
   --line:          rgba(33, 31, 28, .09);

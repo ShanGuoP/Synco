@@ -188,18 +188,23 @@ html[data-appearance="glass"] .pcard__cov { border: 0; border-radius: 0; box-sha
 html[data-appearance="glass"] .pcard__nm { margin: var(--s-3) var(--s-4) var(--s-1); }
 html[data-appearance="glass"] .pcard__meta { padding: 0 var(--s-4) var(--s-3); }
 
-/* 大画布占完整工作区，面板浮在边缘；收起只隐藏显示，不销毁编辑会话。 */
+/* 编辑器采用固定分区：工具条、历史、画布、参数、胶片条。 */
 html[data-appearance="glass"] :is(.editor, .canvas-view) { inset: var(--topbar-h) 0 var(--status-h) var(--rail-w); }
 html[data-appearance="glass"] .editor {
   --ed-top-h: var(--workspace-bar-h); --col-prop: var(--workspace-panel-w); --col-pre: var(--workspace-history-w);
-  grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--ed-top-h) minmax(0, 1fr) var(--film-h);
-  grid-template-areas: "top" "stage" "film";
+  --ed-tools-h: 44px; --film-h: 80px;
+  grid-template-columns: var(--col-pre) minmax(0, 1fr) var(--col-prop);
+  grid-template-rows: var(--ed-top-h) var(--ed-tools-h) minmax(0, 1fr) var(--film-h);
+  grid-template-areas: "top top top" "tools tools rail" "pre stage prop" "film film film";
 }
+html[data-appearance="glass"] .editor.no-pre { --col-pre: 0px; }
+html[data-appearance="glass"] .editor.no-prop { --col-prop: 192px; }
+html[data-appearance="glass"] .editor.no-prop { grid-template-areas: "top top top" "tools tools rail" "pre stage stage" "film film film"; }
 html[data-appearance="glass"] .ed-top { grid-template-columns: minmax(0, 1fr) auto; }
 html[data-appearance="glass"] .ed-top__c { display: none; }
 html[data-appearance="glass"] .ed-top__r .wctl { display: none; }
 html[data-appearance="glass"] .ed-params-btn { display: inline-flex; }
-html[data-appearance="glass"] :is(.editor > .ed-tools, .cv > .ed-tools) {
+html[data-appearance="glass"] .cv > .ed-tools {
   grid-area: auto; position: absolute; left: var(--s-3); right: var(--s-3); bottom: calc(var(--film-h, 0px) + var(--s-8));
   height: calc(var(--workspace-bar-h) + var(--s-3)); width: max-content; max-width: calc(100% - var(--s-6));
   padding: var(--s-1); z-index: 115; border: 1px solid var(--line-hi); border-radius: var(--r-3);
@@ -210,37 +215,54 @@ html[data-appearance="glass"] .tool > span:last-child { max-width: 100%; white-s
 html[data-appearance="glass"] .tool-slider { display: flex; }
 html[data-appearance="glass"] .tool-slider .slider { width: 80px; flex-basis: 80px; }
 html[data-appearance="glass"] :is(.editor > .ed-prop, .editor > .ed-pre) {
-  grid-area: auto; display: flex; position: absolute; top: calc(var(--ed-top-h) + var(--s-3)); bottom: calc(var(--film-h) + var(--s-3));
-  height: auto; min-height: 0; width: var(--workspace-panel-w); z-index: 112;
-  border: 1px solid var(--line-hi); border-radius: var(--r-3); background: var(--bg-panel);
-  box-shadow: var(--sh-2); overflow: hidden;
+  display: flex; position: static; height: auto; min-height: 0; width: auto; max-height: none; max-width: none;
+  border: 0; border-radius: 0; background: var(--bg-panel);
+  box-shadow: none; overflow: hidden;
 }
-html[data-appearance="glass"] .editor > .ed-prop {
-  right: var(--s-3);
-  bottom: calc(var(--film-h) + var(--workspace-bar-h) + var(--s-6));
-  max-width: calc(100% - var(--s-6));
-}
-html[data-appearance="glass"] .editor.is-drawer > .ed-prop { left: auto; max-height: none; }
-html[data-appearance="glass"] .editor > .ed-pre { left: var(--s-3); width: var(--workspace-history-w); bottom: auto; height: 55%; max-height: 55%; }
+html[data-appearance="glass"] .editor > .ed-prop { grid-area: prop; border-left: 1px solid var(--line-hi); }
+html[data-appearance="glass"] .editor.is-drawer > .ed-prop { position: static; height: auto; max-height: none; border-radius: 0; animation: none; }
+html[data-appearance="glass"] .editor > .ed-pre { grid-area: pre; border-right: 1px solid var(--line-hi); }
 html[data-appearance="glass"] .editor.no-pre > .ed-pre, html[data-appearance="glass"] .editor.no-prop > .ed-prop { display: none; }
 html[data-appearance="glass"] .editor > .ed-rail {
-  grid-area: auto; position: absolute; right: var(--s-3); top: auto; bottom: calc(var(--film-h) + var(--s-3));
-  display: flex; flex-direction: row; width: auto; height: var(--workspace-bar-h); padding: 0 var(--s-1); z-index: 116;
-  border: 1px solid var(--line-hi); border-radius: var(--r-2); background: var(--bg-card); box-shadow: var(--sh-2);
+  grid-area: rail; position: static; display: flex; flex-direction: row; align-items: center;
+  width: auto; height: var(--ed-tools-h); padding: 0 var(--s-2); z-index: auto;
+  border: 0; border-bottom: 1px solid var(--line-hi); border-left: 1px solid var(--line-hi); border-radius: 0;
+  background: var(--bg-panel); box-shadow: none;
 }
+html[data-appearance="glass"] .editor > .ed-tools {
+  grid-area: tools; position: static; display: flex; flex-direction: row; align-items: center;
+  width: auto; height: var(--ed-tools-h); max-width: none; padding: 0 var(--s-2); z-index: auto;
+  overflow-x: auto; overflow-y: hidden; border: 0; border-bottom: 1px solid var(--line-hi);
+  border-radius: 0; background: var(--bg-panel); box-shadow: none;
+}
+html[data-appearance="glass"] .editor .ed-tools .tool { flex: 0 0 32px; width: 32px; height: 34px; }
+html[data-appearance="glass"] .editor .ed-tools .tool > span:last-child { display: none; }
+html[data-appearance="glass"] .editor .ed-tools .tool-sep { width: 1px; height: 22px; margin: 0 5px; }
+html[data-appearance="glass"] .editor .ed-tools .tool-slider {
+  position: static; min-width: 0; margin-left: auto; padding: 0 0 0 var(--s-2);
+  border: 0; border-left: 1px solid var(--line-hi); border-radius: 0; background: transparent; box-shadow: none;
+}
+html[data-appearance="glass"] .editor .tool.is-on { box-shadow: none; }
+html[data-appearance="glass"] .editor:has(.cmp.is-on) .ed-tools__context { display: inline; flex: 0 0 auto; padding: 0 var(--s-3); color: var(--txt-2); font-weight: 600; }
+html[data-appearance="glass"] .editor:has(.cmp.is-on) .ed-tools :is(.tool-zoom, .tool-slider, .tool-sep),
+html[data-appearance="glass"] .editor:has(.cmp.is-on) .ed-tools .tool:is([data-k="pan"], [data-k="brush"], [data-k="erase"], [data-k="undo"], [data-k="clear"]) { display: none; }
 html[data-appearance="glass"] .ed-rail .rail-btn { width: var(--workspace-bar-h); height: var(--workspace-bar-h); }
 html[data-appearance="glass"] .ed-rail .rail-btn > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 html[data-appearance="glass"] .ed-rail .rail-btn.is-on::before { display: none; }
+html[data-appearance="glass"] .editor .ed-rail .rail-btn { flex: 1; width: auto; height: 32px; flex-direction: row; gap: 6px; font-size: var(--f-xs); }
+html[data-appearance="glass"] .editor .ed-rail .rail-btn > span:last-child { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+html[data-appearance="glass"] .editor.no-prop .ed-rail .rail-btn > span:last-child { display: none; }
+html[data-appearance="glass"] .editor .ed-rail > div { display: none; }
 html[data-appearance="glass"] .ed-film { min-width: 0; }
-/* 对比结果与编辑器浮动控件各占独立区域，底栏不再从 dock 后面穿过。 */
-html[data-appearance="glass"] .editor .cmp { bottom: calc(var(--workspace-bar-h) + var(--s-6)); }
+/* 对比完全归属于中间画布列，操作栏随其宽度排布。 */
+html[data-appearance="glass"] .editor .cmp { inset: 0; }
 html[data-appearance="glass"] .editor .vp:has(> .cmp.is-on) > .vp__canvas,
 html[data-appearance="glass"] .editor .ed-stage:has(.cmp.is-on) > :is(.ed-hint, .ed-hud) { visibility: hidden; pointer-events: none; }
-html[data-appearance="glass"] .editor:not(.no-prop) .cmp { right: calc(var(--workspace-panel-w) + var(--s-6)); }
 html[data-appearance="glass"] .cmp__bar { flex-wrap: wrap; max-height: 40%; overflow-y: auto; background: var(--bg-panel); border-color: var(--line-hi); }
 html[data-appearance="glass"] .cmp__bar > .muted { flex: 1 0 160px; min-width: 0; overflow-wrap: anywhere; }
 html[data-appearance="glass"] .cmp__bar .btn:not(.btn--primary) { --btn-fg: var(--txt); --btn-fg-hi: var(--txt); --btn-bd: var(--line-hi); --btn-bg: transparent; --btn-bg-hi: var(--wash); }
 html[data-appearance="glass"] .cmp__bar .btn--primary { --btn-bg: var(--bg-ink); --btn-bd: var(--bg-ink); --btn-fg: var(--txt-inv); --btn-fg-hi: var(--txt-inv); }
+html[data-appearance="glass"] .cmp__ctl .btn { --btn-fg: var(--on-canvas); --btn-fg-hi: var(--on-canvas); --btn-bg: var(--canvas-overlay); --btn-bg-hi: var(--canvas-overlay); --btn-bd: var(--canvas-line); }
 html[data-appearance="glass"] .cv { position: relative; --ed-top-h: var(--workspace-bar-h); grid-template-rows: var(--ed-top-h) minmax(0, 1fr); grid-template-areas: "top" "main"; }
 html[data-appearance="glass"] .cv-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-template-areas: "stage"; position: relative; }
 html[data-appearance="glass"] :is(.cv-side, .cv-hist) {
@@ -277,27 +299,25 @@ html[data-appearance="glass"] .settings-workspace .modal__ft { padding: var(--s-
 @media (max-width: 1100px) {
   html[data-appearance="glass"] .topbar__brand b { display: none; }
   html[data-appearance="glass"] #wfChip { max-width: 96px; }
-  html[data-appearance="glass"] .ed-tools .tool-slider { min-width: 180px; }
+  html[data-appearance="glass"] .cv .ed-tools .tool-slider { min-width: 180px; }
 }
 @media (min-width: 701px) {
-  html[data-appearance="glass"] .editor .cmp { left: calc(var(--workspace-bar-h) + var(--s-3) * 2); }
-  html[data-appearance="glass"] .editor:not(.no-pre) .cmp { left: calc(var(--workspace-bar-h) + var(--workspace-history-w) + var(--s-3) * 4); }
-  html[data-appearance="glass"] .editor > .ed-pre, html[data-appearance="glass"] .cv-hist {
+  html[data-appearance="glass"] .cv-hist {
     left: calc(var(--workspace-bar-h) + var(--s-3) * 3);
   }
-  html[data-appearance="glass"] :is(.editor > .ed-tools, .cv > .ed-tools) {
+  html[data-appearance="glass"] .cv > .ed-tools {
     top: calc(var(--ed-top-h) + var(--s-3)); bottom: calc(var(--film-h, 0px) + var(--s-8)); right: auto;
     width: calc(var(--workspace-bar-h) + var(--s-3)); max-width: none; height: auto;
     flex-direction: column; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin;
     background: var(--bg-card); backdrop-filter: none;
   }
-  html[data-appearance="glass"] .ed-tools::-webkit-scrollbar { display: block; width: var(--s-1); }
-  html[data-appearance="glass"] .ed-tools .tool { flex: 0 0 var(--workspace-bar-h); width: var(--workspace-bar-h); }
-  html[data-appearance="glass"] .ed-tools .tool > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  html[data-appearance="glass"] .ed-tools .tool-sep { height: 1px; width: var(--s-6); margin: var(--s-1) 0; }
-  html[data-appearance="glass"] .ed-tools .tool-zoom { min-height: 28px; margin: 0; }
+  html[data-appearance="glass"] .cv .ed-tools::-webkit-scrollbar { display: block; width: var(--s-1); }
+  html[data-appearance="glass"] .cv .ed-tools .tool { flex: 0 0 var(--workspace-bar-h); width: var(--workspace-bar-h); }
+  html[data-appearance="glass"] .cv .ed-tools .tool > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  html[data-appearance="glass"] .cv .ed-tools .tool-sep { height: 1px; width: var(--s-6); margin: var(--s-1) 0; }
+  html[data-appearance="glass"] .cv .ed-tools .tool-zoom { min-height: 28px; margin: 0; }
   /* 固定控件的包含块是视口，脱离工具栏滚动区；只复用这一枚笔刷滑杆。 */
-  html[data-appearance="glass"] .ed-tools .tool-slider {
+  html[data-appearance="glass"] .cv .ed-tools .tool-slider {
     position: fixed; left: calc(var(--rail-w) + var(--workspace-bar-h) + var(--s-8));
     bottom: calc(var(--status-h) + var(--film-h, 0px) + var(--s-3)); margin: 0; padding: var(--s-2);
     border: 1px solid var(--line-hi); border-radius: var(--r-2); background: var(--bg-card); box-shadow: var(--sh-2);
@@ -317,17 +337,25 @@ html[data-appearance="glass"] .settings-workspace .modal__ft { padding: var(--s-
   html[data-appearance="glass"] .settings-workspace .set__pane { padding: var(--s-4); }
 }
 @media (max-width: 960px) {
-  /* 窄窗口对比优先占满宽度，退出对比后参数面板按原状态恢复。 */
+  html[data-appearance="glass"] .editor {
+    grid-template-rows: var(--ed-top-h) var(--ed-tools-h) minmax(0, 1fr) 40px var(--film-h);
+    grid-template-areas: "top top top" "tools tools tools" "pre stage prop" "rail rail rail" "film film film";
+  }
+  html[data-appearance="glass"] .editor.no-prop {
+    --col-prop: 0px;
+    grid-template-areas: "top top top" "tools tools tools" "pre stage stage" "rail rail rail" "film film film";
+  }
+  html[data-appearance="glass"] .editor > .ed-rail { height: 40px; border-left: 0; }
+  html[data-appearance="glass"] .editor.no-prop .ed-rail .rail-btn > span:last-child { display: inline; }
+}
+@media (max-width: 700px) {
+  html[data-appearance="glass"] .editor:has(.cmp.is-on) {
+    --col-prop: 0px;
+    grid-template-areas: "top top top" "tools tools tools" "pre stage stage" "rail rail rail" "film film film";
+  }
   html[data-appearance="glass"] .editor:has(.cmp.is-on) > .ed-prop,
   html[data-appearance="glass"] .editor:has(.cmp.is-on) .ed-params-btn,
   html[data-appearance="glass"] .editor:has(.cmp.is-on) .ed-rail [data-key="prop"] { display: none; }
-  html[data-appearance="glass"] .editor:not(.no-prop) .cmp { right: 0; }
-}
-@media (max-width: 700px) {
-  html[data-appearance="glass"] .editor .cmp { bottom: calc(var(--workspace-bar-h) + var(--s-8) + var(--s-6)); }
-  html[data-appearance="glass"] .editor > .ed-prop {
-    bottom: calc(var(--film-h) + var(--workspace-bar-h) + var(--s-8) + var(--s-6));
-  }
   html[data-appearance="glass"] { --topbar-h: 88px; --workspace-panel-w: min(320px, calc(100vw - var(--rail-w) - var(--s-6))); }
   html[data-appearance="glass"] .topbar { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 44px 44px; gap: 0 var(--s-2); padding: 0 var(--s-3); }
   html[data-appearance="glass"] .topbar__brand { grid-column: 1; grid-row: 1; }

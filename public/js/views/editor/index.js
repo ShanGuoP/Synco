@@ -103,7 +103,8 @@ function buildShell() {
     onChange: v => { brushVal.textContent = String(v); ctx.painter?.setBrush(v); },
   });
   const tools = el('div.ed-tools', {},
-    el('button.tool-zoom', { type: 'button', 'data-tip': t('ed.zoomTip'), onclick: () => viewport.fit() }, zoomPct),
+    el('span.ed-tools__context', { text: t('ed.compare') }),
+    el('button.tool-zoom', { type: 'button', 'data-tip': t('ed.zoomTip'), onclick: () => onZoom('fit') }, zoomPct),
     ...ZOOMS.map(z => toolBtn(z.key, z.ico, t(z.label), t(z.tip), () => onZoom(z.key))),
     el('span.tool-sep'),
     ...TOOLS.map(d => toolBtn(d.key, d.ico, t(d.label), t(d.tip), () => setTool(d.key))),
@@ -510,11 +511,13 @@ function setTool(k) {
 }
 
 function onZoom(k) {
-  ({ fit: () => ctx.viewport.fit(), one: () => ctx.viewport.one2one(),
-     zin: () => ctx.viewport.zoomBy(1.35), zout: () => ctx.viewport.zoomBy(1 / 1.35) })[k]?.();
+  const viewport = ctx.compare.isOn ? ctx.compare : ctx.viewport;
+  ({ fit: () => viewport.fit(), one: () => viewport.one2one(),
+     zin: () => viewport.zoomBy(1.35), zout: () => viewport.zoomBy(1 / 1.35) })[k]?.();
 }
 
 function onEdit(k) {
+  if (ctx.compare.isOn) return;
   if (k === 'undo') {
     if (!ctx.painter.canUndo) { toastErr(t('ed.noUndo')); return; }
     ctx.painter.undo().then(ok => { if (ok) { ctx.setFlag(t('ed.undone')); syncInvertHint(); } });
@@ -984,4 +987,12 @@ function wireKeys(c) {
   const keyup = e => { if (e.code === 'Space') (c.compare.isOn ? c.compare : c.viewport).setSpace(false); };
   window.addEventListener('keydown', keydown);
   window.addEventListener('keyup', keyup);
+  // 窗口缩窄时收起历史列，让参数与画布仍有可用宽度；按钮状态同步更新。
+  const panels = window.matchMedia('(max-width: 960px)');
+  panels.addEventListener('change', () => {
+    const ed = $('#editor');
+    if (panels.matches && appearance() === 'glass' && !ed.classList.contains('no-pre') && !ed.classList.contains('no-prop')) {
+      toggleCol('no-pre', 'pre');
+    }
+  });
 }
