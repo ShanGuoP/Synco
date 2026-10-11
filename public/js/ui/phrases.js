@@ -28,7 +28,6 @@ function askPhrase({ title, name = '', text = '', okLabel = tr('common.save') })
     const box = el('div', { style: { display: 'grid', gap: '10px' } },
       el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: tr('ph.name') }), nm),
       el('div', { style: { display: 'grid', gap: '4px' } }, el('span.muted', { text: tr('ph.content') }), tx),
-      el('p.muted', { text: tr('ph.intro') }),
       el('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px' } },
         el('button.btn.btn--ghost.btn--sm', { type: 'button', text: tr('common.cancel'), onclick: () => { done(null); m.close('cancel'); } }),
         el('button.btn.btn--primary.btn--sm', { type: 'button', text: okLabel, onclick: save })));
@@ -102,7 +101,6 @@ export function createPhrasesPane({ onChanged } = {}) {
   const paint = () => {
     fill(body,
       el('div', { style: { display: 'grid', gap: '8px' } },
-        el('p.muted', { text: tr('ph.intro') }),
         el('div', { style: { display: 'flex', gap: '8px' } },
           el('button.btn.btn--primary.btn--sm', { type: 'button', text: tr('ph.newOne'), onclick: () => add() }),
           list.length ? el('span.muted', { style: { alignSelf: 'center' }, text: tr('ph.count', { n: list.length }) }) : null)),

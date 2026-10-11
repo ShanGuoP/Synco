@@ -4,8 +4,8 @@ import { el, fill } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { api } from '../core/api.js';
 import { isDesktop, call, pickFolder, human, openExternal } from '../core/desktop.js';
-import { MODES, STYLES, apply, mode, resolved, watch, appearance, applyAppearance } from '../core/theme.js';
-import { osReduce, reduce, saved, set as setMotion, watch as watchMotion } from '../core/motion.js';
+import { MODES, STYLES, apply, mode, watch, appearance, applyAppearance } from '../core/theme.js';
+import { saved, set as setMotion, watch as watchMotion } from '../core/motion.js';
 import { dl, dx, flushForSwitch, getLang, t } from '../core/i18n.js';
 import { store } from '../state.js';
 import { modal, confirm } from './modal.js';
@@ -268,8 +268,7 @@ function createCloudPane() {
 
   const node = el('div.dlg-flow', {},
     el('div', {}, el('h4.dlg-h4', { text: t('settings.cloud.howTitle') }),
-      el('label.set__ck', {}, cloudCk, el('span', { text: t('settings.cloud.ckLabel') })),
-      el('p.muted', { text: t('settings.cloud.ckNote') })),
+      el('label.set__ck', {}, cloudCk, el('span', { text: t('settings.cloud.ckLabel') }))),
     el('div', { style: { display: 'grid', gap: '10px' } },
       fld(t('settings.cloud.baseLabel'), baseInp),
       pair(fld(t('settings.cloud.modelLabel'), modelInp), fld(t('settings.cloud.sizeLabel'), sizeInp)),
@@ -473,8 +472,7 @@ function createExportPane() {
             if (p) { inp.value = p; save(); }
           },
         }) : null,
-        el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('settings.export.saveCheck'), onclick: save })),
-      el('p.muted', { text: t('settings.export.note') })),
+        el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('settings.export.saveCheck'), onclick: save }))),
     state);
   load();
   return { node };
@@ -643,7 +641,6 @@ function createDataPane() {
 function createThemePane() {
   const styleRow = el('div.appearance-options');
   const row = el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
-  const now = el('div.set__state');
   /* 减弱动效（F7 的兜底开关）：和系统的 prefers-reduced-motion 同一个语义，任一到就全站瞬时——
      视口惯性、瓦片淡入、翻页的视图过渡、主题 crossfade 全关掉，悬停那些也给压成 .01ms。
      和主题一个道理存 localStorage 而不是库里：它是这台机器的显示偏好，换台机器不该被带走，
@@ -652,14 +649,6 @@ function createThemePane() {
     type: 'button', role: 'switch', 'aria-checked': String(saved()), 'aria-label': t('settings.theme.reduceAria'),
     onclick: () => { setMotion(!saved()); paint(); },
   });
-
-  /* 哪一路在起作用要说清楚：应用开关关掉不等于系统那一档也关了（那就还是减弱的） */
-  const motionLine = () => {
-    if (!reduce()) return t('settings.theme.motionAll');
-    if (saved() && osReduce()) return t('settings.theme.motionBoth');
-    if (saved()) return t('settings.theme.motionSelf');
-    return t('settings.theme.motionOs');
-  };
 
   function paint() {
     const cur = mode();
@@ -677,19 +666,13 @@ function createThemePane() {
       text: t(key), onclick: () => { apply(k); paint(); },
     })));
     sw.setAttribute('aria-checked', String(saved()));
-    const name = t(resolved() === 'dark' ? 'theme.ink' : 'theme.paper');
-    fill(now,
-      el('p.muted', {
-        text: cur === 'system' ? t('settings.theme.effectiveSys', { mode: name }) : t('settings.theme.effectiveFixed', { mode: name }),
-      }),
-      el('p.muted', { text: motionLine() }));
   }
 
   /* 界面语言存 app_settings 而不是 localStorage：它是这个工作台的偏好，换机器、重装都该带着走。
      切换走整体重载——视图是启动时一次建好的，逐个重建的代价比整体重载高得多；
      重载之前把在飞的笔迹与参数冲掉（beforeSwitch 那条注册链），不然用户刚涂的就跟着页面一起没了。 */
   const langRow = el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
-  const langLine = el('p.muted', { text: t('settings.appearance.langTip') });
+  const langLine = el('p.muted');
   function paintLang() {
     const cur = getLang();
     fill(langRow, ...[['zh', 'settings.appearance.langZh'], ['en', 'settings.appearance.langEn']].map(([k, key]) => el('button.btn.btn--sm', {
@@ -706,7 +689,7 @@ function createThemePane() {
       location.reload();
     } catch (e) {
       toastErr(t('settings.theme.langFail'), e.message || String(e));
-      langLine.textContent = t('settings.appearance.langTip');
+      langLine.textContent = '';
       paintLang();
     }
   }
@@ -714,13 +697,10 @@ function createThemePane() {
   const node = el('div.dlg-flow', {},
     el('div', {}, el('h4.dlg-h4', { text: t('settings.theme.styleTitle') }), styleRow,
       el('p.muted', { text: t('settings.theme.styleNote') })),
-    el('div', {}, el('h4.dlg-h4', { text: t('settings.theme.title') }), row,
-      el('p.muted', { text: t('settings.theme.note') })),
+    el('div', {}, el('h4.dlg-h4', { text: t('settings.theme.title') }), row),
     el('div', {}, el('h4.dlg-h4', { text: t('settings.appearance.langName') }), langRow, langLine),
     el('div', {}, el('h4.dlg-h4', { text: t('settings.theme.motionTitle') }),
-      el('div.set__ck', {}, sw, el('span', { text: t('settings.theme.reduceLabel') })),
-      now,
-      el('p.muted', { text: t('settings.theme.motionNote') })));
+      el('div.set__ck', {}, sw, el('span', { text: t('settings.theme.reduceLabel') }))));
   paint();
   paintLang();
   watch(() => paint());

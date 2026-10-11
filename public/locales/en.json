@@ -50,7 +50,6 @@
   "settings": {
     "appearance": {
       "langName": "Language",
-      "langTip": "Switching reloads the interface (unsaved strokes are saved first). Two catalogs, zh and en; a missing key shows up as its own name.",
       "langZh": "简体中文",
       "langEn": "English",
       "langBusy": "Saving…"
@@ -160,7 +159,6 @@
       "readFail": "Can’t read the cloud settings",
       "howTitle": "Generation route",
       "ckLabel": "Use cloud inpainting (tick this on a machine without ComfyUI)",
-      "ckNote": "When ticked, submissions from the retouch page expand the mask, crop a region and send it to the cloud; the result is colour-corrected in the browser and stitched back with multiband blending — untouched pixels stay identical, so there’s no whole-image drift. Steps / CFG / LoRA / seed have no counterpart on this route and the panel hides them; the negative prompt is merged into the positive one. Batch submission doesn’t use the cloud yet.",
       "baseLabel": "base_url (the prefix your provider gives, including /v1)",
       "modelLabel": "Model name",
       "sizeLabel": "Default output long edge (overridable per submission)",
@@ -240,8 +238,7 @@
       "pickTitle": "Pick a folder for exported images",
       "noDialog": "The folder picker didn’t open",
       "browse": "Browse…",
-      "saveCheck": "Save & verify",
-      "note": "“Export” on the retouch page copies the current result here as `originalname_#id.png`, without going through the browser download; a missing folder is created. Writability is probed on every export, so an unplugged drive fails on the spot."
+      "saveCheck": "Save & verify"
     },
     "image": {
       "curLevel": "Current editing level",
@@ -314,15 +311,7 @@
       "glass": "Glass · UI v2",
       "glassTip": "Neutral surfaces, rounded cards and soft shadows",
       "styleNote": "Combine either style with any color mode. Your choice is saved on this device.",
-      "note": "Only the window, lists and panels change. The band around the canvas stays a neutral dark — judging colour needs a stable surround, so switching themes never pushes the photo warm or cool.",
       "motionTitle": "Motion",
-      "motionAll": "Motion: full (canvas inertia, page fades and theme crossfade are on)",
-      "motionBoth": "Motion: reduced (this switch and the system’s “reduce motion” are both on)",
-      "motionSelf": "Motion: reduced (this switch)",
-      "motionOs": "Motion: reduced (from the system’s “reduce motion” preference; leave this off to follow only the system)",
-      "effectiveSys": "In effect: {mode} (follows the system; changing its appearance switches immediately)",
-      "effectiveFixed": "In effect: {mode} (fixed, ignores the system)",
-      "motionNote": "This is the same setting as the system’s “reduce motion”: either one on makes everything instant here. While on, theme switching has no crossfade (there was never one to keep), and the base colour still changes immediately.",
       "langFail": "The language wasn’t saved"
     },
     "about": {
@@ -532,7 +521,6 @@
     "needName": "Give it a name first",
     "emptyTitle": "Nothing in the body",
     "emptyBody": "A phrase has to add something to the prompt",
-    "intro": "Tap a chip to merge its sentence into the positive prompt, tap again to remove it — the rest of what you wrote stays. Ten defaults to start with; keep one chip to one target state.",
     "newOne": "New phrase",
     "count": "{n} phrases",
     "noneYet": "No phrases yet. Add one you use often and it will live in the right-hand column.",
