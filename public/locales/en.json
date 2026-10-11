@@ -346,6 +346,7 @@
       "reload": "Reload",
       "noBrowser": "Couldn’t open the system browser",
       "cCrates": "axum · tokio · rusqlite · image · imageproc · fast_image_resize · reqwest · rust-embed",
+      "cTauri": "Tauri 2 desktop shell",
       "cMls": "moving-least-squares (geometry warp math)",
       "cFont": "Noto Serif SC interface font"
     }
@@ -379,8 +380,11 @@
     "stitch": "Returning image"
   },
   "desktop": {
-    "needDesktop": "This step needs the desktop app and is not available in the browser page",
-    "needFolder": "The browser page cannot open a system folder dialog; paste the path instead"
+    "needDesktop": "This step needs the desktop shell: open Synco, or start the local service and use the browser page",
+    "needFolder": "The desktop shell is required to open a system folder dialog",
+    "maximize": "Maximize",
+    "minimize": "Minimize",
+    "restore": "Restore"
   },
   "film": {
     "aria": "Project images",

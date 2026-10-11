@@ -3,6 +3,7 @@
 import { el, $, $$, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { api } from '../../core/api.js';
+import { mountWindowControls } from '../../core/desktop.js';
 import { go } from '../../core/router.js';
 import { createViewSession } from '../../core/viewSession.js';
 import { store, loadProject, saveSettings, stateOf, toggleSel, selectWhere, invertSel, clearSel, touchImage, diffSettings, defaultsFromCfg, settingsFromPreset, setJob, isCloud, effMode, patchSettings, cloudPrompt } from '../../state.js';
@@ -131,6 +132,7 @@ function buildShell() {
         el('button', { type: 'button', text: t('crumb.project'), onclick: goBack }),
         el('button.is-on', { type: 'button', text: t('crumb.editor'), disabled: true }))),
     topRight);
+  mountWindowControls(topRight);
 
   const rail = el('div.ed-rail', {},
     railBtn('pre', 'layers', 'ed.railHist', true, () => toggleCol('no-pre', 'pre')),
