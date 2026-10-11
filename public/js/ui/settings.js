@@ -836,10 +836,13 @@ export function settingsModal(section = 'backend') {
     },
   })));
   nav.querySelector('.is-on').click();
+  // 新 UI（玻璃）里设置是"工作区内的一层页面"：只能靠右上角 ❌ 退出——
+  // 遮罩点击、Esc 与底部"关闭"按钮都不产生关闭（用户规范）；杂志外观维持原默契。
+  const glass = document.documentElement.dataset.appearance === 'glass';
   const m = modal({
-    title: t('shell.settings'), wide: true,
+    title: t('shell.settings'), wide: true, lockClose: glass,
     body: el('div.set', {}, nav, pane),
-    actions: [{ label: t('common.close'), kind: 'ghost' }],
+    actions: glass ? [] : [{ label: t('common.close'), kind: 'ghost' }],
     onClose: () => { if (previousFocus?.isConnected) previousFocus.focus(); },
   });
   m.node.classList.add('settings-workspace');
