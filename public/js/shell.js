@@ -131,19 +131,26 @@ export function renderRecent(projects) {
   )));
 }
 
-/** 左栏底部：设置入口（当前后端）+ 项目/图片总量 + 教程位 */
+/** 左栏底部：修图流程小票 + 项目/图片总量 + 设置位（大卡、垫底）。
+    两颗入口的位次与大小是用户定的：设置常驻最大最下面，教程收成一行小票。 */
 export function renderRailFoot({ projects = 0, images = 0, masked = 0 } = {}) {
-  const comfy = store.peek('comfy') || t('shell.comfyOff');
+  const comfy = store.peek('comfy');
   fill($('#railFoot'),
-    el('button.rail__comfy', { type: 'button', 'data-tip': t('shell.footTip'), title: t('shell.comfyEntry', { host: comfy }), onclick: () => hooks.onBackends?.() },
-      el('span.dot', { class: `dot ${store.peek('comfy') ? 'dot--done' : 'dot--err'}` }),
-      el('span.nowrap', { text: t('shell.comfyEntry', { host: comfy.replace(/^https?:\/\//, '') }) })),
+    el('button.rail__comfy', {
+      type: 'button', 'data-tip': t('shell.guideSub'), title: t('shell.guideSub'),
+      onclick: () => hooks.onGuide?.(),
+      html: icon('book', { cls: 'icon icon--sm' }) + `<span class="nowrap">${t('shell.guideTitle')}</span>`,
+    }),
     el('div.status-line', {},
       el('span.dot', { class: `dot ${masked ? 'dot--mask' : ''}` }),
       el('span', { text: t('shell.statsLine', { projects, images }) })),
-    el('button.promo', { type: 'button', title: t('shell.guideTitle'), onclick: () => hooks.onGuide?.() },
-      el('span.promo__ico', { html: icon('book', { cls: 'icon' }) }),
-      el('span', {}, el('b', { text: t('shell.guideTitle') }), el('span', { text: t('shell.guideSub') }))),
+    el('button.promo', { type: 'button', 'data-tip': t('shell.footTip'), title: t('shell.settingsTip'), onclick: () => hooks.onBackends?.() },
+      el('span.promo__ico', { html: icon('sliders', { cls: 'icon' }) }),
+      el('span', {},
+        el('b', { text: t('shell.settings') }),
+        el('span', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+          el('span.dot', { class: `dot ${comfy ? 'dot--done' : 'dot--err'}` }),
+          el('span', { text: (comfy || t('shell.comfyOff')).replace(/^https?:\/\//, '') })))),
   );
 }
 

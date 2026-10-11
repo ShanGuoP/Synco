@@ -6,7 +6,7 @@ import { t } from '../core/i18n.js';
 
 let openStack = [];
 
-function mount({ title, body, actions = [], wide, onClose }) {
+function mount({ title, body, actions = [], wide, onClose, lockClose }) {
   const mask = el('div.mask');
   const close = reason => {
     if (!mask.isConnected) return;
@@ -36,7 +36,11 @@ function mount({ title, body, actions = [], wide, onClose }) {
   );
 
   const onKey = e => {
-    if (e.key === 'Escape') { e.stopPropagation(); close('esc'); }
+    /* lockClose（设置工作区在新 UI 下用）：Esc 也不产生关闭，退出只剩 ❌ 一条路 */
+    if (e.key === 'Escape') {
+      if (lockClose) return;
+      e.stopPropagation(); close('esc');
+    }
     else if (e.key === 'Enter' && actions.length) {
       const primary = actions.find(a => a.kind === 'primary' || a.kind === 'accent' || a.kind === 'danger');
       /* 焦点停在别的按钮上（最容易是「取消」）时，回车就该激活那个按钮本身：
@@ -51,7 +55,9 @@ function mount({ title, body, actions = [], wide, onClose }) {
   };
 
   mask.append(dialog);
-  mask.addEventListener('pointerdown', e => { if (e.target === mask) close('backdrop'); });
+  /* 点遮罩关是普通对话框的默契；lockClose 的层（设置工作区）盖满自己的区域，
+     不给"点到旁边就把层带走了"这条路 */
+  if (!lockClose) mask.addEventListener('pointerdown', e => { if (e.target === mask) close('backdrop'); });
   document.addEventListener('keydown', onKey, true);
   document.body.style.setProperty('overflow', 'hidden');
   document.body.append(mask);
