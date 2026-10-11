@@ -1,9 +1,8 @@
 //! 内容安全策略：界面所有字节都由本机服务发出，页面里没有一条跨源脚本，所以能收到很紧的一档。
 //!
-//! 这层主要是给桌面壳垫的纵深。壳开着 `withGlobalTauri`（`core/desktop.js` 读 `window.__TAURI__`），
-//! 并给 `http://127.0.0.1:*` 这个远程域授了 copy-data-to / set-data-dir / restart-app / open-url：
-//! 一旦某个 `html:` 插值漏了、把用户文本原样发进 DOM，没有 CSP 那就是整目录（含明文 key 与原片）
-//! 被人复制走；有了 CSP，脚本只能在同源下跑，注入进来的那段什么都干不成。
+//! 这层是给浏览器页面垫的纵深：一旦某个 `html:` 插值漏了、把用户文本原样发进 DOM，
+//! 没有 CSP 那就是整目录（含明文 key 与原片）被人复制走；有了 CSP，
+//! 脚本只能在同源下跑，注入进来的那段什么都干不成。
 //!
 //! 逐字符核过的：前端没有内联 `<script>`（首帧那次上色挪到了 `js/core/theme-boot.js`），
 //! 没有 `eval`/`new Function`，没有内联 `style=` 属性（只有 CSSOM 的 `element.style.x=`，那不受 CSP 管），

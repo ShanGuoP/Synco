@@ -47,7 +47,6 @@ const DONE_I18N_RS = [
   'crates/px-core/src/buffer.rs', 'crates/stitch-core/src/color.rs', 'crates/stitch-core/src/geom.rs',
   'crates/stitch-core/src/lib.rs', 'crates/stitch-core/src/mask.rs', 'crates/px-core/src/par.rs',
   'crates/stitch-core/src/pyramid.rs', 'crates/px-core/src/resize.rs', 'crates/stitch-core/src/stitch.rs',
-  'src-tauri/build.rs', 'src-tauri/src/main.rs',
 ];
 
 // 控制台/日志/panic 通道：写给坐在机器前的人，界面读的是 code，两条路不会互相冒充，

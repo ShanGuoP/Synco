@@ -29,11 +29,6 @@ Synco 的发行二进制里包含下列第三方组件的**编译产物**。这�
 没有被改动、没有被复制源码进本仓库，因此只要求那两个文件本身继续留在 MPL-2.0 下，
 不影响本项目整体按 Apache-2.0 发布。源码与许可证见上面的仓库地址（同时镜像在 crates.io）。
 
-## 桌面壳
-
-[Tauri 2](https://tauri.app)（`tauri` 2.12.1 及其 build/codegen/macros/plugin 系列）— Apache-2.0 OR MIT。
-含单实例插件与窗口/对话框插件。
-
 ## 字体
 
 `public/fonts/NotoSerifSC-VF.woff2` 是 Google 的 **Noto Serif SC（Source Han Serif 派生）**，

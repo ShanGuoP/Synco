@@ -73,7 +73,6 @@ const walkRs = dir => {
   }
 };
 walkRs(path.join(ROOT, 'crates'));
-walkRs(path.join(ROOT, 'src-tauri'));
 // 后端只算代码行：文档注释里举的例子（`bad_args("srv.adjust.clamped", …)`）不是真引用
 const rsCode = rsFiles.map(f => codeLines(f).map(x => x.line).join('\n')).join('\n');
 const hay = sources.map(f => fs.readFileSync(f, 'utf8')).join('\n') + '\n' + fs.readFileSync(html, 'utf8') + '\n' + rsCode;
@@ -146,7 +145,7 @@ for (const f of rsFiles) {
 }
 rsRows.sort((a, b) => b.n - a.n);
 const rsTotal = rsRows.reduce((s, r) => s + r.n, 0);
-console.log(`\n后端待搬（界面文案那一路，crates/ + src-tauri/）：${rsRows.length} 个文件 · ${rsTotal} 行中文字面量`);
+console.log(`\n后端待搬（界面文案那一路，crates/）：${rsRows.length} 个文件 · ${rsTotal} 行中文字面量`);
 for (const r of rsRows) console.log(`  ${String(r.n).padStart(4)} 行  ${r.file}  (首处 :${r.first})`);
 if (!rsRows.length) console.log(`  ✓ 后端界面文案已全部交给字典（账本 ${DONE_I18N_RS.length} 个文件；日志与运维菜单按通道另算）`);
 

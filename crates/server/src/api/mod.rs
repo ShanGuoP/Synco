@@ -22,7 +22,7 @@ use axum::Router;
 pub use common::BODY_LIMIT;
 
 async fn version_get(State(ctx): State<Shared>) -> Response {
-    // 桌面壳与「关于」分区都要看：这次跑的库在哪、界面是从盘上还是从 exe 里取的
+    // 「关于」分区要看：这次跑的库在哪、界面是从盘上还是从 exe 里取的
     let v = serde_json::to_value(crate::version::info().clone()).unwrap_or_else(|_| serde_json::json!({}));
     let mut o = v.as_object().cloned().unwrap_or_default();
     let show = |p: &std::path::Path| serde_json::Value::String(crate::util::neat_path(p));

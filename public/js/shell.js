@@ -4,7 +4,6 @@ import { el, $, $$, fill } from './core/dom.js';
 import { icon } from './core/icons.js';
 import { go } from './core/router.js';
 import { store, statOf } from './state.js';
-import { mountWindowControls } from './core/desktop.js';
 import { t } from './core/i18n.js';
 import { api } from './core/api.js';
 import { pendingCount, onTick } from './gen.js';
@@ -40,9 +39,6 @@ export function initShell(opt) {
     el('button.btn.btn--ghost.btn--icon.btn--sm', { 'aria-label': t('shell.settings'), 'data-tip': t('shell.settingsTip'), html: icon('sliders', { cls: 'icon icon--sm' }), onclick: () => hooks.onBackends?.() }),
     el('button.btn.btn--ghost.btn--icon.btn--sm', { 'aria-label': t('shell.helpAria'), 'data-tip': t('shell.helpTip'), html: icon('keyboard', { cls: 'icon icon--sm' }), onclick: () => hooks.onHelp?.() }),
   );
-  // 无边框之后窗口控件得页面自己画；浏览器版里它是空操作
-  mountWindowControls($('#topRight'));
-
   $('#searchInput').addEventListener('input', e => hooks.onSearch?.(e.target.value));
   initStatusBar();
   document.addEventListener('keydown', e => {

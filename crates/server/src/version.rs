@@ -19,8 +19,8 @@ pub struct BuildInfo {
 fn git(args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
-    // 发布态的桌面壳是 GUI 子系统进程，没有控制台；在这种进程里 spawn git.exe 这种
-    // 控制台程序，Windows 会给它新开一个控制台窗口——就是"打开软件黑框一闪"。
+    // 若被 GUI 程序拉起（比如将来的 Flutter 宿主），进程里没有控制台；这时 spawn git.exe
+    // 这类控制台程序，Windows 会新开一个控制台窗口——就是"打开软件黑框一闪"。
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

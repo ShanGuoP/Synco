@@ -79,7 +79,7 @@ impl Ctx {
     /// 这种"参数里再取一次锁"的写法会当场死锁（对拍第一轮就被这条卡住），要先把值取成局部变量。
     ///
     /// 收不到 `pub(in crate::repo)`——可见性只能往祖先收，不能限给兄弟模块，所以只能到 `pub(crate)`：
-    /// 壳层（`src-tauri`）已经摸不到连接，crate 内"绕过执行器直接握锁"由 R1 盯着。
+    /// crate 内"绕过执行器直接握锁"由 R1 盯着。
     /// 编译期真正拦住的是另一头：`repo::one/all/run/insert_id` 与 SQL 值构造器都是
     /// `pub(in crate::repo)`，出了 DAO 拼不出一条能跑的 SQL。
     pub(crate) fn db(&self) -> std::sync::MutexGuard<'_, Connection> {

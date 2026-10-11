@@ -30,7 +30,7 @@ fn exe_dir() -> PathBuf {
     env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())).unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// 同目录的服务端 exe；打包态就是 synco-desktop.exe 自己
+/// 同目录的服务端 exe；`synco-desktop.exe` 是 Tauri 壳时代的名字，留着兼容旧安装
 fn server_exe() -> PathBuf {
     let d = exe_dir();
     for name in ["synco.exe", "Synco.exe", "synco-desktop.exe"] {

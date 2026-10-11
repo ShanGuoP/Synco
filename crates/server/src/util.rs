@@ -284,7 +284,7 @@ pub fn stem_of(p: &str) -> String {
 }
 
 /// 同步重活（整文件读写、全分辨率解码与重编码）一律走这里，别压在 async handler 上：
-/// 桌面壳与服务同进程，一个 tokio worker 被占住的表现是整个窗口卡住，不是某个请求慢。
+/// 界面轮询与接口共用这个进程，一个 tokio worker 被占住的表现是整站跟着卡，不是某个请求慢。
 ///
 /// 闭包里还能 `tokio::spawn`——阻塞池线程建起来时就 `rt.enter()` 过，runtime 上下文在。
 pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> crate::error::Result<T> + Send + 'static) -> crate::error::Result<T> {

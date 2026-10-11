@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/px-core", "crates/stitch-core", "crates/photoedit-core", "crates/server", "src-tauri"]
+members = ["crates/px-core", "crates/stitch-core", "crates/photoedit-core", "crates/server"]
 
 [workspace.package]
 version = "0.3.2"
@@ -11,5 +11,5 @@ rust-version = "1.99"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-# 不写 panic = "abort"：服务与桌面壳同进程，一次 abort 会把用户在飞的云端任务一起带走；
+# 不写 panic = "abort"：服务是唯一进程，一次 abort 会把用户在飞的云端任务一起带走；
 # 留着 unwind 让单条请求失败、进程活着

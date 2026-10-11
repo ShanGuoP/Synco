@@ -1,7 +1,7 @@
-//! Synco 服务端库：把 `main.rs` 的启动流程暴露成可被桌面壳内嵌的一次调用。
+//! Synco 服务端库：把 `main.rs` 的启动流程暴露成一次 `serve()` 调用。
 //!
-//! 桌面形态（M4）要求单文件分发：同一个 axum 应用跑在 Tauri 进程的 tokio 里，
-//! 端口与数据目录由调用方决定，其余语义与命令行版完全一致。
+//! 端口与数据目录由调用方决定，其余语义与命令行版完全一致；之后 Flutter 宿主
+//! （见 docs/Flutter前端重写方案-2026-10-11.md）也以受控握手接手同样的启动。
 
 pub mod api;
 pub mod error;
@@ -31,7 +31,6 @@ use web::{files, guard};
 /// 开发态退回仓库根的 `data/`；发布态退回 **exe 同目录的 `data/`**——`env!` 是编译期宏，
 /// 把它留在发布路径里等于把构建机的绝对路径烧进二进制，换台机器要么写失败，
 /// 要么在别人的盘上凭空建出 `D:\AI\qwen\mask_demo\data`。
-/// 桌面壳不走这条：它按"记过的 > 就近老库 > 绿色目录 > LOCALAPPDATA"自己算完再传进来。
 pub fn data_dir() -> PathBuf {
     if let Some(p) = env::var_os("SYNCO_DATA") {
         return PathBuf::from(p);
@@ -115,11 +114,11 @@ fn sweep_legacy_runtime_files(data: &Path) {
 pub struct Boot {
     pub port: u16,
     pub ctx: Shared,
-    /// axum 的监听任务；桌面壳 join 它，命令行版直接等它跑完
+    /// axum 的监听任务；嵌入方 join 它，命令行版直接等它跑完
     pub server: tokio::task::JoinHandle<()>,
 }
 
-/// 跑在桌面壳里吗——命令行版永远是 false，由桌面壳在启动时置一下。
+/// 旧桌面壳（Tauri）用它区分发布形态，壳退役后恒为 false，字段保留给 /api/version 的读者。
 /// 「关于」分区要据此说清界面是从盘上还是从 exe 里取的。
 pub static DESKTOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -135,7 +134,7 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     util::blocking(move || service::queue::recover_files(&recovery_ctx)).await?;
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), want);
-    // 端口被占就退随机：桌面壳拿的是 Boot.port，跟着走就行
+    // 端口被占就退随机：实际端口以 `Boot.port` 为准
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) if want != 0 => {

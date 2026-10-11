@@ -740,7 +740,6 @@ const REPO = 'https://github.com/ShanGuoP/Synco';
    第一列存键名：这一格是模块级常量，装载时字典还没到。 */
 const CREDITS = [
   ['settings.about.cCrates', 'MIT / Apache-2.0'],
-  ['settings.about.cTauri', 'MIT / Apache-2.0'],
   ['settings.about.cMls', 'MPL-2.0', 'https://github.com/mpizenberg/rust_mls'],
   ['settings.about.cFont', 'SIL OFL 1.1', 'https://fonts.google.com/noto/specimen/Noto+Serif+SC'],
 ];

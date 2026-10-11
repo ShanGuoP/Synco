@@ -102,7 +102,7 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     // 没动过滑杆时两条都原样回文件字节与原路径，链路与 0.2.1 逐字节一致。
     // 涂抹层存的是 proxy 分辨率，工作流里 DrawMaskOnImage 又要和照片同幅：上采样与几何段都在服务侧做完
     // （见 adjust::submit_mask——照片过了几何段而遮罩没过，圈到的就是另一块地方）。
-    // 读原图与这两步都是全分辨率的活，整段过阻塞池：压在 worker 上时桌面壳的窗口会一起卡住
+    // 读原图与这两步都是全分辨率的活，整段过阻塞池：压在 worker 上时整站轮询会一起卡住
     let (photo_bytes, mask_bytes, sent_rel) = {
         let ctx2 = ctx.clone();
         let img = i.clone();

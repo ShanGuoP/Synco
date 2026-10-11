@@ -139,16 +139,6 @@ a:hover { color: var(--spot-txt); }
 .topbar__zone--c { justify-content: center; }
 .topbar__zone--r { justify-content: flex-end; }
 
-/* 无边框窗口的三颗键：顶栏右端。hover 用墨线底色，关闭用专色 */
-.wctl { display: flex; align-items: center; gap: 2px; margin-left: var(--s-2); }
-.wctl__b {
-  width: 30px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: var(--r-2); background: transparent; color: var(--txt-2); cursor: default;
-}
-.wctl__b:hover { background: var(--line-hi); color: var(--txt); }
-.wctl__b--close:hover { background: var(--spot); color: var(--on-spot); }
-.wctl__b .icon { width: 12px; height: 12px; }
-
 /* 眉题（running head）：当前页名用衬线，层级用小字 */
 .crumb { display: flex; align-items: baseline; gap: var(--s-2); font-size: var(--f-xs); letter-spacing: .8px; color: var(--txt-3); min-width: 0; }
 .crumb b { color: var(--txt); font-family: var(--f-display); font-weight: 700; font-size: var(--f-lg); letter-spacing: .3px; }

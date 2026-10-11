@@ -316,7 +316,7 @@ pub fn spawn_derive(ctx: &Shared, img: Image) {
     tokio::spawn(async move {
         let Ok(_slot) = ctx.slots.clone().acquire_owned().await else { return };
         // derive 里是一次全分辨率解码加两档重编码，秒级 CPU：留在当前 worker 上等于
-        // 把一整条连接按住（桌面壳与服务同进程，窗口会跟着卡），所以要过一道阻塞池
+        // 把一整条连接按住，其他请求跟着排队，所以要过一道阻塞池
         let ran = util::blocking(move || derive(&ctx, &img)).await;
         // 补不出来只记一行：原图被手动删过是常态，前端回退 orig_url 就行
         if let Err(e) = ran {

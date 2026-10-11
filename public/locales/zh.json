@@ -346,7 +346,6 @@
       "reload": "重新读取",
       "noBrowser": "叫不动系统浏览器",
       "cCrates": "axum · tokio · rusqlite · image · imageproc · fast_image_resize · reqwest · rust-embed",
-      "cTauri": "Tauri 2 桌面壳",
       "cMls": "moving-least-squares（几何形变数学）",
       "cFont": "Noto Serif SC 界面字体"
     }
@@ -380,11 +379,8 @@
     "stitch": "回传成图"
   },
   "desktop": {
-    "needDesktop": "这一步要桌面版：用 Synco 打开，或启动本地服务后用浏览器页面",
-    "needFolder": "要桌面版才能弹系统目录框",
-    "maximize": "最大化",
-    "minimize": "最小化",
-    "restore": "还原"
+    "needDesktop": "这一步需要桌面应用支持，浏览器页面暂不可用",
+    "needFolder": "浏览器页面弹不了系统目录框，请直接粘贴路径"
   },
   "film": {
     "aria": "项目图片",

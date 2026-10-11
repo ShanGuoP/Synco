@@ -130,7 +130,6 @@ html[data-appearance="glass"] .editor {
 }
 html[data-appearance="glass"] .ed-top { grid-template-columns: minmax(0, 1fr) auto; }
 html[data-appearance="glass"] .ed-top__c { display: none; }
-html[data-appearance="glass"] .ed-top__r .wctl { display: none; }
 html[data-appearance="glass"] .ed-params-btn { display: inline-flex; }
 html[data-appearance="glass"] :is(.editor > .ed-tools, .cv > .ed-tools) {
   grid-area: auto; position: absolute; left: var(--s-3); right: var(--s-3); bottom: calc(var(--film-h, 0px) + var(--s-8));

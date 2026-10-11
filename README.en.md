@@ -18,7 +18,7 @@ Most of the Rust code was written by Qwen-3.8-Flash, then cross-audited by GLM-5
 
 - **Fix what you painted**: makeup, hair, blemishes, clothing detail, deleting a passer-by in the frame — the rest of the image doesn't move
 - **Two ways to get pixels**: local ComfyUI (free, offline, your own weights) or a cloud image API (no GPU, billed per image)
-- **Batch**: submit many images from one project at once; they queue and run at the concurrency you set. You can switch to another project and keep painting while they run, and interrupt an individual image. Closing the window quits the app; whatever hasn't finished is re-queued on next launch
+- **Batch**: submit many images from one project at once; they queue and run at the concurrency you set. You can switch to another project and keep painting while they run, and interrupt an individual image. Quitting the service process is what quits the app (closing the browser tab leaves it running); whatever hasn't finished is re-queued on next launch
 - **Output at original resolution**: the viewer shows a scaled-down level for smoothness, but repainting and stitching happen at full resolution — a 24MP photo doesn't lose detail because painting was easier on a smaller canvas
 - **Keep editing the result**: any result can be "Save as new image" and masked again, or "Run again with these settings" to pull them back into the right-hand panel
 - **Useful without a backend** (since 0.3): crop & straighten (tap an aspect ratio and the frame appears; drag it, then "✔ Crop this" to commit — 90° steps are lossless, ±15° fine rotation gets expanded edges, plus flips), manual liquify (four brushes: push / pinch / enlarge / restore), ten colour sliders + built-in presets + `.cube` LUTs (drop a `.cube` file into `luts/` in your data folder and it shows up in the dropdown), plus a Beauty group of seven sliders — smoothing, texture retention, blemishes, even tone, brightening, de-shine, sharpening (can be limited to the area you painted) — all computed on your machine, no ComfyUI call, nothing uploaded
@@ -38,13 +38,11 @@ Most of the Rust code was written by Qwen-3.8-Flash, then cross-audited by GLM-5
 
 ## Download and install
 
-Grab **`Synco_x.x.x_x64-setup.exe`** from [Releases](https://github.com/ShanGuoP/Synco/releases) and double-click it.
-It installs into your user profile, needs no admin rights, and the installer wizard itself is Simplified-Chinese only.
-Launch **Synco** from the Start menu afterwards. The interface starts in Chinese; English is a switch inside the app —
-Settings → Appearance → Language. That's the program's language, not the installer's.
-
-> If Releases is still empty, see [Building from source](#building-from-source) below.
-> If the WebView2 runtime is missing, the installer pulls it from the internet.
+The desktop installer is on hold for now: the window host is migrating from Tauri to Flutter
+(plan in `docs/Flutter前端重写方案-2026-10-11.md`, Chinese). Until that lands, the entry point is the
+**local service + a browser page** — see [Building from source](#building-from-source) below.
+`cargo build` produces `synco.exe`; run it and open the `SYNCO_URL` address it prints. The interface
+starts in Chinese; English is a switch inside the app under Settings → Appearance → Language.
 
 ---
 
@@ -123,15 +121,17 @@ milliseconds and whether it can list models. You can also change that one image'
 ### System requirements
 
 - Windows 10 / 11, 64-bit
-- WebView2 runtime (built into Windows 11; on Windows 10 it's usually already there with Edge)
+- Any modern browser (Edge / Chrome / Firefox) as the interface
 - Route A additionally needs a GPU that can run Qwen-Image 2.1
 
 ---
 
 ## First launch
 
-1. **Choose your data folder** — on the very first start this page opens by itself. Originals, masks, results and
-   the database all live here; point it at any drive. You may need one restart afterwards.
+1. **Data folder** — by default it sits next to the exe in `data\` (in a dev tree, the repo root's `data\`).
+   Originals, masks, results and the database all live here. Point it elsewhere with the `SYNCO_DATA`
+   environment variable; the in-app folder picker waits for the desktop host to return
+   (Settings → Data folder says so).
 2. **Connect an image engine** — see the two routes above; either one is enough (or configure both).
 3. **Create a project, import photos** — the "Photo import" card on the home page: drop files on it, or press
    "Import photos" and multi-select. Leave the project name empty and it names itself after the date.
@@ -197,10 +197,10 @@ never handed over as the original.
 
 ## Where your stuff lives
 
-By default it travels with the program: `<app folder>\data\`. Copy the whole folder to a USB stick or another
-machine and the library comes with it (portable mode). Installed somewhere without write permission —
-`Program Files`, say — it falls back to `%LOCALAPPDATA%\Synco\data`.
-Settings → Data folder can point anywhere, and there's "Copy the data to a new folder…".
+By default it travels with the exe: `<exe folder>\data\`. Copy the whole folder to a USB stick or another
+machine and the library comes with it (portable mode). Somewhere without write permission, or anywhere else
+you prefer — set the `SYNCO_DATA` environment variable. The graphical folder switch and
+"Copy the data to a new folder…" wait for the desktop host to return; the browser page says so on that pane.
 
 Inside it: `app.db` is the database, `projects/<id>/` holds originals, masks, results and every thumbnail level,
 `runtime/` holds the lock and logs (everything process-private is kept in there, not spread across the root),
@@ -231,18 +231,20 @@ or just copy the whole program folder across.
 skipped, and it tells you how many.
 
 **Port 7861 is taken — now what?**
-Nothing to do: it picks a random port at startup and the window opens on the right address. The program runs a local
-service bound to **localhost only**; the window is a shell over it. Set `SYNCO_PORT` if you want a fixed port.
+Nothing to do: it picks a random port at startup and the `SYNCO_URL` in the console banner is the right address.
+The program runs a local service bound to **localhost only**, and the browser page is its entry point.
+Set `SYNCO_PORT` if you want a fixed port.
 
-**If I close the window, is the running job lost?**
-Closing the window quits the app and the queue stops with it, but unfinished work isn't lost — it's re-queued on the
-next launch. **The one thing that can't be recovered is the cloud request already in flight**: that image stays in the
-interrupted state and you re-submit it. Mind that the dropped request may already have been billed. Going out? Leave
-the program running.
+**If I close the browser tab, is the running job lost?**
+Closing the tab changes nothing: the service keeps running inside the `synco.exe` process and the queue keeps
+walking. To stop the whole program, end that process (`Ctrl+C` or kill it) — unfinished work isn't lost, it's
+re-queued on the next launch. **The one thing that can't be recovered is the cloud request already in flight**:
+that image stays in the interrupted state and you re-submit it. Mind that the dropped request may already have
+been billed. Going out? Leave the program running.
 
-**Does double-clicking twice open two windows?**
-No — the second launch brings the running window to the front. Deliberate: two processes writing the same `app.db`
-corrupts the library.
+**Does double-clicking twice open two instances?**
+No. The data folder carries an instance lock (`runtime/instance.lock`) and the second launch is refused with an
+error — deliberate: two processes writing the same `app.db` corrupts the library.
 
 **I painted to the edge of the frame — will the original show through when it's pasted back?**
 No. The feather weights near the border are computed with edge replication, so the last row/column is still a
@@ -283,8 +285,7 @@ Needs Rust 1.99 or newer (`rust-version` is declared in `Cargo.toml`).
 ```bash
 git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
-cargo build --release        # gives you synco.exe / synco-tools.exe / synco-desktop.exe
-npx @tauri-apps/cli build    # gives you the NSIS installer target/release/bundle/nsis/Synco_<version>-setup.exe (the version comes from Cargo.toml)
+cargo build --release        # gives you synco.exe / synco-tools.exe
 ```
 
 Just want a look, no packaging:
@@ -306,7 +307,7 @@ node tools/lint-layers.js    # eight layering rules, incl. "files that hand copy
 node tools/i18n-check.js     # zh/en key parity and how much interface text is still untranslated
 ```
 
-`synco-tools.exe` only exists in a source build (it isn't in the installer). Run with no arguments and it's an
+`synco-tools.exe` is the ops helper. Run with no arguments and it's an
 interactive menu with live status: start/stop the local service, backfill derived levels, lock weight fingerprints,
 check a ComfyUI folder, switch production — every step asks before it acts.
 
@@ -350,10 +351,8 @@ the interface doesn't depend on any CDN.
 Synco stands on these open-source projects. The ones below are **actually in the shipped build**, grouped by the work
 they did; versions and per-item licences are in [NOTICE](NOTICE.md).
 
-**Desktop shell and interface**
+**Interface**
 
-- [Tauri 2](https://tauri.app) (with the single-instance / dialog plugins) — service, window and WebView2 in one exe,
-  plus "the second double-click brings the running window forward"
 - [rust-embed](https://github.com/pyros2097/rust-embed) — the whole frontend goes into the exe, so it opens offline anywhere
 - **Noto Serif SC / 思源宋体** (SIL OFL 1.1) — the Chinese serif used for headings and body text; upstream and licence in
   [`public/fonts/OFL.txt`](public/fonts/OFL.txt)

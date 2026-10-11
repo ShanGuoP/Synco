@@ -109,7 +109,7 @@ const RULES = [
   {
     // 后端的账本，与 R6 同一条思路：只钉"已经把文案交给字典的那些文件"。
     // 判据到 #[cfg(test)] 为止——测试里的中文是断言与函数名，不是界面文案，翻它没意义。
-    id: 'R7', title: '已交钥匙的后端文件不许再写中文文案（crates/ + src-tauri/）',
+    id: 'R7', title: '已交钥匙的后端文件不许再写中文文案（crates/）',
     files: () => DONE_I18N_RS.map(p => path.join(ROOT, p)).filter(f => fs.existsSync(f)),
     bans: [['中文文案', /"[^"\n]*[\u4e00-\u9fff]/]],
     // 控制台/日志/panic 的中文不在账上：那三样写给坐在机器前的人，界面读的是 code，
