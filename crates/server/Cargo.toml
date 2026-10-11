@@ -26,4 +26,5 @@ sha2 = "0.11.0"
 stitch-core = { path = "../stitch-core" }
 thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tract-onnx = { version = "0.23.8", default-features = false }
 url = "2.5.8"

@@ -18,7 +18,7 @@ const blankOps = () => ({
   geometry: { crop: null, rotate_deg: 0, flip_h: false, flip_v: false, fill: 'edge' },
   warp: { strokes: [], auto: { face_slim: 0, eye_big: 0, nose_slim: 0, chin: 0 } },
   color: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, temp: 0, tint: 0, saturation: 0, vibrance: 0, clarity: 0, sharpen: 0, preset: null },
-  beauty: { smooth: 0, texture: 0, blemish: 0, even_tone: 0, brighten: 0, de_shine: 0, sharpen: 0, by_mask: false },
+  beauty: { smooth: 0, texture: 0, blemish: 0, even_tone: 0, brighten: 0, de_shine: 0, sharpen: 0, by_mask: false, auto_face: false },
   lut: null,
 });
 
@@ -53,6 +53,9 @@ export function createAdjust(deps) {
   const { layer, poster, stage, viewport, tiles, line, idOf, infoOf, onForked, brushLocked, onFrame } = deps;
 
   let ops = blankOps();
+  let faceAnalysis = null;
+  let faceBusy = false;
+  let imageEpoch = 0;
   let frame = { w: 1, h: 1 };      // 当前底图那张的宽高（= 几何段之后的那个域，成图那一档的尺寸）
   let mode = 'off';               // off | crop | warp
   let seq = 0;                    // 预览序号守卫：晚到的旧响应必须认出自己过期
@@ -139,6 +142,71 @@ export function createAdjust(deps) {
       el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.clearStrokes'), onclick: clearStrokes })),
     el('p.muted', { text: t('ad.warpNote') }));
 
+  const AUTO_KEYS = [['face_slim', 'ad.faceSlim'], ['eye_big', 'ad.eyeBig'], ['nose_slim', 'ad.noseSlim'], ['chin', 'ad.chin']];
+  const AUTO = {};
+  const faceStatus = el('p.muted', { role: 'status', text: t('ad.facePending') });
+  const detectBtn = el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.detectFaces'), onclick: () => detectFaces() });
+  const naturalBtn = el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('ad.naturalShape'), onclick: () => {
+    if (!faceAnalysis?.has_landmarks) return;
+    ops.warp.auto = { face_slim: 20, eye_big: 12, nose_slim: 10, chin: 8 };
+    paintPaints(); touch();
+  } });
+  const suggestions = el('div.chips');
+  const faceBox = el('div', { style: { display: 'grid', gap: '10px' } },
+    faceStatus, el('div.adj-row', {}, detectBtn, naturalBtn),
+    ...AUTO_KEYS.map(([k, label]) => {
+      const ctl = makeProw({ label: t(label), min: -100, max: 100, step: 1, value: 0, tip: t('ad.autoShapeTip'), onChange: v => { ops.warp.auto[k] = v; touch(); } });
+      AUTO[k] = ctl; return ctl.node;
+    }),
+    el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.resetShape'), onclick: () => { ops.warp.auto = blankOps().warp.auto; paintPaints(); touch(); } }),
+    el('span.muted', { text: t('ad.faceScope') }),
+    el('span.muted', { text: t('ad.faceComposition') }), suggestions);
+  function paintFace() {
+    const ready = !faceBusy && !!faceAnalysis?.has_landmarks;
+    detectBtn.disabled = faceBusy;
+    naturalBtn.disabled = !ready;
+    for (const [k] of AUTO_KEYS) AUTO[k].setDisabled(!ready);
+    faceStatus.textContent = faceBusy ? t('ad.faceDetecting') : !faceAnalysis ? t('ad.facePending')
+      : !faceAnalysis.count ? t('ad.faceNone') : !faceAnalysis.has_landmarks ? t('ad.faceSparse', { n: faceAnalysis.count }) : t('ad.faceReady', { n: faceAnalysis.count });
+    fill(suggestions, ...(faceAnalysis?.suggestions || []).map(s => el('button.chip-s', {
+      type: 'button', text: s.ratio, disabled: faceBusy,
+      onclick: () => suggestCrop(s),
+    })));
+  }
+  async function detectFaces() {
+    const id = idOf(), epoch = imageEpoch;
+    if (!id || faceBusy) return;
+    faceBusy = true; paintFace();
+    try {
+      const result = await api.analyzeFaces(id);
+      if (epoch !== imageEpoch || id !== idOf()) return;
+      faceAnalysis = result;
+      // Refresh pixels if analysis changed an active skin mask or shape.
+      if (!isIdentity()) touch();
+    } catch (e) {
+      if (epoch === imageEpoch && id === idOf()) line(t('ad.faceFail', { msg: short(e) }), true);
+    } finally {
+      if (epoch === imageEpoch && id === idOf()) { faceBusy = false; paintFace(); }
+    }
+  }
+  async function suggestCrop(s) {
+    const id = idOf(), epoch = imageEpoch, at = rev;
+    const ratio = Number(s.ratio.split(':')[0]) / Number(s.ratio.split(':')[1]);
+    try {
+      const result = await api.faceCrop(id, ops, ratio);
+      if (epoch !== imageEpoch || id !== idOf() || at !== rev) return;
+      if (mode !== 'crop') await toggleMode('crop');
+      if (epoch !== imageEpoch || id !== idOf() || at !== rev) return;
+      ratioPick = ratio; cropDraft = [...result.crop]; paintCrop(); paintRatio();
+      const group = geoBox.closest('.grp');
+      group.classList.remove('is-collapsed');
+      group.querySelector('.grp__hd').setAttribute('aria-expanded', 'true');
+      cropOk.scrollIntoView({ block: 'nearest' });
+    } catch (e) {
+      if (epoch === imageEpoch && id === idOf()) line(t('ad.faceFail', { msg: short(e) }), true);
+    }
+  }
+
   /* ==================== 调色 + 美颜 ==================== */
   const COLOR = {};
   const colorBox = el('div', { style: { display: 'grid', gap: '10px' } }, ...COLOR_KEYS.map(([k, label, tip]) => {
@@ -158,6 +226,7 @@ export function createAdjust(deps) {
   });
   const BEAUTY = {};
   const maskSw = switchRow(t('ad.byMask'), t('ad.byMaskTip'), v => { ops.beauty.by_mask = v; touch(); });
+  const autoSkinSw = switchRow(t('ad.autoSkin'), t('ad.autoSkinTip'), v => { ops.beauty.auto_face = v; touch(); });
   const beautyBox = el('div', { style: { display: 'grid', gap: '10px' } },
     ...BEAUTY_KEYS.map(([k, label, tip]) => {
       const ctl = makeProw({ label: t(label), min: 0, max: 100, step: 1, value: 0, tip: t(tip), onChange: v => {
@@ -169,13 +238,14 @@ export function createAdjust(deps) {
       BEAUTY[k] = ctl;
       return ctl.node;
     }),
-    maskSw.node,
+    autoSkinSw.node, maskSw.node,
     el('p.muted', { text: t('ad.maskNote') }));
   BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
 
-  const node = el('div', { style: { display: 'grid', gap: '12px' } },
+  const node = el('div.adj-panel', {},
     el('p.muted', { text: t('ad.footNote') }),
-    grp(t('ad.grpGeo'), false, geoBox),
+    grp(t('ad.grpGeo'), true, geoBox),
+    grp(t('ad.grpFace'), false, faceBox),
     grp(t('ad.grpWarp'), true, warpBox),
     grp(t('ad.grpColor'), true, el('div', { style: { display: 'grid', gap: '10px' } },
       el('span.muted', { text: t('ad.presetNote') }), presetChips, lutSel, lutCtl.node, colorBox)),
@@ -197,9 +267,8 @@ export function createAdjust(deps) {
   /* ==================== 参数 ⇄ 界面 ==================== */
   const quad = () => Math.round(ops.geometry.rotate_deg / 90) * 90;
   const geoActive = () => !!(ops.geometry.crop || ops.geometry.rotate_deg || ops.geometry.flip_h || ops.geometry.flip_v);
-  // 一键塑形那排滑杆在 0.3.0 里没有生产者（见 service/face.rs），界面上不摆，参数域里留着
-  const autoQuiet = !ops.warp.auto || Object.values(ops.warp.auto).every(v => !v);
-  const isIdentity = () => !geoActive() && !ops.warp.strokes.length && autoQuiet
+  const autoQuiet = () => !ops.warp.auto || Object.values(ops.warp.auto).every(v => !v);
+  const isIdentity = () => !geoActive() && !ops.warp.strokes.length && autoQuiet()
     && COLOR_KEYS.every(([k]) => !ops.color[k])
     // texture 不参与判恒等，服务端那条也是同一个口径：磨皮归零时它不碰像素，
     // 算进来只会逼出一张与上一版逐位相同的白渲染
@@ -229,6 +298,9 @@ export function createAdjust(deps) {
     for (const [k] of BEAUTY_KEYS) BEAUTY[k].set(ops.beauty[k] ?? 0, true);
     BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
     maskSw.set(!!ops.beauty.by_mask);
+    autoSkinSw.set(!!ops.beauty.auto_face);
+    for (const [k] of AUTO_KEYS) AUTO[k].set(ops.warp.auto[k] ?? 0, true);
+    paintFace();
     paintPreset();
     lutSel.value = ops.lut?.name || '';
     lutCtl.set(ops.lut?.strength ?? 100, true);
@@ -711,6 +783,7 @@ export function createAdjust(deps) {
 
   /* ==================== 换图 ==================== */
   async function onImage(info, current = () => true) {
+    imageEpoch++; faceAnalysis = null; faceBusy = false; paintFace();
     if (mode) exitMode(true);   // 换图：只把界面收掉，绝不替上一张落定（那一下会把旧裁切写进这张）
     const generation = ++seq;     // A→B→A 也要认会话，不能只认图片号
     const mine = () => generation === seq && current() && idOf() === info.id;
@@ -745,6 +818,9 @@ export function createAdjust(deps) {
         beauty: { ...d.beauty, ...(r?.ops?.beauty || {}) },
         lut: r?.ops?.lut ?? null,
       };
+      faceAnalysis = r?.face_analysis || null;
+      paintFace();
+      if (!faceAnalysis?.analyzed) void detectFaces();
       ratioPick = 0;
       buildPresets(r?.presets || []);
       buildLuts(r?.luts || []);

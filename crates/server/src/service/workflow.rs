@@ -677,6 +677,7 @@ fn assess(path: &str, saved: Option<&str>) -> Assessment {
 /// 角色认不出却改用内置图，等于把"参数读自你的文件"那句谎从参数层搬到结构层。
 #[derive(Debug)]
 pub enum Plan {
+    Mapped { graph: Map<String, Value>, profile: crate::models::workflow::Profile },
     /// 用你文件里这张图提交（已按角色校验通过）
     Workflow { graph: Map<String, Value>, roles: Map<String, Value> },
     /// 文件不是 API 导出（或读不到）：用内置图，并把原因显示出来
@@ -695,6 +696,19 @@ pub fn plan_at(path: &str, saved: Option<&str>) -> Plan {
 
 pub fn plan(ctx: &Ctx) -> Plan {
     let p = workflow_path(ctx);
+    match super::workflow_graph::profile(ctx, &p) {
+        Ok(Some(profile)) => {
+            if let Some(graph) = load_api_graph(Path::new(&p)) {
+                return match super::workflow_graph::validate(&graph, &profile) {
+                    Ok(()) => Plan::Mapped { graph, profile },
+                    Err(e) => { let (code, args) = e.reason(); Plan::Refused { errors: vec![why(&code, json!(args))] } },
+                };
+            }
+            return Plan::Refused { errors: vec![why("srv.graph.format", Value::Null)] };
+        }
+        Err(e) => { let (code, args) = e.reason(); return Plan::Refused { errors: vec![why(&code, json!(args))] }; }
+        Ok(None) => {}
+    }
     plan_at(&p, saved_roles(ctx, &p).as_deref())
 }
 

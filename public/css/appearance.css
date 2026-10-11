@@ -1,4 +1,4 @@
-/* UI v2 外观。所有覆盖限定在 data-appearance，明暗继续由主题控制。 */
+/* 工作台外观。所有覆盖限定在 data-appearance，明暗继续由主题控制。 */
 .topbar__brand, .workspace-status, .home-create, .workspace-only, .settings-workspace__title { display: none; }
 .appearance-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); margin-bottom: var(--s-2); }
 .appearance-option { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3); text-align: left; font: inherit; color: var(--txt); background: var(--bg-field); border: 1px solid var(--line-hi); border-radius: var(--r-3); cursor: pointer; }
@@ -7,44 +7,111 @@
 .appearance-option__preview { display: grid; grid-template-columns: 22% 1fr; grid-template-rows: 12px 34px; gap: 5px; width: 100%; padding: 8px; background: var(--bg-app); border: 1px solid var(--line-hi); }
 .appearance-option__preview span { background: var(--bg-card); border: 1px solid var(--line-hi); }
 .appearance-option__preview span:first-child { grid-row: 1 / 3; background: var(--spot-dim); border-left: 2px solid var(--spot); }
-.appearance-option__preview[data-style="glass"] { border-radius: 10px; background: #17191f; grid-template-columns: 12% 1fr; }
-.appearance-option__preview[data-style="glass"] span { border-radius: 5px; background: #30333c; border-color: #454953; box-shadow: 0 2px 6px rgb(0 0 0 / .2); }
-.appearance-option__preview[data-style="glass"] span:first-child { background: #452d30; border-left-color: #e87564; }
+.appearance-option__preview[data-style="glass"] { border-radius: var(--r-2); background: var(--bg-app); grid-template-columns: 12% 1fr; }
+.appearance-option__preview[data-style="glass"] span { border-radius: var(--r-1); background: var(--bg-panel); border-color: var(--line-hi); }
+.appearance-option__preview[data-style="glass"] span:first-child { background: var(--spot-dim); border-left-color: var(--spot); }
 
 html[data-appearance="glass"] body {
-  background: radial-gradient(900px 600px at 0 100%, var(--spot-dim), transparent 65%), var(--bg-app);
+  background: var(--bg-app);
 }
 html[data-appearance="glass"] :is(.topbar, .ed-top, .cv-top, .rail) {
-  background: linear-gradient(160deg, var(--bg-card), var(--bg-panel));
-  box-shadow: var(--glass-highlight), var(--sh-1);
+  background: var(--bg-panel);
+  box-shadow: none;
 }
 html[data-appearance="glass"] .topbar { border-bottom: 1px solid var(--line); }
 html[data-appearance="glass"] .search { padding: 0 10px; background: var(--bg-field); border: 1px solid var(--line-hi); border-radius: var(--r-2); }
-html[data-appearance="glass"] :is(.input, .textarea, .select) { background-color: var(--bg-field); border: 1px solid var(--line-hi); padding: 7px 10px; }
+html[data-appearance="glass"] :is(.input, .textarea, .select) { background-color: var(--bg-field); border: 1px solid transparent; padding: 8px 10px; }
 html[data-appearance="glass"] .select { padding-right: var(--s-7); }
 html[data-appearance="glass"] :is(.input, .textarea, .select):focus { border-color: var(--spot); box-shadow: var(--focus); }
 html[data-appearance="glass"][data-theme="dark"] .select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23c2c5cc' stroke-width='1.4' fill='none'/%3E%3C/svg%3E"); }
 html[data-appearance="glass"] .input--num { padding: 4px; }
-html[data-appearance="glass"] :is(.btn--primary, .btn--accent) { --btn-bg: var(--spot); --btn-bd: var(--spot); --btn-fg: var(--on-spot); --btn-fg-hi: var(--on-spot); --btn-bg-hi: var(--danger); }
-html[data-appearance="glass"] :is(.hero-card, .tile-card, .quick-card, .pcard__cov, .dlg-card) { border-radius: var(--r-3); box-shadow: var(--glass-highlight), var(--sh-1); }
-html[data-appearance="glass"] .hero-card { background: linear-gradient(160deg, var(--bg-card-hi), var(--bg-card)); }
+html[data-appearance="glass"] .btn--primary { --btn-bg: var(--bg-ink); --btn-bd: var(--bg-ink); --btn-fg: var(--txt-inv); --btn-fg-hi: var(--txt-inv); --btn-bg-hi: color-mix(in srgb, var(--bg-ink) 88%, var(--bg-panel)); }
+html[data-appearance="glass"] .btn--primary:hover:not(:disabled) { border-color: var(--btn-bg-hi); }
+html[data-appearance="glass"] .btn--accent { --btn-bg: var(--spot); --btn-bd: var(--spot); --btn-fg: var(--on-spot); --btn-fg-hi: var(--on-spot); --btn-bg-hi: var(--danger); }
+html[data-appearance="glass"] :is(.hero-card, .tile-card, .quick-card, .pcard__cov, .dlg-card) { border-radius: var(--r-3); box-shadow: none; }
+html[data-appearance="glass"] .hero-card { background: var(--bg-card); }
 html[data-appearance="glass"] .hero-card::before { border-radius: var(--r-2); }
-html[data-appearance="glass"] .hero-card:hover { border-color: var(--spot-line); box-shadow: var(--glass-highlight), var(--sh-2); }
+html[data-appearance="glass"] .hero-card:hover { border-color: var(--line-strong); box-shadow: var(--sh-1); }
 html[data-appearance="glass"] .hero-card.is-drop { background: var(--spot-dim); }
-html[data-appearance="glass"] .hero-card__badge { flex-shrink: 0; background: var(--spot-dim); color: var(--spot-txt); box-shadow: var(--glass-highlight); }
+html[data-appearance="glass"] .hero-card__badge { flex-shrink: 0; background: var(--bg-field); color: var(--txt-2); }
 html[data-appearance="glass"] .tile-card { border-top: 1px solid var(--line-hi); }
 html[data-appearance="glass"] .tile-card__ico { background: var(--spot-dim); border-color: var(--spot-line); color: var(--spot-txt); }
-html[data-appearance="glass"] :is(.tile-card, .quick-card):hover { box-shadow: var(--glass-highlight), var(--sh-2); border-color: var(--spot-line); }
+html[data-appearance="glass"] :is(.tile-card, .quick-card):hover { box-shadow: var(--sh-1); border-color: var(--line-strong); }
 html[data-appearance="glass"] .pcard::after { display: none; }
 html[data-appearance="glass"] .pcard__nm { margin-top: var(--s-3); }
 html[data-appearance="glass"] .pcard__del:hover { color: var(--on-spot); }
-html[data-appearance="glass"] :is(.modal, .toast) { background: var(--glass); backdrop-filter: blur(20px) saturate(1.12); box-shadow: var(--glass-highlight), var(--sh-3); }
+html[data-appearance="glass"] :is(.modal, .toast) { background: var(--bg-panel); box-shadow: var(--sh-3); }
 html[data-appearance="glass"] .modal { border-top: 1px solid var(--line-hi); }
 html[data-appearance="glass"] :is(.seg, .chip, .set__nav__it) { border-radius: var(--r-2); }
 html[data-appearance="glass"] .toggle { border-radius: 999px; }
 html[data-appearance="glass"] .toggle::after { border-radius: 50%; }
-html[data-appearance="glass"] .slider__track { height: 4px; border-radius: 999px; }
-html[data-appearance="glass"] .slider__thumb { border-radius: 50%; background: var(--spot); }
+html[data-appearance="glass"] .slider__track { height: 3px; border-radius: 999px; }
+html[data-appearance="glass"] .slider__fill { border-radius: inherit; background: var(--slider-ink); }
+html[data-appearance="glass"] .slider__thumb { border-radius: 50%; background: var(--slider-ink); }
+
+/* 统一控件密度与表面层次，品牌色留给当前选中项和关键操作。 */
+html[data-appearance="glass"] .btn { font-weight: 500; letter-spacing: 0; height: 36px; }
+html[data-appearance="glass"] .btn--sm { height: 30px; }
+html[data-appearance="glass"] .btn--icon { width: 36px; }
+html[data-appearance="glass"] .btn--icon.btn--sm { width: 30px; }
+html[data-appearance="glass"] .btn:not(.btn--primary):not(.btn--accent):not(.btn--danger):not(.btn--ghost):not(.is-on) { --btn-bd: var(--line-hi); }
+html[data-appearance="glass"] .btn--ghost { --btn-bd: transparent; }
+html[data-appearance="glass"] .btn.is-on { --btn-bg: var(--spot-dim); --btn-fg: var(--spot-txt); --btn-bd: var(--spot-line); }
+html[data-appearance="glass"] .btn:disabled { opacity: .4; }
+html[data-appearance="glass"] :is(.input, .textarea, .select):hover:not(:disabled) { border-color: var(--line-hi); }
+html[data-appearance="glass"] :is(.input, .textarea, .select):focus:hover { border-color: var(--spot); }
+html[data-appearance="glass"] .textarea { line-height: 1.8; padding: var(--s-3); }
+html[data-appearance="glass"] .input--num { font-size: var(--f-sm); font-variant-numeric: tabular-nums; }
+html[data-appearance="glass"] .prow { gap: var(--s-1); padding-block: var(--s-1); }
+html[data-appearance="glass"] .prow__name { font-size: var(--f-md); letter-spacing: 0; }
+html[data-appearance="glass"] .prow .input--num { width: 60px; height: 26px; padding-inline: var(--s-2); }
+html[data-appearance="glass"] .slider__thumb { width: 10px; height: 10px; margin: -5px 0 0 -5px; }
+html[data-appearance="glass"] .slider:hover .slider__thumb,
+html[data-appearance="glass"] .slider.is-drag .slider__thumb { background: var(--spot); }
+html[data-appearance="glass"] .seg { padding: 3px; gap: 2px; background: var(--bg-field); border-color: transparent; }
+html[data-appearance="glass"] .seg__it { border: 0; border-radius: var(--r-1); padding: 5px 10px; }
+html[data-appearance="glass"] .seg__it.is-on { background: var(--bg-panel); color: var(--txt); box-shadow: var(--sh-1); }
+html[data-appearance="glass"] .chip-s { height: 28px; border-color: var(--line-hi); background: var(--bg-field); }
+html[data-appearance="glass"] .chip-s.is-on { background: var(--spot-dim); border-color: var(--spot-line); }
+html[data-appearance="glass"] .chip-s--mgr { background: transparent; }
+html[data-appearance="glass"] .col-hd { min-height: 50px; height: auto; padding: var(--s-2) var(--s-4); border-color: var(--line); }
+html[data-appearance="glass"] .col-hd h3 { font-size: var(--f-md); font-weight: 600; letter-spacing: 0; }
+html[data-appearance="glass"] .col-hd h3 .icon { color: var(--txt-3); }
+html[data-appearance="glass"] .prop-tabs { padding: 0 var(--s-3); gap: var(--s-1); border-color: var(--line); }
+html[data-appearance="glass"] .prop-tabs button { flex: 1; padding: 10px var(--s-2); font-weight: 500; letter-spacing: 0; white-space: nowrap; }
+html[data-appearance="glass"] .prop-tabs button.is-on { color: var(--txt); font-weight: 600; }
+html[data-appearance="glass"] .prop-tabs button.is-on::after { height: 2px; left: var(--s-2); right: var(--s-2); border-radius: var(--r-1); }
+html[data-appearance="glass"] .prop-body { padding: var(--s-4); }
+html[data-appearance="glass"] .prop-ft { padding: var(--s-3) var(--s-4); background: var(--bg-panel); border-color: var(--line); }
+html[data-appearance="glass"] .prop-ft > .btn--accent { height: 40px; font-weight: 600; }
+html[data-appearance="glass"] .grp__hd { font-size: var(--f-md); font-weight: 600; letter-spacing: 0; }
+html[data-appearance="glass"] .adj-panel { gap: var(--s-2); }
+html[data-appearance="glass"] .adj-panel > .grp { padding: var(--s-3); background: transparent; border-color: var(--line-hi); border-radius: var(--r-2); }
+html[data-appearance="glass"] .adj-panel > .grp.is-collapsed { background: var(--bg-field); border-color: transparent; }
+html[data-appearance="glass"] .adj-panel > .muted { font-size: var(--f-xs); color: var(--txt-3); padding: 0 var(--s-1) var(--s-2); }
+html[data-appearance="glass"] .adj-panel .grp__bd { gap: var(--s-4); }
+html[data-appearance="glass"] .rail-btn { border-radius: var(--r-2); color: var(--txt-3); }
+html[data-appearance="glass"] .rail-btn.is-on { color: var(--spot-txt); background: var(--spot-dim); }
+html[data-appearance="glass"] :is(.ed-top, .cv-top) { border-bottom-color: var(--line); }
+html[data-appearance="glass"] :is(.page-hd h1, .pj-hd__n) { font-weight: 600; letter-spacing: -.4px; }
+html[data-appearance="glass"] .page-hd { padding-block: var(--s-2) var(--s-5); }
+html[data-appearance="glass"] .page-hd__d { font-size: var(--f-md); }
+html[data-appearance="glass"] .sec-hd h2 { font-size: var(--f-lg); font-weight: 600; letter-spacing: 0; }
+html[data-appearance="glass"] :is(.hero-card__t, .tile-card__t, .pcard__nm) { font-weight: 600; letter-spacing: 0; }
+html[data-appearance="glass"] :is(.hero-card, .tile-card, .quick-card, .pcard, .dlg-card) { box-shadow: none; border-color: var(--line-hi); }
+html[data-appearance="glass"] :is(.hero-card, .tile-card, .quick-card, .pcard):hover { box-shadow: var(--sh-1); border-color: var(--line-strong); }
+html[data-appearance="glass"] .hero-card__badge { background: var(--bg-field); color: var(--txt-2); box-shadow: none; }
+html[data-appearance="glass"] .hero-card::before { inset: var(--s-2); }
+html[data-appearance="glass"] .tile-card__ico { background: var(--bg-field); color: var(--txt-2); border-color: transparent; }
+html[data-appearance="glass"] .set__nav__it { border-color: transparent; font-weight: 500; }
+html[data-appearance="glass"] .set__nav__it.is-on { background: var(--spot-dim); color: var(--spot-txt); }
+html[data-appearance="glass"] :is(.dlg-card, .appearance-option) { background: var(--bg-card); }
+html[data-appearance="glass"] .pcard__cov .ph { background: var(--bg-field); }
+html[data-appearance="glass"] .pcard__badge { left: var(--s-2); bottom: var(--s-2); border: 1px solid var(--line-hi); border-radius: var(--r-1); background: var(--bg-panel); }
+html[data-appearance="glass"] .pcard__meta { font-family: var(--f-body); font-size: var(--f-xs); letter-spacing: 0; }
+html[data-appearance="glass"] .quick-card__thumb--art { background: var(--bg-field); border-color: var(--line); }
+html[data-appearance="glass"] .dlg-h4 { font-weight: 600; letter-spacing: 0; border-color: var(--line); padding-bottom: var(--s-2); }
+html[data-appearance="glass"] .appearance-option[aria-pressed="true"] { border-color: var(--spot-line); background: var(--spot-dim); box-shadow: none; }
 
 /* 窄侧栏只收视觉标签；可访问名称与原生提示保留在按钮上。 */
 @media (min-width: 901px) {
@@ -60,7 +127,7 @@ html[data-appearance="glass"] .slider__thumb { border-radius: 50%; background: v
   html[data-appearance="glass"] .rail__brand { justify-content: center; padding: 0 0 14px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
   html[data-appearance="glass"] .rail__nav { gap: 6px; }
   html[data-appearance="glass"] :is(.rail__link, .rail__recent) { justify-content: center; padding: 0; height: 42px; border-radius: 10px; }
-  html[data-appearance="glass"] .rail__link.is-active { color: var(--spot-txt); background: var(--spot-dim); box-shadow: var(--glass-highlight), inset 0 0 0 1px var(--spot-line), 0 2px 10px var(--brand-glow); }
+  html[data-appearance="glass"] .rail__link.is-active { color: var(--spot-txt); background: var(--spot-dim); box-shadow: none; }
   html[data-appearance="glass"] .rail__group { font-size: 0; margin: 14px 0 6px; padding: 0; }
   html[data-appearance="glass"] .rail__recent .cov { width: 28px; height: 28px; }
   html[data-appearance="glass"] :is(.rail__brand > span, .rail__link > span, .rail__recent > .nowrap, .rail__comfy > .nowrap, .promo > span:last-child, .status-line > span:last-child) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -86,7 +153,7 @@ html[data-appearance="glass"] .topbar {
   padding: 0 var(--s-4); position: relative; z-index: 150; height: var(--topbar-h);
 }
 html[data-appearance="glass"] .topbar__brand { display: flex; align-items: center; gap: var(--s-2); white-space: nowrap; }
-html[data-appearance="glass"] .topbar__mark { width: var(--s-4); height: var(--s-4); border-radius: var(--r-1); background: var(--spot); box-shadow: 0 0 var(--s-3) var(--brand-glow); }
+html[data-appearance="glass"] .topbar__mark { width: var(--s-3); height: var(--s-3); border-radius: var(--r-1); background: var(--spot); }
 html[data-appearance="glass"] .topbar__zone--l { overflow: hidden; white-space: nowrap; }
 html[data-appearance="glass"] .topbar__zone--l b { overflow: hidden; text-overflow: ellipsis; }
 html[data-appearance="glass"] .search { width: clamp(120px, 18vw, 240px); max-width: none; }
@@ -116,7 +183,7 @@ html[data-appearance="glass"] .home-create { display: flex; gap: var(--s-2); fle
 html[data-appearance="glass"] .list-hd { align-items: center; gap: var(--s-2); border: 0; }
 html[data-appearance="glass"] .list-hd__tools { flex-wrap: wrap; }
 html[data-appearance="glass"] .home-import .hero-row, html[data-appearance="glass"] .home-shortcuts .quick-row { margin-bottom: 0; }
-html[data-appearance="glass"] .pcard { background: var(--bg-card); border: 1px solid var(--line-hi); border-radius: var(--r-3); overflow: hidden; box-shadow: var(--glass-highlight), var(--sh-1); }
+html[data-appearance="glass"] .pcard { background: var(--bg-card); border: 1px solid var(--line-hi); border-radius: var(--r-3); overflow: hidden; box-shadow: none; }
 html[data-appearance="glass"] .pcard__cov { border: 0; border-radius: 0; box-shadow: none; }
 html[data-appearance="glass"] .pcard__nm { margin: var(--s-3) var(--s-4) var(--s-1); }
 html[data-appearance="glass"] .pcard__meta { padding: 0 var(--s-4) var(--s-3); }
@@ -136,7 +203,7 @@ html[data-appearance="glass"] :is(.editor > .ed-tools, .cv > .ed-tools) {
   grid-area: auto; position: absolute; left: var(--s-3); right: var(--s-3); bottom: calc(var(--film-h, 0px) + var(--s-8));
   height: calc(var(--workspace-bar-h) + var(--s-3)); width: max-content; max-width: calc(100% - var(--s-6));
   padding: var(--s-1); z-index: 115; border: 1px solid var(--line-hi); border-radius: var(--r-3);
-  background: var(--glass); backdrop-filter: blur(20px); box-shadow: var(--glass-highlight), var(--sh-2);
+  background: var(--bg-panel); box-shadow: var(--sh-2);
 }
 html[data-appearance="glass"] .tool { width: 44px; height: var(--workspace-bar-h); border-radius: var(--r-2); }
 html[data-appearance="glass"] .tool > span:last-child { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -145,10 +212,14 @@ html[data-appearance="glass"] .tool-slider .slider { width: 80px; flex-basis: 80
 html[data-appearance="glass"] :is(.editor > .ed-prop, .editor > .ed-pre) {
   grid-area: auto; display: flex; position: absolute; top: calc(var(--ed-top-h) + var(--s-3)); bottom: calc(var(--film-h) + var(--s-3));
   height: auto; min-height: 0; width: var(--workspace-panel-w); z-index: 112;
-  border: 1px solid var(--line-hi); border-radius: var(--r-3); background: var(--glass); backdrop-filter: blur(20px);
-  box-shadow: var(--glass-highlight), var(--sh-2); overflow: hidden;
+  border: 1px solid var(--line-hi); border-radius: var(--r-3); background: var(--bg-panel);
+  box-shadow: var(--sh-2); overflow: hidden;
 }
-html[data-appearance="glass"] .editor > .ed-prop { right: var(--s-3); }
+html[data-appearance="glass"] .editor > .ed-prop {
+  right: var(--s-3);
+  bottom: calc(var(--film-h) + var(--workspace-bar-h) + var(--s-6));
+  max-width: calc(100% - var(--s-6));
+}
 html[data-appearance="glass"] .editor.is-drawer > .ed-prop { left: auto; max-height: none; }
 html[data-appearance="glass"] .editor > .ed-pre { left: var(--s-3); width: var(--workspace-history-w); bottom: auto; height: 55%; max-height: 55%; }
 html[data-appearance="glass"] .editor.no-pre > .ed-pre, html[data-appearance="glass"] .editor.no-prop > .ed-prop { display: none; }
@@ -161,12 +232,21 @@ html[data-appearance="glass"] .ed-rail .rail-btn { width: var(--workspace-bar-h)
 html[data-appearance="glass"] .ed-rail .rail-btn > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 html[data-appearance="glass"] .ed-rail .rail-btn.is-on::before { display: none; }
 html[data-appearance="glass"] .ed-film { min-width: 0; }
+/* 对比结果与编辑器浮动控件各占独立区域，底栏不再从 dock 后面穿过。 */
+html[data-appearance="glass"] .editor .cmp { bottom: calc(var(--workspace-bar-h) + var(--s-6)); }
+html[data-appearance="glass"] .editor .vp:has(> .cmp.is-on) > .vp__canvas,
+html[data-appearance="glass"] .editor .ed-stage:has(.cmp.is-on) > :is(.ed-hint, .ed-hud) { visibility: hidden; pointer-events: none; }
+html[data-appearance="glass"] .editor:not(.no-prop) .cmp { right: calc(var(--workspace-panel-w) + var(--s-6)); }
+html[data-appearance="glass"] .cmp__bar { flex-wrap: wrap; max-height: 40%; overflow-y: auto; background: var(--bg-panel); border-color: var(--line-hi); }
+html[data-appearance="glass"] .cmp__bar > .muted { flex: 1 0 160px; min-width: 0; overflow-wrap: anywhere; }
+html[data-appearance="glass"] .cmp__bar .btn:not(.btn--primary) { --btn-fg: var(--txt); --btn-fg-hi: var(--txt); --btn-bd: var(--line-hi); --btn-bg: transparent; --btn-bg-hi: var(--wash); }
+html[data-appearance="glass"] .cmp__bar .btn--primary { --btn-bg: var(--bg-ink); --btn-bd: var(--bg-ink); --btn-fg: var(--txt-inv); --btn-fg-hi: var(--txt-inv); }
 html[data-appearance="glass"] .cv { position: relative; --ed-top-h: var(--workspace-bar-h); grid-template-rows: var(--ed-top-h) minmax(0, 1fr); grid-template-areas: "top" "main"; }
 html[data-appearance="glass"] .cv-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-template-areas: "stage"; position: relative; }
 html[data-appearance="glass"] :is(.cv-side, .cv-hist) {
   grid-area: auto; position: absolute; top: var(--s-3); bottom: var(--s-3); width: var(--workspace-panel-w); max-height: none; min-height: 0; z-index: 112;
-  border: 1px solid var(--line-hi); border-radius: var(--r-3); background: var(--glass); backdrop-filter: blur(20px);
-  box-shadow: var(--glass-highlight), var(--sh-2); overflow: hidden;
+  border: 1px solid var(--line-hi); border-radius: var(--r-3); background: var(--bg-panel);
+  box-shadow: var(--sh-2); overflow: hidden;
 }
 html[data-appearance="glass"] .cv-side { right: var(--s-3); }
 html[data-appearance="glass"] .cv-hist { left: var(--s-3); width: var(--workspace-history-w); bottom: auto; height: 55%; max-height: 55%; }
@@ -200,6 +280,8 @@ html[data-appearance="glass"] .settings-workspace .modal__ft { padding: var(--s-
   html[data-appearance="glass"] .ed-tools .tool-slider { min-width: 180px; }
 }
 @media (min-width: 701px) {
+  html[data-appearance="glass"] .editor .cmp { left: calc(var(--workspace-bar-h) + var(--s-3) * 2); }
+  html[data-appearance="glass"] .editor:not(.no-pre) .cmp { left: calc(var(--workspace-bar-h) + var(--workspace-history-w) + var(--s-3) * 4); }
   html[data-appearance="glass"] .editor > .ed-pre, html[data-appearance="glass"] .cv-hist {
     left: calc(var(--workspace-bar-h) + var(--s-3) * 3);
   }
@@ -234,7 +316,18 @@ html[data-appearance="glass"] .settings-workspace .modal__ft { padding: var(--s-
   html[data-appearance="glass"] .settings-workspace .set { grid-template-columns: 156px minmax(0, 1fr); }
   html[data-appearance="glass"] .settings-workspace .set__pane { padding: var(--s-4); }
 }
+@media (max-width: 960px) {
+  /* 窄窗口对比优先占满宽度，退出对比后参数面板按原状态恢复。 */
+  html[data-appearance="glass"] .editor:has(.cmp.is-on) > .ed-prop,
+  html[data-appearance="glass"] .editor:has(.cmp.is-on) .ed-params-btn,
+  html[data-appearance="glass"] .editor:has(.cmp.is-on) .ed-rail [data-key="prop"] { display: none; }
+  html[data-appearance="glass"] .editor:not(.no-prop) .cmp { right: 0; }
+}
 @media (max-width: 700px) {
+  html[data-appearance="glass"] .editor .cmp { bottom: calc(var(--workspace-bar-h) + var(--s-8) + var(--s-6)); }
+  html[data-appearance="glass"] .editor > .ed-prop {
+    bottom: calc(var(--film-h) + var(--workspace-bar-h) + var(--s-8) + var(--s-6));
+  }
   html[data-appearance="glass"] { --topbar-h: 88px; --workspace-panel-w: min(320px, calc(100vw - var(--rail-w) - var(--s-6))); }
   html[data-appearance="glass"] .topbar { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 44px 44px; gap: 0 var(--s-2); padding: 0 var(--s-3); }
   html[data-appearance="glass"] .topbar__brand { grid-column: 1; grid-row: 1; }

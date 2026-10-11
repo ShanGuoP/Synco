@@ -64,6 +64,48 @@ fn crop_rect(w: usize, h: usize, rect: [f32; 4]) -> (usize, usize, usize, usize)
     (x0, y0, x1 - x0, y1 - y0)
 }
 
+/// Source normalized landmark -> output normalized landmark, using the same
+/// pixel centers, rounding and stage order as the raster path. Do not clamp:
+/// points outside a crop still anchor a partially visible face correctly.
+pub fn map_point(p: [f32;2], w: usize, h: usize, g: &Geometry) -> [f32;2] {
+    let (mut x,mut y)=(p[0]*w as f32,p[1]*h as f32);
+    let (mut cw,mut ch)=(w,h);
+    if g.flip_h { x=cw as f32-1.0-x; }
+    if g.flip_v { y=ch as f32-1.0-y; }
+    let quad=(g.rotate_deg/90.0).round() as i32;
+    for _ in 0..quad.rem_euclid(4) {
+        (x,y)=(ch as f32-1.0-y,x); std::mem::swap(&mut cw,&mut ch);
+    }
+    let fine=g.rotate_deg-quad as f32*90.0;
+    if fine.abs()>1e-4 {
+        let (sn,cs)=fine.to_radians().sin_cos();
+        let nw=(cw as f32*cs.abs()+ch as f32*sn.abs()).ceil().max(1.0) as usize;
+        let nh=(cw as f32*sn.abs()+ch as f32*cs.abs()).ceil().max(1.0) as usize;
+        let (dx,dy)=(x-(cw as f32-1.0)*0.5,y-(ch as f32-1.0)*0.5);
+        x=cs*dx-sn*dy+(nw as f32-1.0)*0.5;
+        y=sn*dx+cs*dy+(nh as f32-1.0)*0.5;
+        (cw,ch)=(nw,nh);
+    }
+    if let Some(rect)=g.crop.filter(|r| !whole_rect(r)) {
+        let (ox,oy,nw,nh)=crop_rect(cw,ch,rect);
+        x-=ox as f32; y-=oy as f32; (cw,ch)=(nw,nh);
+    }
+    [x/cw as f32,y/ch as f32]
+}
+
+pub fn map_shape(s: &crate::warp::FaceShape, w: usize, h: usize, g: &Geometry) -> crate::warp::FaceShape {
+    let mut s=s.clone(); let map=|p| map_point(p,w,h,g);
+    let [x,y,bw,bh]=s.box_norm;
+    let corners=[[x,y],[x+bw,y],[x,y+bh],[x+bw,y+bh]].map(map);
+    let (mut lo,mut hi)=([f32::MAX;2],[f32::MIN;2]);
+    for p in corners { for a in 0..2 { lo[a]=lo[a].min(p[a]); hi[a]=hi[a].max(p[a]); }}
+    s.box_norm=[lo[0],lo[1],hi[0]-lo[0],hi[1]-lo[1]];
+    for p in s.jaw.iter_mut().chain(s.eye_l.iter_mut()).chain(s.eye_r.iter_mut()) { *p=map(*p); }
+    s.iris_l=map(s.iris_l); s.iris_r=map(s.iris_r);
+    s.nose_wing_l=map(s.nose_wing_l); s.nose_wing_r=map(s.nose_wing_r); s.chin=map(s.chin);
+    s
+}
+
 /// 走完几何段之后这张图会是多大。**与 apply 同一套取整、同一套顺序**（翻转不改尺寸 →
 /// 旋转 → 裁切）：服务端要在真正渲染之前就知道新图的宽高（另存为新图时它直接进库），
 /// 两边各算一份早晚对不上。
@@ -201,6 +243,20 @@ fn band_rows(h: usize) -> usize {
 mod tests {
     use super::*;
     use px_core::Rgba;
+
+    #[test]
+    fn landmark_mapping_matches_rotated_flipped_and_cropped_pixels() {
+        let img=grid(20,16);
+        for deg in [0.0,90.0,180.0,-90.0] {
+            for flip in [false,true] {
+                let geo=g(Some([0.1,0.1,0.8,0.8]),deg,flip,false);
+                let out=apply(&img,&geo);
+                let p=map_point([8.0/20.0,7.0/16.0],20,16,&geo);
+                let (x,y)=((p[0]*out.w as f32).round() as usize,(p[1]*out.h as f32).round() as usize);
+                assert_eq!(out.get(x,y),img.get(8,7));
+            }
+        }
+    }
 
     /// 非对称测试图：每个像素的 R 通道编码它的 x，G 编码 y，一眼能看出映射对不对
     fn grid(w: usize, h: usize) -> Rgba {

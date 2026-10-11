@@ -180,6 +180,8 @@ pub struct Beauty {
     pub sharpen: Slider,
     /// true = 只在已涂的蒙版区域内生效；false = 全图
     pub by_mask: bool,
+    /// Restrict beauty to detected skin, optionally intersecting the painted mask.
+    pub auto_face: bool,
 }
 
 impl Beauty {
@@ -431,6 +433,7 @@ fn read_ops(v: &serde_json::Value, rep: &mut Vec<String>) -> EditOps {
             de_shine: one("de_shine"),
             sharpen: one("sharpen"),
             by_mask: b.get("by_mask").and_then(|x| x.as_bool()).unwrap_or(false),
+            auto_face: b.get("auto_face").and_then(|x| x.as_bool()).unwrap_or(false),
         };
     }
     if let Some(l) = v.get("lut").filter(|x| !x.is_null()) {

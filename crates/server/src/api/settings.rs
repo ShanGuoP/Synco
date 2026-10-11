@@ -105,6 +105,20 @@ pub async fn workflow_roles_get(State(ctx): State<Shared>) -> Result<Response> {
     Ok(ok(cfg::roles_view(&ctx)?))
 }
 
+pub async fn workflow_graph_get(State(ctx): State<Shared>) -> Result<Response> {
+    Ok(ok(util::blocking(move || crate::service::workflow_graph::view(&ctx)).await?))
+}
+
+pub async fn workflow_import(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
+    let body = body_of(raw).await?;
+    Ok(ok(util::blocking(move || crate::service::workflow_graph::import(&ctx, &body)).await?))
+}
+
+pub async fn workflow_profile_post(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
+    let body = body_of(raw).await?;
+    Ok(ok(util::blocking(move || crate::service::workflow_graph::save(&ctx, body)).await?))
+}
+
 /// 存手指覆盖。类名对不上的一律不入库并逐条给理由——存进去一个错类名的节点，
 /// 下一次提交就会往不该填的输入里写值。
 pub async fn workflow_roles_post(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {

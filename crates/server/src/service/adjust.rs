@@ -60,6 +60,14 @@ pub fn ops_hash(json: &str) -> String {
     format!("{:016x}", h)[..8].to_string()
 }
 
+/// Face-dependent pixels get a different immutable URL when analysis changes.
+/// Submitted inputs are records: a refresh must never delete their history.
+fn render_hash(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<String> {
+    if ops.warp.auto.is_empty() && !ops.beauty.auto_face { return Ok(ops_hash(&ops.to_json())); }
+    let points=radj::landmarks(ctx,img.id)?;
+    Ok(ops_hash(&json!({"ops":ops,"face_pipeline":1,"points":points}).to_string()))
+}
+
 fn stem(img: &Image) -> String {
     let s = util::stem_of(&img.orig_path);
     if s.is_empty() {
@@ -176,6 +184,15 @@ fn shape_for(ctx: &Ctx, img: &Image) -> Option<FaceShape> {
     crate::service::face::cached_shape(ctx, img)
 }
 
+fn beauty_mask(ctx: &Ctx, img: &Image, ops: &EditOps, w: usize, h: usize) -> Result<Option<Alpha>> {
+    let painted = if ops.beauty.by_mask { mask_plane(ctx,img,w,h)? } else { None };
+    if !ops.beauty.auto_face { return Ok(painted); }
+    // Empty detection is an empty mask, never permission to beautify the background.
+    let mut skin = crate::service::face::auto_mask(ctx,img,w,h)?;
+    if let Some(m) = painted { for (a,b) in skin.v.iter_mut().zip(m.v) { *a=((*a as u16*b as u16)/255) as u8; } }
+    Ok(Some(skin))
+}
+
 /// 把参数链作用到这张图上（同步重活，调用方负责过阻塞池）
 pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> Result<Rgba> {
     let base = match grade {
@@ -186,7 +203,7 @@ pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> Result<Rgb
         },
         Grade::Full => orig_rgba(ctx, img)?,
     };
-    let mask = if ops.beauty.by_mask { mask_plane(ctx, img, base.w, base.h)? } else { None };
+    let mask = beauty_mask(ctx,img,ops,base.w,base.h)?;
     let shape = if ops.warp.auto.is_empty() { None } else { shape_for(ctx, img) };
     let table = match ops.lut.as_ref() {
         Some(l) => lut_table(ctx, &l.name)?,
@@ -201,7 +218,7 @@ pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> Result<Rgb
 /// 前端拿它当画幅尺寸，报了预览档的尺寸就等于把画布缩到 proxy 那么大——图会当场小一圈，
 /// 1:1 与放大看到的也只是那张糊图。两条分支（新建与复用）必须同一口径，否则拖两下滑杆画幅会跳。
 pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Built> {
-    let h = ops_hash(&ops.to_json());
+    let h = render_hash(ctx,img,ops)?;
     let (rel, abs) = slot(ctx, img, "adjprev", &h);
     let (w, hh) = out_size(img, ops);
     if abs.is_file() {
@@ -218,7 +235,7 @@ pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Built> {
 /// 成图：原分辨率落 `_adjusted<指纹>.jpg`，并配一张 320 小档给列表用。
 /// 返回的第二个值是缩略档的相对路径（缩略档写失败不影响成图，回 `None` 就行）。
 pub fn build_render(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<(Built, Option<String>)> {
-    let h = ops_hash(&ops.to_json());
+    let h = render_hash(ctx,img,ops)?;
     let (rel, abs) = slot(ctx, img, "adjusted", &h);
     let (th_rel, th_abs) = slot(ctx, img, "adjthumb", &h);
     if abs.is_file() {
@@ -256,7 +273,7 @@ pub fn submit_mask(ctx: &Ctx, img: &Image) -> Result<Vec<u8>> {
 /// 也不会把没渲过的档位算第二遍。
 pub fn tiles(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Value> {
     let (b, _) = build_render(ctx, img, ops)?;
-    let h = ops_hash(&ops.to_json());
+    let h = render_hash(ctx,img,ops)?;
     let abs = b.abs.clone();
     let url = format!("/file/{}", b.rel);
     let out = imagesvc::pyramid(&adj_tile_dir(ctx, img, &h), &adj_tile_rel(img, &h), || {
@@ -372,7 +389,7 @@ pub fn submit_artifact(ctx: &Ctx, img: &Image) -> Result<(Vec<u8>, String)> {
         return Ok((std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.origRead", e))?, img.orig_path.clone()));
     }
     let bytes = codec::encode_png(&pixels(ctx, img, &ops, Grade::Full)?);
-    let (rel, abs) = input_slot(ctx, img, &ops_hash(&ops.to_json()));
+    let (rel, abs) = input_slot(ctx, img, &render_hash(ctx,img,&ops)?);
     if !abs.is_file() {
         imagesvc::write_bytes(&abs, &bytes)?;
     }
@@ -397,7 +414,8 @@ pub fn photo_with(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Rgba> {
 pub(crate) fn snapshot_inputs(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Value> {
     let shape = if ops.warp.auto.is_empty() { None } else { shape_for(ctx, img) };
     let lut = match &ops.lut { Some(l) => lut_table(ctx, &l.name)?, None => None };
-    Ok(json!({ "shape": shape, "lut": lut }))
+    let skin = if ops.beauty.auto_face { Some(radj::landmarks(ctx,img.id)?) } else { None };
+    Ok(json!({ "shape": shape, "lut": lut, "skin": skin }))
 }
 
 pub(crate) fn photo_from_snapshot(ctx: &Ctx, img: &Image, ops: &EditOps, inputs: &Value, mask_png: Option<&[u8]>) -> Result<Rgba> {
@@ -405,7 +423,7 @@ pub(crate) fn photo_from_snapshot(ctx: &Ctx, img: &Image, ops: &EditOps, inputs:
     if ops.is_identity() { return Ok(base); }
     let shape: Option<FaceShape> = serde_json::from_value(inputs["shape"].clone()).map_err(|_| AppError::bad("srv.lossless.noSnap"))?;
     let lut: Option<LutTable> = serde_json::from_value(inputs["lut"].clone()).map_err(|_| AppError::bad("srv.lossless.noSnap"))?;
-    let mask = if ops.beauty.by_mask {
+    let mut mask = if ops.beauty.by_mask {
         match mask_png {
             Some(png) => {
                 let m = codec::decode(png)?;
@@ -414,6 +432,13 @@ pub(crate) fn photo_from_snapshot(ctx: &Ctx, img: &Image, ops: &EditOps, inputs:
             None => None,
         }
     } else { None };
+    if ops.beauty.auto_face {
+        let rows = inputs["skin"].as_array().ok_or_else(|| AppError::bad("srv.lossless.noSnap"))?;
+        let groups: Vec<Vec<[f32;2]>> = rows.iter().filter_map(|r| r["points"].as_str().map(photoedit_core::face::parse_points)).collect();
+        let mut skin = photoedit_core::face::mesh_beauty_region(base.w,base.h,&groups);
+        if let Some(m) = mask { for (a,b) in skin.v.iter_mut().zip(m.v) { *a=((*a as u16*b as u16)/255) as u8; } }
+        mask = Some(skin);
+    }
     Ok(apply_chain(&base, ops, &Chain { mask: mask.as_ref(), shape: shape.as_ref(), lut: lut.as_ref() }))
 }
 
@@ -780,6 +805,28 @@ mod tests {
         let out = pixels(&ctx, &img, &ops, Grade::Full).unwrap();
         assert_eq!(out.px, src.px, "没有关键点却动了像素");
         cleanup(ctx, &dir);
+    }
+
+    #[test]
+    fn separate_face_rows_are_never_merged_for_main_shape() {
+        let (dir,ctx,img)=fixture("separatefaces");
+        let rows=vec![json!({"points": vec![[0.2,0.3];234]}),json!({"points":vec![[0.7,0.3];234]})];
+        radj::put_analysis(&ctx,img.id,&[],&rows).unwrap();
+        assert!(crate::service::face::cached_shape(&ctx,&img).is_none());
+        let ops=EditOps::parse(r#"{"beauty":{"brighten":100,"auto_face":true}}"#).unwrap().0;
+        let original=orig_rgba(&ctx,&img).unwrap();
+        assert_eq!(pixels(&ctx,&img,&ops,Grade::Full).unwrap(),original);
+        let snapshot=snapshot_inputs(&ctx,&img,&ops).unwrap();
+        let hash_before=render_hash(&ctx,&img,&ops).unwrap();
+        let (_,record)=input_slot(&ctx,&img,&hash_before);
+        imagesvc::write_bytes(&record,b"immutable submitted photo").unwrap();
+        // Late analysis must not change the saved skin input.
+        radj::put_analysis(&ctx,img.id,&[],&[]).unwrap();
+        assert_ne!(hash_before,render_hash(&ctx,&img,&ops).unwrap());
+        assert_eq!(std::fs::read(&record).unwrap(),b"immutable submitted photo");
+        assert_eq!(photo_from_snapshot(&ctx,&img,&ops,&snapshot,None).unwrap(),original);
+        drop(ctx);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// 一张明显大于 proxy 档的图：源 1600×1200，proxy 只有 400×300。

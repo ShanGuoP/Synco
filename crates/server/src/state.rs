@@ -37,6 +37,8 @@ pub struct Ctx {
     /// 两轮会各自下载一套文件，先落的那套没人认领
     pub downloading: Mutex<HashSet<i64>>,
     pub cfg: Mutex<Option<crate::service::workflow::Cache>>,
+    /// Lazy CPU inference plans; serializes detection to bound memory use.
+    pub face_engine: Mutex<Option<crate::service::face::Engine>>,
     /// 云端并发闸：许可数每轮由 `queue::sync_gate` 对齐成「设置里的并发 − 在飞数」，
     /// 起点是 0——没泵之前谁也别想发出去
     pub gate: Arc<tokio::sync::Semaphore>,
@@ -65,6 +67,7 @@ impl Ctx {
             jobs: Mutex::new(HashMap::new()),
             downloading: Mutex::new(HashSet::new()),
             cfg: Mutex::new(None),
+            face_engine: Mutex::new(None),
             gate: Arc::new(tokio::sync::Semaphore::new(0)),
             live: Arc::new(AtomicUsize::new(0)),
             gate_sync: Mutex::new(()),

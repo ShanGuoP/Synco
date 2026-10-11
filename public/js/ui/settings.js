@@ -13,6 +13,7 @@ import { toastOk, toastErr, toastBusy } from './toast.js';
 import { createBackendsPane } from './backends.js';
 import { createPresetsPane } from './presets.js';
 import { createPhrasesPane } from './phrases.js';
+import { createWorkflowPane } from './workflow_pane.js';
 
 /* 后端地址与 ComfyUI 根目录是同一件事的两半——都在回答"我连的是哪个 ComfyUI"，
    分成两个分区会让人在两边各填一半、自检结果却在另一个分区里 */
@@ -32,153 +33,6 @@ const okRow = (ok, label, extra) => el('div.set__row', { class: `set__row${ok ==
 /** 把两个分区拼成同一个：后端列表在上，本机目录与自检在下 */
 function joinPanes(a, b) {
   return { node: el('div.dlg-flow', {}, a.node, b.node) };
-}
-
-function createWorkflowPane() {
-  const inp = el('input.input', { type: 'text', spellcheck: 'false', placeholder: 'C:\\...\\ComfyUI\\user\\default\\workflows\\xxx.json' });
-  const state = el('div.set__state');
-
-  async function load() {
-    try {
-      const [cfg, s, r] = await Promise.all([api.cfg(), api.backends(), api.workflowRoles().catch(() => null)]);
-      inp.value = cfg.workflow_path || '';
-      const rows = [
-        okRow(cfg.cfg_source === 'workflow',
-          t(cfg.cfg_source === 'workflow' ? 'settings.wf.readFrom' : 'settings.wf.builtinFrom'), dx(cfg.workflow_error)),
-      ];
-      if (r) rows.push(graphRow(r));
-      rows.push(okRow(!!s.active, t('settings.wf.curBackend', { host: String(s.active).replace(/^https?:\/\//, '') })));
-      fill(state, ...rows);
-    } catch (e) { fill(state, okRow(false, t('settings.wf.readFail'), e.message)); }
-  }
-
-  async function save() {
-    try {
-      const r = await api.setWorkflow(inp.value.trim());
-      toastOk(t(r.cfg_source === 'workflow' ? 'settings.wf.linked' : 'settings.wf.savedNoRead'), r.workflow_path || '');
-      store.set({ cfg: await api.cfg() });
-      load();
-    } catch (e) { toastErr(t('settings.wf.saveFail'), e.message); }
-  }
-
-  const node = el('div.dlg-flow', {},
-    el('div', {}, el('h4.dlg-h4', { text: t('settings.wf.pathTitle') }), inp,
-      el('p.muted', { text: t('settings.wf.pathNote') }),
-      el('div', { style: { display: 'flex', gap: '8px', marginTop: '10px' } },
-        el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('settings.wf.saveVerify'), onclick: save }),
-        el('button.btn.btn--ghost.btn--sm', { type: 'button', 'data-tip': t('settings.wf.rolesTip'), text: t('settings.wf.roles'), onclick: () => editRoles(load) }),
-        el('button.btn.btn--ghost.btn--sm', { type: 'button', 'data-tip': t('settings.wf.inspectTip'), text: t('settings.wf.inspect'), onclick: () => inspectWorkflow() }),
-        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('settings.wf.reload'), onclick: load }))),
-    state);
-  load();
-  return { node };
-}
-
-/** 计算图来源那一行：接管成功是绿点，认不出角色是红点（提交会被明确拒掉），非 API 导出是灰点 */
-function graphRow(r) {
-  if (r.can_takeover) return okRow(true, t('settings.graph.mine'), t('settings.graph.rolesReady', { n: Object.keys(r.effective || {}).length }));
-  if (!r.is_api) return okRow(null, t('settings.graph.builtin'), dx(r.reason, r.reason_args) || '');
-  return okRow(false, t('settings.graph.notYet'), dl(r.errors));
-}
-
-/**
- * 角色映射编辑器：每一行是一个"Synco 要往哪儿填东西"，下拉里只有同一种类的节点。
- * 默认值取自动认出的那个——只有你改过的才会存进库，节点号被 ComfyUI 重排时还能重新认。
- */
-async function editRoles(reload) {
-  let d;
-  try { d = await api.workflowRoles(); } catch (e) { toastErr(t('settings.roles.readFail'), e.message); return; }
-  if (!d.is_api) {
-    modal({
-      title: t('settings.roles.notGraphTitle'),
-      body: el('p.muted', { text: d.reason ? t('settings.roles.notGraphBody', { reason: dx(d.reason, d.reason_args) }) : t('settings.roles.notGraphBodyBare') }),
-      actions: [{ label: t('common.gotIt'), kind: 'ghost' }],
-    });
-    return;
-  }
-  const auto = d.auto || {}, eff = d.effective || {};
-  const selects = [];
-  const byClass = cls => (d.nodes || []).filter(n => n.class_type === cls);
-  const optText = (r, n) => t(
-    n.title
-      ? auto[r.key] === n.id ? 'settings.roles.optNodeTitleAuto' : 'settings.roles.optNodeTitle'
-      : auto[r.key] === n.id ? 'settings.roles.optNodeAuto' : 'settings.roles.optNode',
-    { id: n.id, title: n.title });
-  const rows = (d.roles || []).map(r => {
-    const list = byClass(r.class);
-    const cur = eff[r.key] || '';
-    const sel = el('select.select', { style: { flex: '0 0 auto', minWidth: '112px', maxWidth: '48%' } },
-      el('option', { value: '', text: t(r.required ? 'settings.roles.autoMissing' : 'settings.roles.skip') }),
-      ...list.map(n => el('option', { value: n.id, text: optText(r, n) })));
-    sel.value = cur;
-    if (!list.length) sel.disabled = true;
-    selects.push({ key: r.key, node: sel, auto: auto[r.key] });
-    return el('div.set__row', {},
-      el('b', { text: dx(r.label) }),
-      el('span.set__extra', {
-        text: t(r.required ? 'settings.roles.classCountReq' : 'settings.roles.classCount', { cls: r.class, n: list.length }),
-      }),
-      sel);
-  });
-  const verdict = el('div', {});
-  const paintVerdict = (v) => fill(verdict,
-    el('h4.dlg-h4', { text: t('settings.roles.verifyTitle') }),
-    ...(v.can_takeover
-      ? [okRow(true, t('settings.roles.verdictOk'))]
-      : [okRow(false, t('settings.roles.verdictBad'), dl(v.errors))]));
-  paintVerdict(d);
-  /* 只交与自动认出不同的那些：全量存进库等于把节点号钉死，
-     而节点号是 ComfyUI 按画布顺序给的，挪一下就会变 */
-  const grab = () => {
-    const out = {};
-    for (const s of selects) if (s.node.value && s.node.value !== s.auto) out[s.key] = s.node.value;
-    return out;
-  };
-  async function saveRoles(handle, close) {
-    try {
-      const r = await api.setWorkflowRoles(grab());
-      paintVerdict(r);
-      if ((r.rejected || []).length) toastErr(t('settings.roles.rejected'), dl(r.rejected));
-      else toastOk(t('settings.roles.saved'));
-      if (close) { reload?.(); handle?.close(); }
-    } catch (e) { toastErr(t('settings.roles.saveFail'), e.message); }
-  }
-  return modal({
-    title: t('settings.wf.roles'), wide: true,
-    body: el('div.dlg-flow', {},
-      el('p.muted', { text: t('settings.roles.intro') }),
-      ...rows, verdict),
-    actions: [
-      { label: t('settings.roles.saveSee'), kind: 'ghost', run: (h) => { saveRoles(h, false); return false; } },
-      { label: t('settings.roles.saveClose'), kind: 'primary', run: (h) => { saveRoles(h, true); return false; } },
-    ],
-  });
-}
-
-/**
- * 把工作流文件里的节点摊开给人看（类名与个数），缺哪个认识的角色一并列出。
- */
-async function inspectWorkflow() {
-  const busy = toastBusy(t('settings.insp.busy'));
-  let d;
-  try { d = await api.workflowInspect(); } catch (e) { busy.close(); toastErr(t('settings.insp.fail'), e.message); return; }
-  busy.close();
-  const counts = new Map();
-  for (const n of d.nodes || []) counts.set(n.class_type, (counts.get(n.class_type) || 0) + 1);
-  const row = (k, v) => el('div.set__row', {}, el('b', { text: k }), el('span.set__extra', { text: v }));
-  const body = el('div.dlg-flow', {},
-    el('p.muted', {
-      text: `${t(d.format === 'api' ? 'settings.insp.apiFmt' : 'settings.insp.uiFmt')} · ${t('settings.insp.nodeTotal', { n: d.total })}`,
-    }),
-    d.stitch_pair_ok ? null : el('div.set__row.is-bad', {}, el('span.dot', { class: 'dot dot--err' }),
-      el('b', { text: t('settings.insp.noPair') }),
-      el('span.set__extra', { text: t('settings.insp.noPairWhy') })),
-    el('h4.dlg-h4', { text: t('settings.insp.listTitle') }),
-    ...[...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, n]) => row(k, t('settings.insp.count', { n }))),
-    (d.known_missing || []).length
-      ? el('div', {}, el('h4.dlg-h4', { text: t('settings.insp.missingTitle') }), el('p.muted', { text: d.known_missing.join(t('settings.sepList')) }))
-      : null);
-  return modal({ title: t('settings.insp.title'), wide: true, body, actions: [{ label: t('common.close'), kind: 'ghost' }] });
 }
 
 function createCloudPane() {
@@ -715,12 +569,13 @@ const AUTHOR = { name: '@杉果派', url: 'https://github.com/ShanGuoP' }; // i1
 const REPO = 'https://github.com/ShanGuoP/Synco';
 
 /* 开源致谢：只列真的进了这个二进制的东西，许可口径见仓库根的 NOTICE.md。
-   评估过但没采用的（photon-rs、YuNet/FaceMesh 权重）不写在这里——
-   写没在包里的署名既没义务也没意义，还会让人以为界面里有人脸功能。
    第一列存键名：这一格是模块级常量，装载时字典还没到。 */
 const CREDITS = [
   ['settings.about.cCrates', 'MIT / Apache-2.0'],
   ['settings.about.cTauri', 'MIT / Apache-2.0'],
+  ['settings.about.cTract', 'MIT / Apache-2.0', 'https://github.com/sonos/tract'],
+  ['settings.about.cYuNet', 'MIT', 'https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet'],
+  ['settings.about.cFaceMesh', 'Apache-2.0', 'https://github.com/yakhyo/mediapipe-face-mesh-onnx'],
   ['settings.about.cMls', 'MPL-2.0', 'https://github.com/mpizenberg/rust_mls'],
   ['settings.about.cFont', 'SIL OFL 1.1', 'https://fonts.google.com/noto/specimen/Noto+Serif+SC'],
 ];
@@ -814,6 +669,7 @@ export function settingsModal(section = 'backend') {
         : k === 'phrases' ? createPhrasesPane()
         : createPresetsPane({ projectId: store.peek('project')?.id || null }));
       fill(pane, el('h2.settings-workspace__title', { text: t(key) }), built[k].node);
+      built[k].fit?.();
     },
   })));
   nav.querySelector('.is-on').click();
@@ -824,7 +680,7 @@ export function settingsModal(section = 'backend') {
     title: t('shell.settings'), wide: true, lockClose: glass,
     body: el('div.set', {}, nav, pane),
     actions: glass ? [] : [{ label: t('common.close'), kind: 'ghost' }],
-    onClose: () => { if (previousFocus?.isConnected) previousFocus.focus(); },
+    onClose: () => { for (const p of Object.values(built)) p.close?.(); if (previousFocus?.isConnected) previousFocus.focus(); },
   });
   m.node.classList.add('settings-workspace');
   // 工作区继续是同一对话框会话；Tab 不漏进被遮住的画布，Esc/关闭仍走原工厂。

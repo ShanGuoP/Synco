@@ -42,18 +42,31 @@ pub async fn adjust_get(State(ctx): State<Shared>, APath(id): APath<String>) -> 
     let iid = path_id(&id)?;
     let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let data = adjust::panel(&ctx, img.id)?;
-    // 关键点没检出过时明确说 false，面板据此把一键塑形那排滑杆灰掉，
-    // 而不是让用户拖一根"看着动了其实没用"的杆
-    let has_face = util::blocking({
+    let analysis = util::blocking({
         let ctx = ctx.clone();
-        move || Ok(json!({ "has_landmarks": crate::service::face::has_landmarks(&ctx, &img) }))
-    })
-    .await?;
+        move || crate::service::face::cached_analysis(&ctx,&img)
+    }).await?;
     let mut out = data.as_object().cloned().unwrap_or_default();
-    if let Some(v) = has_face.get("has_landmarks") {
-        out.insert("has_landmarks".into(), v.clone());
-    }
+    out.insert("has_landmarks".into(), analysis["has_landmarks"].clone());
+    out.insert("face_analysis".into(), analysis);
     Ok(ok(Value::Object(out)))
+}
+
+pub async fn face_post(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
+    let iid = path_id(&id)?;
+    let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404,"srv.common.noImage")) };
+    let _permit = ctx.slots.clone().acquire_owned().await.map_err(|_| AppError::bad("srv.face.inference"))?;
+    let out = util::blocking(move || crate::service::face::analyze(&ctx,&img)).await?;
+    Ok(ok(out))
+}
+
+pub async fn face_crop_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
+    let body=body_of(raw).await?;
+    let iid=path_id(&id)?;
+    let Some(img)=photo_of(&ctx,iid).await? else { return Ok(err(404,"srv.common.noImage")) };
+    let (ops,_)=EditOps::parse(&ops_of_body(&body).to_string()).map_err(|e| AppError::detail("srv.adjust.badOpsJson",e))?;
+    let ratio=body["ratio"].as_f64().unwrap_or(1.0) as f32;
+    Ok(ok(crate::service::face::crop(&ctx,&img,&ops.geometry,ratio)?))
 }
 
 /// 存参数：夹逼 + 轨迹抽稀之后整条替换。回 `clamped` 让前端把越界的那几根杆说清楚。

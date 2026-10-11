@@ -11,7 +11,7 @@ const DONE_I18N = [
   'public/js/state.js', 'public/js/ui/progress.js', 'public/js/ui/modal.js', 'public/js/views/editor/filmstrip.js',
   'public/js/app.js', 'public/js/gen.js', 'public/js/views/editor/compare.js', 'public/js/views/editor/history.js',
   'public/js/core/theme.js', 'public/js/ui/dialogs.js', 'public/js/ui/phrases.js', 'public/js/ui/backends.js',
-  'public/js/ui/settings.js', 'public/js/ui/presets.js', 'public/js/views/home.js',
+  'public/js/ui/workflow_pane.js', 'public/js/ui/workflow_canvas.js', 'public/js/ui/settings.js', 'public/js/ui/presets.js', 'public/js/views/home.js',
   'public/js/views/editor/params.js', 'public/js/views/editor/index.js',
   'public/js/views/canvas/index.js', 'public/js/views/project.js', 'public/js/views/editor/adjust.js',
 ];
@@ -33,7 +33,7 @@ const DONE_I18N_RS = [
   'crates/server/src/api/projects.rs', 'crates/server/src/api/results.rs', 'crates/server/src/api/settings.rs',
   'crates/server/src/api/setup.rs', 'crates/server/src/error.rs', 'crates/server/src/img/codec.rs',
   'crates/server/src/img/mod.rs', 'crates/server/src/lib.rs', 'crates/server/src/main.rs',
-  'crates/server/src/models/dto.rs', 'crates/server/src/models/entity.rs', 'crates/server/src/models/mod.rs',
+  'crates/server/src/models/dto.rs', 'crates/server/src/models/entity.rs', 'crates/server/src/models/workflow.rs', 'crates/server/src/service/workflow_graph.rs', 'crates/server/src/models/mod.rs',
   'crates/server/src/repo/adjust.rs', 'crates/server/src/repo/db.rs', 'crates/server/src/repo/images.rs',
   'crates/server/src/repo/mod.rs', 'crates/server/src/repo/presets.rs', 'crates/server/src/repo/projects.rs',
   'crates/server/src/repo/results.rs', 'crates/server/src/repo/settings.rs', 'crates/server/src/service/adjust.rs',

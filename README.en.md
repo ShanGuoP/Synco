@@ -8,31 +8,39 @@ Import a photo → paint over the part you want fixed → hand it to your local 
 
 Unlike regenerating the whole frame — which quietly changes your background, the fabric texture on the shirt and the face you didn't ask about — Synco replaces pixels inside the mask and nothing else. Outside the feathered transition band the result is **bit-identical** to the original. The seam is closed with multi-band blending, so there's no pasted-on border.
 
-This demo started tiny: a Node tool with one button in the rail — **GPT Image redraw**. Then it needed ComfyUI, and the original image handling hit a performance wall (scrubbing through photos kept freezing) that the old code couldn't grow past, and I couldn't fix it from where I was — CRUD is about as deep as I go. So I rewrote it. I went back and forth on the design with 大肥鱼 DeepSeek-v4.1-Flash, GLM-5.3-Flash, GPT-6.1-Sol and Qwen-3.8-Flash over a few rounds and landed on a Rust rewrite. Go was the plan — I know it better — but arguing with the models made it clear Rust is the stronger fit for image work. Fine. Rust it is.
+This demo started tiny: a Node tool with one button in the rail — **GPT Image redraw**. Then it needed ComfyUI, and the original image handling hit a performance wall (scrubbing through photos kept freezing) that the old code couldn't grow past, and I couldn't fix it from where I was — CRUD is about as deep as I go. So I rewrote it. I went back and forth on the design with 大肥鱼 DeepSeek-v4.1-Flash, GLM-5.3 and GPT-6.1-Sol over a few rounds and landed on a Rust rewrite. Go was the plan — I know it better — but arguing with the models made it clear Rust is the stronger fit for image work. Fine. Rust it is.
 
-Most of the Rust code was written by Qwen-3.8-Flash, then cross-audited by GLM-5.3, DeepSeek-v4.1-Flash and GPT-6.1-Sol.
+Most of the Rust code was written by Qwen-3.8-Flash and GPT-6.1-Sol, then cross-audited by GLM-5.3, DeepSeek-v4.1-Flash and GPT-6.1-Sol.
 
 ---
 
 ## What it does
 
 - **Fix what you painted**: makeup, hair, blemishes, clothing detail, deleting a passer-by in the frame — the rest of the image doesn't move
+
 - **Two ways to get pixels**: local ComfyUI (free, offline, your own weights) or a cloud image API (no GPU, billed per image)
+
 - **Batch**: submit many images from one project at once; they queue and run at the concurrency you set. You can switch to another project and keep painting while they run, and interrupt an individual image. Closing the window quits the app; whatever hasn't finished is re-queued on next launch
+
 - **Output at original resolution**: the viewer shows a scaled-down level for smoothness, but repainting and stitching happen at full resolution — a 24MP photo doesn't lose detail because painting was easier on a smaller canvas
+
 - **Keep editing the result**: any result can be "Save as new image" and masked again, or "Run again with these settings" to pull them back into the right-hand panel
+
+- **Face awareness & one-click shaping**: bundled YuNet detection and FaceMesh 468-point landmarks run locally on CPU through tract. Apply natural shaping or adjust face slimming / eye enlargement / nose slimming / chin separately, with six portrait crop suggestions and an automatic face beauty region; no GPU or generation backend required
+
 - **Useful without a backend** (since 0.3): crop & straighten (tap an aspect ratio and the frame appears; drag it, then "✔ Crop this" to commit — 90° steps are lossless, ±15° fine rotation gets expanded edges, plus flips), manual liquify (four brushes: push / pinch / enlarge / restore), ten colour sliders + built-in presets + `.cube` LUTs (drop a `.cube` file into `luts/` in your data folder and it shows up in the dropdown), plus a Beauty group of seven sliders — smoothing, texture retention, blemishes, even tone, brightening, de-shine, sharpening (can be limited to the area you painted) — all computed on your machine, no ComfyUI call, nothing uploaded
+
 - **See it at 1:1 after adjusting**: while you drag a slider you get a fast scaled preview; zoom to actual pixels and it swaps to the full-resolution render. "Clear all adjustments" takes you back to the source at any time
+
 - **Adjustments are parameters, not an overwrite**: the original is never rewritten; previews run on the scaled level and only the final render uses full resolution. You can always go back, and you can apply the result as a new image and hand *that* to the repaint path
+
 - **Masks stay editable**: stored in the project folder as a PNG that gets overwritten in place, erasable, up to 8 undo steps
+
 - **Compare**: draggable divider between original and result, zoom and pan, 1:1 on real pixels, then "Download result"
+
 - **Prompt presets**: save the instructions you reuse; negatives and steps/CFG can override the defaults
+
 - **Canvas (image-to-image)**: start from a blank sheet — write one line and generate the whole frame in the cloud; drafts auto-save and results hang off the same project's history
-- **Drag to import**: many files at once, or drop a whole folder onto the import card on the home page
-- **Light and dark**: follow system / paper white / ink black; the area around the canvas always stays a neutral dark, so judging colour isn't thrown off by the UI background
-- **Interface appearance**: glass UIv2 is the default; switch to the magazine style in Settings → Appearance. Your saved appearance choice is preserved
-- **Bilingual interface**: Settings → Appearance → Language, one click. Every sentence lives in a language pack, so errors and queue status follow the language you picked. What doesn't get translated: prompts sent to the model, names you typed, and the raw text your OS or backend returned — translating those would be editing your data
-- **Restrained motion**: page turns, theme switches and tile entrances animate; the canvas area never does (no flashing where colour is judged). There's a "reduce motion" switch in Settings with the same meaning as `prefers-reduced-motion`
 
 ---
 
@@ -50,7 +58,9 @@ Settings → Appearance → Language. That's the program's language, not the ins
 
 ## Get an image engine ready first
 
-Synco ships no model. It's a **dispatch desk plus stitching core**. Pick one of the two below — or configure both and choose per submit.
+Synco does not bundle image-generation weights; repainting runs through local ComfyUI or a cloud image API.
+Pick one of the two below — or configure both and choose per submit. Crop, colour, liquify, beauty and face analysis
+work offline on their own; the small YuNet and FaceMesh models are bundled with the app.
 
 ### Route A: local ComfyUI (recommended — free, offline)
 
@@ -132,7 +142,7 @@ milliseconds and whether it can list models. You can also change that one image'
 
 1. **Choose your data folder** — on the very first start this page opens by itself. Originals, masks, results and
    the database all live here; point it at any drive. You may need one restart afterwards.
-2. **Connect an image engine** — see the two routes above; either one is enough (or configure both).
+2. **Connect an image engine** — needed for AI repainting; see the two routes above. Skip this step for local adjustments only.
 3. **Create a project, import photos** — the "Photo import" card on the home page: drop files on it, or press
    "Import photos" and multi-select. Leave the project name empty and it names itself after the date.
 4. **Paint the mask** — open an image and paint over what should be fixed; the white area is what gets repainted.
@@ -174,7 +184,7 @@ smaller is smoother, larger lets you paint finer.
 | `Esc` | Leave compare / close the dialog |
 | `?` | Shortcut list |
 
-**Local adjustments** (the "Local edit" page in the right rail): four groups of parameters — crop, liquify,
+**Local adjustments** (the "Local edit" page in the right rail): five groups of parameters — crop, face shaping, liquify,
 colour, beauty — and the original is never rewritten end to end. The crop entry point is the row of aspect ratios:
 tap one and the frame appears on the canvas ("Free" places the frame without locking the ratio; tapping the current
 one collapses it). Drag the handles or the whole frame, and **nothing commits until you press "✔ Crop this"** —
@@ -182,6 +192,25 @@ skip it and it's as if you never cropped. Rotation and flips apply immediately; 
 Liquify: pick a brush, then "Start shaping"; every stroke is recorded in the parameters, and "Undo one" /
 "clear strokes" let you back out. If you want to keep painting after adjusting: "Apply as new image" turns it into
 another image in the project carrying those parameters, while the source keeps its own.
+
+### Face awareness & one-click shaping
+
+Opening a photo analyzes faces automatically and reuses cached results. The first model load may take a moment;
+photos and landmark inference stay on your machine. Open the right rail's "Local edit" tab and expand "Face awareness & shaping":
+
+1. **Shape**: press "Natural shape" for gentle defaults, or adjust face slimming, eye enlargement, nose slimming and chin.
+   Each slider ranges from `-100` to `100`; `0` preserves the original. "Reset shaping" resets only these four values,
+   keeping manual liquify strokes. In group photos, shaping targets the largest face.
+2. **Compose**: choose `1:1`, `4:3`, `3:4`, `16:9`, `3:2` or `9:16` to preview a suggested crop. Move or resize the frame,
+   then press "✔ Crop this" to commit. Suggestions adapt to existing rotation and flips.
+3. **Beauty region**: under "Beauty", enable "Automatic face beauty region", then adjust smoothing or the other beauty sliders.
+   The region covers skin on all faces with usable landmarks, preserving eyes and lips. When the painted-mask restriction
+   is also enabled, the two regions intersect. The switch is off by default and does not set beauty strength by itself.
+
+If no face is found or the main face has no usable landmarks, automatic shaping controls are disabled; manual liquify,
+crop and colour remain available. Use "Detect faces again" to retry. An empty face region never falls back to whole-image beauty.
+The original is never overwritten, and landmarks and skin regions follow crop, rotation and flips into the adjusted frame.
+See [model sources, SHA-256 hashes and licenses](assets/face/README.md) and [NOTICE](NOTICE.md).
 
 **Export**: set a local folder under Settings → Export folder (it's created if missing), then press "Export" in the
 retouch page's top bar — the current result is handed over as `<origname_#result>.png`, with `(2)(3)` appended
@@ -306,6 +335,20 @@ node tools/lint-layers.js    # eight layering rules, incl. "files that hand copy
 node tools/i18n-check.js     # zh/en key parity and how much interface text is still untranslated
 ```
 
+To check local adjustments and face processing, build the development server used by the scripts by default.
+Provide a clear JPEG / PNG portrait for the face tests; they use an isolated temporary data folder and do not read or modify your projects:
+
+```powershell
+cargo build -p synco-server --bin synco
+node tools/adjust-check.js
+$env:SYNCO_FACE_TEST_IMAGE = 'C:\Photos\portrait.jpg' # Replace with your own test portrait path
+cargo test -p synco-server real_portrait --lib -- --ignored
+node tools/face-check.cjs
+```
+
+Face checks cover real single/group detections and landmarks, shaping pixel changes, plus HTTP parameter persistence,
+preview reuse, full renders, rotated crop suggestions and cached no-face results. Default `cargo test` skips the test that needs a portrait file.
+
 `synco-tools.exe` only exists in a source build (it isn't in the installer). Run with no arguments and it's an
 interactive menu with live status: start/stop the local service, backfill derived levels, lock weight fingerprints,
 check a ComfyUI folder, switch production — every step asks before it acts.
@@ -375,8 +418,15 @@ they did; versions and per-item licences are in [NOTICE](NOTICE.md).
   EXIF orientation into pixels (otherwise "the original looks upright, the thumbnail is lying on its side")
 - [fast_image_resize](https://github.com/Cykooz/fast_image_resize) — resampling for the scaled levels, thumbnails and adjustment previews
 - [imageproc](https://github.com/image-rs/imageproc) — mask dilation (that extra ring around your strokes before stitching)
-- [moving-least-squares](https://github.com/mpizenberg/rust_mls) (MPL-2.0) — the MLS deformation maths the automatic face
-  shaping would need. It's a dependency as-is, unmodified and not copied into this repo, so only its own files stay under MPL-2.0
+- [moving-least-squares](https://github.com/mpizenberg/rust_mls) (MPL-2.0) — the MLS deformation maths used by automatic face
+  shaping. It's a dependency as-is, unmodified and not copied into this repo, so only its own files stay under MPL-2.0
+
+**Face awareness**
+
+- [tract](https://github.com/sonos/tract) — local CPU inference for YuNet and FaceMesh
+- [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) — face boxes and five-point detection
+- [MediaPipe FaceMesh ONNX](https://github.com/yakhyo/mediapipe-face-mesh-onnx) — 468 landmarks; model and topology from Google MediaPipe,
+  exported by Yakhyo with weights sourced through PINTO0309's conversion. See [model licenses and pinned hashes](assets/face/README.md)
 
 **Transport and odds and ends**
 

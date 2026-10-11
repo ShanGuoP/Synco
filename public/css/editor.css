@@ -267,6 +267,17 @@ body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
 .prop-tabs .badge { margin-left: auto; align-self: center; }
 
 .prop-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--s-3); display: flex; flex-direction: column; gap: var(--s-5); }
+.prop-body > * { flex: 0 0 auto; min-width: 0; }
+.pm-local { display: grid; gap: var(--s-3); }
+.prop-body .chips { padding: 0; }
+.prop-body .ed-mode { flex-wrap: wrap; padding: 0 0 var(--s-3); }
+.prop-body .ed-mode > .muted { flex: 1 0 100%; margin-left: 0; white-space: normal; overflow-wrap: anywhere; }
+.prop-body .ed-ink .seg { flex: 1; min-width: 0; }
+.prop-body .ed-ink .seg__it { flex: 1; padding-inline: var(--s-2); }
+/* 调整页保留状态反馈；生成中的停止入口仍然可用。 */
+.ed-prop.is-adjust-tab:not(.is-generating) .prop-ft > :not(.run-line) { display: none; }
+.ed-prop.is-adjust-tab .prop-ft { padding-block: var(--s-2); }
+.ed-prop.is-adjust-tab:not(.is-generating) .prop-ft:has(.run-line:empty) { display: none; }
 
 /* 折叠分组：每组一条粗墨线开头，像版面分栏 */
 .grp { display: flex; flex-direction: column; gap: var(--s-3); border-top: 1px solid var(--line-hi); padding-top: var(--s-3); }
@@ -276,8 +287,8 @@ body:has(#editor:not([hidden])) .toasts { bottom: 104px; }
   font-family: var(--f-display); font-size: var(--f-md); font-weight: 700; letter-spacing: .4px;
   padding: 0 0 var(--s-1); cursor: pointer; text-align: left;
 }
-.grp__hd .caret { transition: transform var(--t) var(--ease); color: var(--txt-3); }
-.grp.is-collapsed .caret { transform: rotate(-90deg); }
+.grp__hd .caret { transform: rotate(90deg); transition: transform var(--t) var(--ease); color: var(--txt-3); }
+.grp.is-collapsed .caret { transform: none; }
 .grp.is-collapsed .grp__bd { display: none; }
 .grp__hd .badge { margin-left: auto; }
 .grp__bd { display: flex; flex-direction: column; gap: var(--s-3); }

@@ -313,7 +313,11 @@ pub fn control_pairs(auto: &Auto, shape: &FaceShape, w: usize, h: usize) -> (Vec
     let mut p = Vec::new();
     let mut q = Vec::new();
     let px = |pt: [f32; 2]| (pt[0] * w as f32, pt[1] * h as f32);
-    let face_w = (shape.box_norm[2] * w as f32).max(1.0);
+    // Anatomical cheek width remains stable after rotations and reflections.
+    let face_w = shape.jaw.first().zip(shape.jaw.last()).map(|(a,b)| {
+        let (ax,ay)=px(*a); let (bx,by)=px(*b);
+        ((bx-ax).powi(2)+(by-ay).powi(2)).sqrt()
+    }).unwrap_or(shape.box_norm[2]*w as f32).max(1.0);
 
     // 瘦脸：下颌线上的点沿"外轮廓法线"内收
     let slim = auto.face_slim.norm() * 0.16;
@@ -321,11 +325,20 @@ pub fn control_pairs(auto: &Auto, shape: &FaceShape, w: usize, h: usize) -> (Vec
         let n = shape.jaw.len();
         for i in 0..n {
             let (a, b, c) = (shape.jaw[i.saturating_sub(1)], shape.jaw[i], shape.jaw[(i + 1).min(n - 1)]);
-            let (tx, ty) = (c[0] - a[0], c[1] - a[1]);
+            let (ax, ay) = px(a);
+            let (cx, cy) = px(c);
+            let (tx, ty) = (cx - ax, cy - ay);
             let l = (tx * tx + ty * ty).sqrt().max(1e-6);
             // 法线取 (+ty, −tx)：下颌线自左向右时它指向脸外
-            let (nx, ny) = (ty / l, -tx / l);
+            let (mut nx, mut ny) = (ty / l, -tx / l);
             let (x, y) = px(b);
+            // Reflections reverse contour winding. Choose the normal toward the
+            // nose, so positive slim remains inward after a flip or rotation.
+            let (mx, my) = px(shape.nose_wing_l);
+            let (rx, ry) = px(shape.nose_wing_r);
+            if nx * ((mx + rx) * 0.5 - x) + ny * ((my + ry) * 0.5 - y) < 0.0 {
+                nx = -nx; ny = -ny;
+            }
             p.push((x, y));
             q.push((x + nx * slim * face_w, y + ny * slim * face_w));
         }
@@ -356,7 +369,8 @@ pub fn control_pairs(auto: &Auto, shape: &FaceShape, w: usize, h: usize) -> (Vec
         for (x, y) in [(lx, ly), (rx, ry), ((lx + mx) * 0.5, (ly + my) * 0.5), ((rx + mx) * 0.5, (ry + my) * 0.5)] {
             let (dx, dy) = (mx - x, my - y);
             let l = (dx * dx + dy * dy).sqrt().max(1e-6);
-            let step = nose * face_w;
+            // Keep the two wings from crossing even at the end of the slider.
+            let step = (nose * face_w).clamp(-l*0.7, l*0.7);
             p.push((x, y));
             q.push((x + dx / l * step, y + dy / l * step));
         }
@@ -374,6 +388,24 @@ pub fn control_pairs(auto: &Auto, shape: &FaceShape, w: usize, h: usize) -> (Vec
         for t in [0.0f32, 0.5, 1.0] {
             p.push((cx - dx * t, cy - dy * t));
             q.push((cx - dx * t + dx / l * step, cy - dy * t + dy / l * step));
+        }
+    }
+    if !p.is_empty() {
+        // Shared points (jaw tip + chin) receive both requested displacements.
+        let mut merged_p: Vec<(f32,f32)> = Vec::new();
+        let mut merged_q: Vec<(f32,f32)> = Vec::new();
+        for (a,b) in p.iter().zip(&q) {
+            if let Some(i)=merged_p.iter().position(|v| (v.0-a.0).abs()<0.1 && (v.1-a.1).abs()<0.1) {
+                merged_q[i].0+=b.0-a.0; merged_q[i].1+=b.1-a.1;
+            } else { merged_p.push(*a); merged_q.push(*b); }
+        }
+        p=merged_p; q=merged_q;
+        let [x,y,bw,bh]=shape.box_norm;
+        let pad=(MLS_SCOPE-1.0)*0.5;
+        for pt in [[x-bw*pad,y-bh*pad],[x+bw*0.5,y-bh*pad],[x+bw*(1.0+pad),y-bh*pad],
+            [x-bw*pad,y+bh*0.5],[x+bw*(1.0+pad),y+bh*0.5],
+            [x-bw*pad,y+bh*(1.0+pad)],[x+bw*0.5,y+bh*(1.0+pad)],[x+bw*(1.0+pad),y+bh*(1.0+pad)]] {
+            let v=px(pt); p.push(v); q.push(v);
         }
     }
     (p, q)
@@ -431,7 +463,11 @@ pub fn mls(img: &Rgba, auto: &Auto, shape: &FaceShape) -> Rgba {
             let d = field[gy1 * gw + gx1];
             let dx = (a[0] + (b[0] - a[0]) * tx) * (1.0 - ty) + (c[0] + (d[0] - c[0]) * tx) * ty;
             let dy = (a[1] + (b[1] - a[1]) * tx) * (1.0 - ty) + (c[1] + (d[1] - c[1]) * tx) * ty;
-            let v = sample(src, w, h, x as f32 - dx, y as f32 - dy, Pad::Edge);
+            let edge = (x-x0).min(x1-x).min(y-y0).min(y1-y) as f32;
+            let feather = ((x1-x0).min(y1-y0) as f32 * 0.08).max(1.0);
+            let fade = (edge/feather).clamp(0.0,1.0);
+            let fade = fade*fade*(3.0-2.0*fade);
+            let v = sample(src, w, h, x as f32 - dx*fade, y as f32 - dy*fade, Pad::Edge);
             let i = (y * w + x) * 4;
             out.px[i] = v[0].round().clamp(0.0, 255.0) as u8;
             out.px[i + 1] = v[1].round().clamp(0.0, 255.0) as u8;
@@ -673,10 +709,30 @@ mod tests {
         assert_eq!(p.len(), q.len());
         assert!(!p.is_empty());
         // 下颌在脸框下半部：内收意味着朝框的中心线靠
-        for (i, (px, py)) in p.iter().enumerate() {
+        for (i, (px, py)) in p.iter().take(s.jaw.len()).enumerate() {
             let (qx, qy) = q[i];
             let d = ((qx - px).powi(2) + (qy - py).powi(2)).sqrt();
             assert!(d > 0.0, "第 {i} 组控制点没位移");
+        }
+        assert!(p.iter().zip(&q).rev().take(8).all(|(a,b)| a==b), "边界锚点必须固定");
+    }
+
+    #[test]
+    fn slimming_displacements_follow_rotations_and_reflections() {
+        let s=shape();
+        let auto=Auto { face_slim: crate::Slider(40), ..Default::default() };
+        let (p,q)=control_pairs(&auto,&s,300,180);
+        let g=crate::ops::Geometry { rotate_deg:90.0,flip_h:true,..Default::default() };
+        let mapped=crate::geometry::map_shape(&s,300,180,&g);
+        let (rp,rq)=control_pairs(&auto,&mapped,180,300);
+        for i in 0..s.jaw.len() {
+            let map=|v:(f32,f32)| {
+                let v=crate::geometry::map_point([v.0/300.0,v.1/180.0],300,180,&g);
+                (v[0]*180.0,v[1]*300.0)
+            };
+            let (ep,eq)=(map(p[i]),map(q[i]));
+            assert!((rp[i].0-ep.0).abs()<1e-3 && (rp[i].1-ep.1).abs()<1e-3);
+            assert!((rq[i].0-eq.0).abs()<1e-3 && (rq[i].1-eq.1).abs()<1e-3);
         }
     }
 

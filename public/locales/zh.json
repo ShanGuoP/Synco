@@ -308,8 +308,8 @@
       "styleTitle": "界面风格",
       "magazine": "杂志风格",
       "magazineTip": "纸面、衬线标题与细墨线",
-      "glass": "玻璃质感 · UI v2",
-      "glassTip": "中性色、圆角卡片与柔和光影",
+      "glass": "工作台风格 · UI v2",
+      "glassTip": "实色面板、清晰层次与克制的强调色",
       "styleNote": "风格与底色可以自由组合，选择会在这台设备上保存。",
       "motionTitle": "动效",
       "langFail": "语言没存上"
@@ -336,6 +336,9 @@
       "noBrowser": "叫不动系统浏览器",
       "cCrates": "axum · tokio · rusqlite · image · imageproc · fast_image_resize · reqwest · rust-embed",
       "cTauri": "Tauri 2 桌面壳",
+      "cTract": "tract 本地模型推理",
+      "cYuNet": "YuNet 人脸检测（OpenCV Zoo）",
+      "cFaceMesh": "MediaPipe FaceMesh（Google / Yakhyo / PINTO0309）",
       "cMls": "moving-least-squares（几何形变数学）",
       "cFont": "Noto Serif SC 界面字体"
     }
@@ -917,6 +920,26 @@
     "refsTitle": "参考图"
   },
   "ad": {
+    "grpFace": "人脸感知与一键塑形",
+    "facePending": "等待人脸分析",
+    "detectFaces": "重新检测人脸",
+    "naturalShape": "一键自然塑形",
+    "resetShape": "重置塑形",
+    "faceSlim": "瘦脸",
+    "eyeBig": "大眼",
+    "noseSlim": "瘦鼻",
+    "chin": "下巴",
+    "autoShapeTip": "-100～100，0 为原貌；建议从小幅度开始",
+    "faceScope": "塑形作用于画面中面积最大的主脸；美颜区覆盖所有可用人脸。",
+    "faceComposition": "人像构图建议（点击摆框，确认后裁切）",
+    "faceDetecting": "正在分析人脸，首次加载模型可能稍慢…",
+    "faceNone": "没有检出人脸，可重新检测；自动美颜区为空。",
+    "faceSparse": "检出 {n} 张人脸，但主脸关键点不可用，暂不能塑形。",
+    "faceReady": "检出 {n} 张人脸，主脸塑形已就绪",
+    "faceFail": "人脸分析失败：{msg}",
+    "autoSkin": "自动人脸美颜区",
+    "autoSkinTip": "仅处理脸部皮肤，避开眼睛和嘴唇；开启涂抹蒙版时取两者交集。",
+
     "ratioFree": "自由",
     "ratio11": "1:1",
     "ratio43": "4:3",
@@ -1000,7 +1023,7 @@
     "byMask": "只在涂过的地方生效",
     "byMaskTip": "复用遮罩那层笔迹：涂哪儿磨哪儿；关掉就是全图",
     "maskNote": "没涂遮罩 = 全图。这一层的蒙版坐标在变形之后的域里。",
-    "footNote": "原图永不改写：下面这些都是参数，随时能退回。预览按 proxy 档算，落盘才走原分辨率。",
+    "footNote": "原图保持不变，调整随时可撤回。预览实时更新，成图使用原始分辨率。",
     "grpGeo": "裁切重构",
     "grpWarp": "塑形（手动液化）",
     "grpColor": "调色",
@@ -1062,8 +1085,10 @@
   "pm": {
     "tabPrompt": "指令",
     "tabSample": "采样",
+    "localSettings": "本机生成参数",
     "tabLora": "LoRA",
     "tabAdjust": "本地调整",
+    "quickPhrases": "常用修图短语",
     "prompt": "正向指令",
     "promptPh": "描述要改成什么样，一段一个主体一个动作",
     "negative": "负面提示词",
@@ -1188,6 +1213,7 @@
     "delFail": "删除失败"
   },
   "srv": {
+    "face": {"inference": "人脸推理失败：{msg}", "noFace": "这张图尚未检出人脸"},
     "common": {
       "bodyTooLarge": "一次传的图片太大（已收 {got} MB，上限 {cap} MB）",
       "badJson": "请求体不是合法 JSON：{why}",
@@ -1466,6 +1492,16 @@
       "badBody": "读不动 GitHub 的回复：{msg}",
       "http": "GitHub 回了 {code}",
       "connect": "连不上 GitHub：{msg}"
+    },
+    "graph": {
+      "format": "请导入有效的 ComfyUI API JSON（最多 2000 个节点）；UI 工作流导出不能直接执行。",
+      "size": "API JSON 不能超过 8 MB。",
+      "json": "JSON 解析失败：{msg}",
+      "profile": "映射配置无效：{msg}",
+      "binding": "绑定无效：请检查节点、字段及类型；已有连接不能被输入映射覆盖。",
+      "output": "请选择有效的 SaveImage 或 PreviewImage 结果输出节点。",
+      "changed": "当前工作流已切换，请重新读取后再保存映射。",
+      "maskSize": "原图与蒙版尺寸不一致，不能合成 Alpha 蒙版。"
     }
   },
   "wf": {
@@ -1505,5 +1541,50 @@
     "overflow": "第 {line} 行起数据超出声明尺寸",
     "fewComponents": "数据只有 {got} 个分量，声明需要 {need} 个",
     "domainOrder": "DOMAIN_MIN 必须严格小于 DOMAIN_MAX"
+  },
+  "wfGraph": {
+    "canvas": "工作流节点图",
+    "search": "搜索节点 ID、名称或类型",
+    "count": "{nodes} 个节点 · {edges} 条连线",
+    "fit": "适应画布",
+    "zoomOut": "−",
+    "zoomIn": "＋",
+    "output": "结果输出",
+    "loading": "正在读取工作流…",
+    "title": "导入 API 工作流",
+    "intro": "选择或拖入 ComfyUI 导出的 API JSON，自动显示节点图。点击节点选择输入字段和结果输出；其余参数保留原文件默认值。",
+    "import": "导入 JSON",
+    "save": "保存输入输出映射",
+    "summary": "已选择 {count} 个输入字段",
+    "bindingLabel": "{role} → #{node}.{field}",
+    "outputLabel": "结果输出 → #{node}",
+    "noOutput": "尚未选择结果输出节点",
+    "choose": "点击左侧节点，查看参数并选择输入或输出。",
+    "upstream": "连接自 #{node} · 输出 {port}，点击查看来源",
+    "bindField": "绑定字段 {field}",
+    "keep": "保持工作流原值",
+    "setOutput": "选择为结果输出",
+    "selectedOutput": "已选择为结果输出",
+    "fieldNote": "仅可绑定字面量字段。连线字段请到上游节点选择来源，已有连接会保留。",
+    "unsaved": "映射有修改，请保存。",
+    "offline": "离线预览 · 连线由 API 引用推断，尚未检查服务端节点类型。保存后用于编辑器的本地生成；仍需原图和蒙版。",
+    "noGraph": "尚未载入 API 工作流：{reason}",
+    "tooLarge": "JSON 文件不能超过 8 MB。",
+    "invalidJson": "JSON 语法不正确，请检查文件。",
+    "imported": "工作流已导入，请选择输入和输出",
+    "importFail": "导入失败",
+    "saved": "输入输出映射已保存",
+    "discard": "放弃未保存的映射？",
+    "discardNote": "重新读取或导入会替换当前映射草稿。",
+    "roles": {
+      "source_image": "原图",
+      "source_image_mask": "原图 + Alpha 蒙版",
+      "mask": "独立蒙版图片",
+      "prompt": "正向提示词",
+      "negative": "负向提示词",
+      "seed": "种子",
+      "steps": "采样步数",
+      "cfg": "CFG"
+    }
   }
 }

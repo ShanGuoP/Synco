@@ -1,45 +1,46 @@
-//! 人脸感知这一侧目前只做一件事：读关键点缓存。
-//!
-//! 0.3.0 里没有生产者——官方那份 YuNet 导出跑起来是"锚点头"（一个 1×3×640×640 输入、
-//! 九个输出且**没有关键点分支**），要配一套锚点先验才能用；稠密 468 点模型也没拿到
-//! 可以核可再分发来源的权重。所以自动变形与构图建议留到 0.3.x 接生产者，
-//! 这一层先按"表里有就用、没有就不动"实现：一键塑形整段跳过，手动液化/调色/美颜不受影响。
-//!
-//! 推理本身将来放这里（tract 的会话是有状态的），"张量变成框与点"是纯函数，在
-//! `photoedit_core::face`，两边各测各的。
+//! Cached face analysis, in normalized source-image coordinates.
+mod inference;
+pub use inference::{analyze, Engine};
+use crate::{error::Result, models::entity::Image, repo::adjust as radj, state::Ctx};
+use photoedit_core::{face, FaceShape};
+use serde_json::{json, Value};
+use stitch_core::Alpha;
 
-use crate::models::entity::Image;
-use crate::repo::adjust as radj;
-use crate::state::Ctx;
-use photoedit_core::face;
-use photoedit_core::FaceShape;
-use serde_json::Value;
-
-/// 读出这张图已经落表的稠密关键点，折成一键塑形要的那组控制点。
-/// 表是空的（还没检出过）或点数不足以定边界就返回 `None`——
-/// 自动变形整段跳过，手动液化与调色都不依赖它。
+pub fn cached_faces(ctx: &Ctx, img: &Image, w: usize, h: usize) -> Result<Vec<face::FaceBox>> {
+    Ok(radj::faces(ctx, img.id)?.iter().filter_map(|r| {
+        let b: [f32;4] = serde_json::from_str(r.get("box")?.as_str()?).ok()?;
+        let points: [[f32;2];5] = face::parse_points(r.get("landmarks")?.as_str()?).try_into().ok()?;
+        Some(face::FaceBox { x:b[0]*w as f32,y:b[1]*h as f32,w:b[2]*w as f32,h:b[3]*h as f32, score:r.get("score")?.as_f64()? as f32, points: points.map(|p| [p[0]*w as f32,p[1]*h as f32]) })
+    }).collect())
+}
 pub fn cached_shape(ctx: &Ctx, img: &Image) -> Option<FaceShape> {
+    // Never merge different faces into one point cloud.
     let rows = radj::landmarks(ctx, img.id).ok()?;
-    if rows.is_empty() {
-        return None;
-    }
-    let groups: Vec<Vec<[f32; 2]>> = rows
-        .iter()
-        .filter_map(|r| r.get("points").and_then(Value::as_str).map(face::parse_points))
-        .collect();
-    let all = face::points_from_rows(&groups)?;
-    // 主脸（idx 最小的那一行）的粗定位五点：认左眼右眼与鼻尖要靠它
-    let hint: [[f32; 2]; 5] = radj::faces(ctx, img.id)
-        .ok()?
-        .first()
-        .and_then(|f| f.get("landmarks").and_then(Value::as_str))
-        .map(face::parse_points)?
-        .try_into()
-        .ok()?;
-    face::shape_from_landmarks(&all, &hint)
+    let row = rows.iter().find(|r| r["idx"].as_i64() == Some(0))?;
+    face::shape_from_mesh(&face::parse_points(row["points"].as_str()?))
+}
+pub fn has_landmarks(ctx: &Ctx, img: &Image) -> bool { cached_shape(ctx, img).is_some() }
+pub fn cached_analysis(ctx: &Ctx, img: &Image) -> Result<Value> {
+    let faces = cached_faces(ctx, img, img.w.max(1) as usize, img.h.max(1) as usize)?;
+    let suggestions: Vec<_> = faces.first().map(|f| face::RATIOS.iter().filter(|(_,r)| *r > 0.0).map(|(label,r)| json!({"ratio":label,"crop":face::crop_suggestion(img.w.max(1) as usize,img.h.max(1) as usize,f,*r)})).collect()).unwrap_or_default();
+    Ok(json!({"analyzed": !radj::landmarks(ctx,img.id)?.is_empty(), "count":faces.len(), "has_landmarks":has_landmarks(ctx,img),"suggestions":suggestions}))
+}
+pub fn auto_mask(ctx: &Ctx, img: &Image, w: usize, h: usize) -> Result<Alpha> {
+    let groups: Vec<Vec<[f32;2]>> = radj::landmarks(ctx,img.id)?.iter().filter_map(|r| r["points"].as_str().map(face::parse_points)).collect();
+    Ok(face::mesh_beauty_region(w,h,&groups))
 }
 
-/// 这张图有没有可用的关键点（面板据此决定一键塑形那排滑杆是灰的还是能拖）
-pub fn has_landmarks(ctx: &Ctx, img: &Image) -> bool {
-    cached_shape(ctx, img).is_some()
+pub fn crop(ctx: &Ctx, img: &Image, geometry: &photoedit_core::ops::Geometry, ratio: f32) -> Result<Value> {
+    let (w,h)=(img.w.max(1) as usize,img.h.max(1) as usize);
+    let faces=cached_faces(ctx,img,w,h)?;
+    let f=faces.first().ok_or_else(|| crate::error::AppError::bad("srv.face.noFace"))?;
+    let mut g=geometry.clone(); g.crop=None;
+    let (nw,nh)=photoedit_core::geometry::out_size(w,h,&g);
+    let corners=[[f.x,f.y],[f.x+f.w,f.y],[f.x,f.y+f.h],[f.x+f.w,f.y+f.h]];
+    let mapped=corners.map(|p| photoedit_core::geometry::map_point([p[0]/w as f32,p[1]/h as f32],w,h,&g));
+    let (mut lo,mut hi)=([f32::MAX;2],[f32::MIN;2]);
+    for p in mapped { for a in 0..2 { lo[a]=lo[a].min(p[a]); hi[a]=hi[a].max(p[a]); }}
+    let mut f=*f; f.x=lo[0]*nw as f32; f.y=lo[1]*nh as f32;
+    f.w=(hi[0]-lo[0])*nw as f32; f.h=(hi[1]-lo[1])*nh as f32;
+    Ok(json!({"crop":face::crop_suggestion(nw,nh,&f,ratio)}))
 }

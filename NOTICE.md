@@ -29,6 +29,17 @@ Synco 的发行二进制里包含下列第三方组件的**编译产物**。这�
 没有被改动、没有被复制源码进本仓库，因此只要求那两个文件本身继续留在 MPL-2.0 下，
 不影响本项目整体按 Apache-2.0 发布。源码与许可证见上面的仓库地址（同时镜像在 crates.io）。
 
+## 本地人脸模型与推理
+
+- [tract-onnx 0.23.8](https://github.com/sonos/tract)：MIT OR Apache-2.0，CPU ONNX 推理。
+- [OpenCV Zoo YuNet 2023mar](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)：MIT，人脸检测模型。
+- [Yakhyo MediaPipe FaceMesh ONNX export](https://github.com/yakhyo/mediapipe-face-mesh-onnx)：Apache-2.0，468 点关键点模型。
+  模型与拓扑来自 Google MediaPipe；导出者经 PINTO0309 的 FaceMesh 转换获取权重。
+
+模型内嵌到程序。固定输入格式、SHA-256 与来源见 [assets/face/README.md](assets/face/README.md)。
+许可全文位于 `assets/face/LICENSE-YuNet` 与 `assets/face/LICENSE-FaceMesh`，同时在
+`public/licenses/` 内嵌随程序分发。
+
 ## 桌面壳
 
 [Tauri 2](https://tauri.app)（`tauri` 2.12.1 及其 build/codegen/macros/plugin 系列）— Apache-2.0 OR MIT。

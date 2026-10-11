@@ -74,6 +74,8 @@ export const api = {
   /** 本地调整（0.3）：读参数+预设/LUT 名单、存参数、预览、成图、另存为新图 */
   adjust:       id => request(`/api/images/${id}/adjust`),
   saveAdjust:   (id, ops) => request(`/api/images/${id}/adjust`, { method: 'POST', body: { ops } }),
+  faceCrop: (id, ops, ratio) => request(`/api/images/${id}/adjust/face-crop`, { method: 'POST', body: { ops, ratio } }),
+  analyzeFaces: id => request(`/api/images/${id}/adjust/faces`, { method: 'POST', body: {} }),
   adjustPreview: id => request(`/api/images/${id}/adjust/preview`, { method: 'POST', body: {} }),
   /** 带 inline 参数的那次预览只有一种场合用得到：裁切 overlay 背后要铺"没裁但其它都算完"的那一张 */
   adjustPreviewWith: (id, ops) => request(`/api/images/${id}/adjust/preview`, { method: 'POST', body: { ops } }),
@@ -107,6 +109,9 @@ export const api = {
   setWorkflow:   path => request('/api/settings/workflow', { method: 'POST', body: { path } }),
   /** 清点当前存着的工作流文件里有哪些节点（只认库里那条路径，不接参数） */
   workflowInspect: () => request('/api/workflow/inspect'),
+  workflowGraph: () => request('/api/workflow/graph'),
+  importWorkflow: graph => request('/api/workflow/import', { method: 'POST', body: graph }),
+  saveWorkflowProfile: profile => request('/api/workflow/profile', { method: 'POST', body: profile }),
   /** 角色映射：这个文件里谁负责装图、谁负责采样、成图从哪个节点读回来 */
   workflowRoles: () => request('/api/workflow/roles'),
   setWorkflowRoles: roles => request('/api/workflow/roles', { method: 'POST', body: { roles } }),

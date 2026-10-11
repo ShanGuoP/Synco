@@ -84,6 +84,25 @@ pub fn put_landmarks(ctx: &Ctx, id: i64, rows: &[Value]) -> Result<()> {
     Ok(())
 }
 
+/// Commit a complete analysis atomically; a failed refresh preserves old data.
+pub fn put_analysis(ctx: &Ctx, id: i64, faces: &[Value], meshes: &[Value]) -> Result<()> {
+    let mut db = ctx.db();
+    let tx = db.transaction()?;
+    // A deleted image must not acquire orphan analysis rows from an in-flight request.
+    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM images WHERE id=?)", [id], |r| r.get(0))?;
+    if !exists { return Err(crate::error::AppError::bad("srv.common.noImage")); }
+    tx.execute("DELETE FROM image_face WHERE image_id=?", [id])?;
+    tx.execute("DELETE FROM image_landmark WHERE image_id=?", [id])?;
+    for (idx, f) in faces.iter().enumerate() {
+        tx.execute("INSERT INTO image_face(image_id,idx,box,landmarks,score) VALUES(?,?,?,?,?)", rusqlite::params![id,idx as i64,f["box"].to_string(),f["points5"].to_string(),f["score"].as_f64().unwrap_or(0.0)])?;
+    }
+    for (idx, m) in meshes.iter().enumerate() {
+        tx.execute("INSERT INTO image_landmark(image_id,idx,points) VALUES(?,?,?)", rusqlite::params![id,idx as i64,m["points"].to_string()])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// 删图时三张表一起清。清完行才动磁盘是既有惯例（行没了没人认领文件，比反过来轻）。
 pub fn clear(ctx: &Ctx, id: i64) -> Result<()> {
     for sql in [

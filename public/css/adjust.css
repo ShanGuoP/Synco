@@ -3,6 +3,15 @@
    在照片上盖一层彩色，用户就没法判色了。 */
 
 /* ---------- 面板 ---------- */
+.adj-panel { display: grid; gap: var(--s-3); }
+.adj-panel > .grp { padding: var(--s-3); border: 1px solid var(--line-hi); border-radius: var(--r-2); background: var(--bg-card); }
+.adj-panel > .grp.is-collapsed { gap: 0; }
+.adj-panel .grp__hd { min-height: 24px; padding-bottom: 0; }
+.adj-panel .grp__bd { padding-top: var(--s-2); }
+.adj-panel .muted { line-height: 1.6; }
+.adj-panel .chips { gap: var(--s-2); }
+.adj-panel .adj-row > .btn { flex: 1 1 auto; }
+.adj-panel .adj-actions { padding-top: var(--s-3); }
 .adj-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
 .adj-row .muted { flex: 0 0 auto; }
 .adj-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; padding-top: var(--s-2); border-top: 1px solid var(--line); }

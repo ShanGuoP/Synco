@@ -308,8 +308,8 @@
       "styleTitle": "Interface style",
       "magazine": "Magazine",
       "magazineTip": "Paper surfaces, serif headings and fine rules",
-      "glass": "Glass · UI v2",
-      "glassTip": "Neutral surfaces, rounded cards and soft shadows",
+      "glass": "Studio workspace · UI v2",
+      "glassTip": "Solid panels, clear hierarchy and restrained accents",
       "styleNote": "Combine either style with any color mode. Your choice is saved on this device.",
       "motionTitle": "Motion",
       "langFail": "The language wasn’t saved"
@@ -336,6 +336,9 @@
       "noBrowser": "Couldn’t open the system browser",
       "cCrates": "axum · tokio · rusqlite · image · imageproc · fast_image_resize · reqwest · rust-embed",
       "cTauri": "Tauri 2 desktop shell",
+      "cTract": "tract local model inference",
+      "cYuNet": "YuNet face detection (OpenCV Zoo)",
+      "cFaceMesh": "MediaPipe FaceMesh（Google / Yakhyo / PINTO0309）",
       "cMls": "moving-least-squares (geometry warp math)",
       "cFont": "Noto Serif SC interface font"
     }
@@ -917,6 +920,26 @@
     "refsTitle": "References"
   },
   "ad": {
+    "grpFace": "Face awareness & shaping",
+    "facePending": "Waiting for face analysis",
+    "detectFaces": "Detect faces again",
+    "naturalShape": "Natural shape",
+    "resetShape": "Reset shaping",
+    "faceSlim": "Slim face",
+    "eyeBig": "Enlarge eyes",
+    "noseSlim": "Slim nose",
+    "chin": "Chin",
+    "autoShapeTip": "-100 to 100; 0 preserves the original. Start gently.",
+    "faceScope": "Shaping targets the largest face; skin beauty covers all usable faces.",
+    "faceComposition": "Portrait crop suggestions (preview, then confirm)",
+    "faceDetecting": "Analyzing faces; the first model load may take a moment…",
+    "faceNone": "No faces detected. Try again; automatic skin region is empty.",
+    "faceSparse": "Found {n} faces, but the main face has no usable mesh for shaping.",
+    "faceReady": "Found {n} faces; main face shaping is ready",
+    "faceFail": "Face analysis failed: {msg}",
+    "autoSkin": "Automatic face beauty region",
+    "autoSkinTip": "Treat facial skin, preserving eyes and lips. Intersects the painted mask when enabled.",
+
     "ratioFree": "Free",
     "ratio11": "1:1",
     "ratio43": "4:3",
@@ -1000,7 +1023,7 @@
     "byMask": "Only where I painted",
     "byMaskTip": "Reuses the mask strokes: smooth where you painted; off means the whole image",
     "maskNote": "No mask = whole image. This layer’s mask lives in the post-warp domain.",
-    "footNote": "The original is never rewritten: everything below is parameters and can be rolled back any time. Previews run at the proxy level; only rendering uses full resolution.",
+    "footNote": "Your original stays unchanged and adjustments can be reset. Previews update live; rendering uses the original resolution.",
     "grpGeo": "Crop & geometry",
     "grpWarp": "Reshape (manual liquify)",
     "grpColor": "Colour",
@@ -1062,8 +1085,10 @@
   "pm": {
     "tabPrompt": "Instruction",
     "tabSample": "Sampling",
+    "localSettings": "Local generation settings",
     "tabLora": "LoRA",
     "tabAdjust": "Local edit",
+    "quickPhrases": "Quick retouch phrases",
     "prompt": "Positive instruction",
     "promptPh": "Describe what to change — one subject and one action per sentence",
     "negative": "Negative prompt",
@@ -1188,6 +1213,7 @@
     "delFail": "Delete failed"
   },
   "srv": {
+    "face": {"inference": "Face inference failed: {msg}", "noFace": "No face detected in this image"},
     "common": {
       "bodyTooLarge": "Too many bytes in one request (got {got} MB, limit {cap} MB)",
       "badJson": "The request body isn’t valid JSON: {why}",
@@ -1466,6 +1492,16 @@
       "badBody": "Could not read GitHub's reply: {msg}",
       "http": "GitHub replied {code}",
       "connect": "Cannot reach GitHub: {msg}"
+    },
+    "graph": {
+      "format": "Import a valid ComfyUI API JSON (up to 2000 nodes). UI workflow exports cannot execute directly.",
+      "size": "API JSON must not exceed 8 MB.",
+      "json": "JSON parsing failed: {msg}",
+      "profile": "Invalid mapping configuration: {msg}",
+      "binding": "Invalid binding. Check the node, field and type. Input mappings cannot overwrite connections.",
+      "output": "Choose a valid SaveImage or PreviewImage result output node.",
+      "changed": "The active workflow has changed. Reload before saving the mapping.",
+      "maskSize": "Image and mask dimensions differ; cannot compose the alpha mask."
     }
   },
   "wf": {
@@ -1505,5 +1541,50 @@
     "overflow": "Data from line {line} on exceeds the declared size",
     "fewComponents": "The data has {got} components but the declaration needs {need}",
     "domainOrder": "DOMAIN_MIN must be strictly below DOMAIN_MAX"
+  },
+  "wfGraph": {
+    "canvas": "Workflow graph",
+    "search": "Search ID, name or type",
+    "count": "{nodes} nodes · {edges} connections",
+    "fit": "Fit graph",
+    "zoomOut": "−",
+    "zoomIn": "＋",
+    "output": "Result output",
+    "loading": "Loading workflow…",
+    "title": "Import API workflow",
+    "intro": "Choose or drop a ComfyUI API JSON to display its graph. Click nodes to choose input fields and result output; other parameters retain their original values.",
+    "import": "Import JSON",
+    "save": "Save input/output mapping",
+    "summary": "{count} input fields selected",
+    "bindingLabel": "{role} → #{node}.{field}",
+    "outputLabel": "Result output → #{node}",
+    "noOutput": "No result output selected",
+    "choose": "Click a node to inspect parameters and choose inputs or output.",
+    "upstream": "From #{node} · output {port}; click to inspect source",
+    "bindField": "Bind field {field}",
+    "keep": "Keep original workflow value",
+    "setOutput": "Use as result output",
+    "selectedOutput": "Selected result output",
+    "fieldNote": "Only literal fields can be bound. For connected fields, choose the upstream source. Existing connections are preserved.",
+    "unsaved": "Mapping changed. Save to apply.",
+    "offline": "Offline preview · Connections are inferred from API references; server node types have not been checked. Saved mappings apply to local generation in the editor, which still requires an image and mask.",
+    "noGraph": "No API workflow loaded: {reason}",
+    "tooLarge": "JSON files must not exceed 8 MB.",
+    "invalidJson": "Invalid JSON syntax. Check the file.",
+    "imported": "Workflow imported. Choose inputs and output.",
+    "importFail": "Import failed",
+    "saved": "Input/output mapping saved",
+    "discard": "Discard unsaved mapping?",
+    "discardNote": "Reloading or importing will replace the current mapping draft.",
+    "roles": {
+      "source_image": "Source image",
+      "source_image_mask": "Source image + alpha mask",
+      "mask": "Separate mask image",
+      "prompt": "Positive prompt",
+      "negative": "Negative prompt",
+      "seed": "Seed",
+      "steps": "Sampling steps",
+      "cfg": "CFG"
+    }
   }
 }

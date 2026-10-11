@@ -1,0 +1,38 @@
+/* 工作流设置沿用主题色；画布和字段面板共享一个工作区。 */
+.settings-workspace .set__pane > .wf-pane { max-width: none !important; }
+.wf-pane { gap: var(--s-3); }
+.wf-pane__import { padding: var(--s-4); border: 1px dashed var(--line-hi); border-radius: var(--r-4); background: var(--bg-card); }
+.wf-pane.is-drop .wf-pane__import { border-color: var(--spot); background: var(--spot-dim); }
+.wf-pane__import details { margin-top: var(--s-3); }
+.wf-pane__import summary { cursor: pointer; color: var(--txt-3); font-size: var(--f-sm); margin-bottom: var(--s-2); }
+.wf-pane__status { font-size: var(--f-sm); color: var(--txt-3); }
+.wf-pane__status.is-error { color: var(--danger); }
+.wf-pane__body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; border: 1px solid var(--line-hi); border-radius: var(--r-4); overflow: hidden; }
+.wf-graph { min-width: 0; background: var(--bg-field); }
+.wf-graph__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); padding: var(--s-2); }
+.wf-graph__search { width: 180px; flex: 1; min-width: 100px; }
+.wf-graph__toolbar .muted { font-size: var(--f-xs); white-space: nowrap; }
+.wf-graph__viewport { height: 460px; overflow: hidden; position: relative; touch-action: none; cursor: grab; border-top: 1px solid var(--line); background-image: radial-gradient(var(--line-hi) 1px, transparent 1px); background-size: 20px 20px; }
+.wf-graph__viewport.is-dragging { cursor: grabbing; }
+.wf-graph__world { position: absolute; transform-origin: 0 0; }
+.wf-graph__lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.wf-graph__node { position: absolute; display: flex; flex-direction: column; text-align: left; width: 220px; height: 100px; padding: var(--s-2) var(--s-3); gap: var(--s-1); background: var(--bg-card); border: 1px solid var(--line-hi); border-left: 3px solid var(--blue); border-radius: var(--r-4); box-shadow: var(--sh-1); color: var(--txt); cursor: grab; overflow: hidden; }
+.wf-graph__node strong { font-size: var(--f-md); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-graph__node-id, .wf-graph__node-class { color: var(--txt-3); font-size: var(--f-xs); }
+.wf-graph__node-class { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-graph__node.is-selected { border-color: var(--spot); box-shadow: var(--focus); }
+.wf-graph__node.is-bound { border-left-color: var(--green); }
+.wf-graph__node.is-dim { opacity: .25; }
+.wf-graph__badge { color: var(--green); font-size: var(--f-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-pane__inspector { padding: var(--s-4); background: var(--bg-panel); border-left: 1px solid var(--line); max-height: 514px; overflow-y: auto; }
+.wf-pane__inspector h3 { font-size: var(--f-lg); overflow-wrap: anywhere; margin: var(--s-2) 0; }
+.wf-pane__inspector > .muted { font-size: var(--f-xs); }
+.wf-pane__field { border-top: 1px solid var(--line); padding: var(--s-3) 0; }
+.wf-pane__field strong { font-size: var(--f-sm); overflow-wrap: anywhere; }
+.wf-pane__value { font: var(--f-xs) var(--f-mono); color: var(--txt-3); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 100px; overflow-y: auto; margin: var(--s-2) 0; }
+.wf-pane__field .select { width: 100%; }
+.wf-pane__footer { display: flex; align-items: flex-start; gap: var(--s-3); }
+.wf-pane__bindings { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); font-size: var(--f-sm); }
+.wf-pane__binding { color: var(--green); border: 1px solid var(--line-hi); background: var(--bg-card); border-radius: var(--r-3); padding: var(--s-1) var(--s-2); cursor: pointer; font-size: var(--f-xs); }
+@media (max-width: 1100px) { .wf-pane__body { grid-template-columns: minmax(0, 1fr) 230px; } }
+@media (max-width: 750px) { .wf-pane__body { grid-template-columns: 1fr; } .wf-pane__inspector { max-height: 300px; border-left: 0; border-top: 1px solid var(--line); } }

@@ -1,5 +1,4 @@
-// 右栏属性面板：快速指令胶囊 + 「指令 / 采样 / LoRA / 本地调整」子标签 + 底部提交区
-// 胶囊行 → 子标签行 → 参数行（标签+数值直输+滑杆）
+// 右栏属性面板：「指令 / 本地调整」；本机采样与 LoRA 收在指令下方。
 'use strict';
 import { el, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
@@ -12,7 +11,7 @@ import { baseName, fmtNum } from '../../core/format.js';
 
 /* 「本地调整」那一页的内容由 adjust.js 交进来：生成参数与图像调整是两套状态机，
    共用的是这一列的骨架和标签条，不是数据结构 */
-const TABS = [['prompt', 'pm.tabPrompt'], ['sample', 'pm.tabSample'], ['lora', 'pm.tabLora'], ['adjust', 'pm.tabAdjust']];
+const TABS = [['prompt', 'pm.tabPrompt'], ['adjust', 'pm.tabAdjust']];
 
 /* 与后端 api/common.rs 的 SEED_MAX 对齐：滑杆范围就是实际会提交的范围，回填才不会变成另一个种子 */
 export const SEED_MAX = 2147483647;
@@ -78,6 +77,7 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
 
   const panePrompt = el('div', { style: { display: 'grid', gap: '14px' } },
     grp(t('pm.prompt'), { badge: t('pm.charCount', { n: 0 }) }, ta),
+    grp(t('pm.quickPhrases'), { collapsed: true }, chips),
     grp(t('pm.negative'), { badge: t('pm.optionalBadge'), collapsed: true }, neg),
   );
   /* 把 grp 里的徽标换成可更新的计数节点 */
@@ -109,6 +109,11 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
   const loraBox = el('div', { style: { display: 'grid', gap: '10px' } });
   const paneLora = el('div', { style: { display: 'grid', gap: '10px' } }, loraBox,
     el('p', { class: 'muted', text: t('pm.loraNote') }));
+  const sampleGroup = grp(t('pm.tabSample'), { collapsed: true }, paneSample);
+  const loraGroup = grp(t('pm.tabLora'), { collapsed: true }, paneLora);
+  const localSettings = el('section.pm-local', {},
+    el('span.grp__lab', { text: t('pm.localSettings') }), sampleGroup, loraGroup);
+  panePrompt.append(localSettings);
 
   function buildLoras(list) {
     // missing 是"本机没有这个 LoRA"的标记，重建对象时得带上：丢了它，下面那句 l.missing 永远为假，
@@ -174,6 +179,8 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
   const inkRow = el('div.ed-mode.ed-ink', { hidden: true },
     el('span.ed-mode__lab', { text: t('pm.inkLabel') }), inkSeg,
     el('span.muted.nowrap', { text: t('pm.inkKeepNote') }));
+  // 生成配置跟随指令页滚动，不再挤占本地调整的工作区。
+  panePrompt.prepend(modeRow, inkRow);
 
   function paintInk() {
     const s = store.peek('settings') || {};
@@ -196,13 +203,16 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
   let adjustNode = null;
   let onTabSwitch = null;
   function show() {
+    node.classList.toggle('is-adjust-tab', tab === 'adjust');
     for (const b of tabs.children) {
       const hidden = b.dataset.k === 'adjust' && !adjustNode;
       b.hidden = hidden;
       b.classList.toggle('is-on', b.dataset.k === tab);
     }
-    const pane = tab === 'prompt' ? panePrompt : tab === 'sample' ? paneSample : tab === 'lora' ? paneLora : adjustNode;
+    const pane = tab === 'adjust' ? adjustNode : panePrompt;
+    const switching = body.firstElementChild !== (pane || panePrompt);
     fill(body, pane || panePrompt);
+    if (switching) body.scrollTop = 0;
     if (tab === 'prompt') syncPrompt();
   }
 
@@ -237,7 +247,7 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
       el('h3', { html: icon('sliders', { cls: 'icon icon--sm' }) + `<span>${t('pm.title')}</span>` }),
       el('span.grow'),
       resetBtn),
-    modeRow, inkRow, chips, tabs, body, ft,
+    tabs, body, ft,
   );
 
   function sync(settings) {
@@ -261,17 +271,18 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
   const markable = () => ({
     prompt: ta.closest('.grp'), negative: neg.closest('.grp'),
     steps: stepsCtl.node, cfg: cfgCtl.node, seed: seedCtl.node, randomSeed: rndCtl.node,
+    loras: loraGroup,
   });
   function clearMarks() {
     for (const n of Object.values(markable())) if (n) n.classList.remove('is-changed');
-    tabs.querySelector('[data-k="lora"]')?.classList.remove('is-changed');
+    sampleGroup.classList.remove('is-changed');
   }
   function markChanged(keys) {
     const m = markable();
     clearMarks();
     for (const k of keys) {
-      if (k === 'loras') tabs.querySelector('[data-k="lora"]')?.classList.add('is-changed');
-      else if (m[k]) m[k].classList.add('is-changed');
+      if (m[k]) m[k].classList.add('is-changed');
+      if (['steps', 'cfg', 'seed', 'randomSeed'].includes(k)) sampleGroup.classList.add('is-changed');
     }
   }
   /* 用户一动参数，标记就失效 */
@@ -295,7 +306,7 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
     line(t(cloudMode ? 'pm.restoredCloud' : 'pm.restoredWf'));
   }
 
-  function setBusy(b) { busy = b; paintGo(); }
+  function setBusy(b) { busy = b; node.classList.toggle('is-generating', b); paintGo(); }
   /** 出错那一路要显式说 isErr：以前是拿"失败/错误/拒收"去匹配文案，换英文就全漏 */
   function line(txt, isErr) {
     fill(runLine, txt ? el('span', { class: isErr ? 'err' : '', text: txt }) : null);
@@ -312,19 +323,17 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
     fill(stagesBox, stages.node);
   }
 
-  /** 本机 / 云端来回切：云端隐掉采样与 LoRA 页，并换一套阶段名 */
+  /** 本机 / 云端来回切：仅本机显示采样与 LoRA，并换一套阶段名 */
   function setCloud(on) {
     paintMode();          // 开关上的高亮与"打到哪"的提示，无论模式有没有变都要跟着 store 走
     paintInk();
     on = !!on;
     inkRow.hidden = !on;
-    if (on === cloudMode) return;
-    cloudMode = on;
-    // 「本地调整」与生成模式无关（它根本不走后端），云端模式下也要留着；被强制收回的只有采样与 LoRA
-    if (on && tab !== 'prompt' && tab !== 'adjust') tab = 'prompt';
-    for (const b of tabs.children) b.style.display = on && b.dataset.k !== 'prompt' && b.dataset.k !== 'adjust' ? 'none' : '';
+    localSettings.hidden = on;
     cloudNote.hidden = !on;
     edgeRow.hidden = !on;
+    if (on === cloudMode) return;
+    cloudMode = on;
     const tip = t(on ? 'pm.resetCloud' : 'pm.reset');
     resetBtn.setAttribute('aria-label', tip);
     resetBtn.setAttribute('data-tip', tip);

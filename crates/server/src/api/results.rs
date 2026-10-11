@@ -94,7 +94,8 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     // 提交用哪张计算图：你的工作流（角色校验过了）或程序内置图。
     // 是你的图却认不出角色时**明确拒绝**，不回退内置图（D14）：回退就是"静默谎报"搬到了结构层。
     // 判在上传之前，免得为一张注定不提交的图先传两张 24MP 的 PNG。
-    let plan = cfg::plan(ctx);
+    let plan_ctx = ctx.clone();
+    let plan = util::blocking(move || Ok(cfg::plan(&plan_ctx))).await?;
     if let cfg::Plan::Refused { errors } = &plan {
         return Ok(skipped_with("srv.submit.wfCannotTakeover", json!({ "errors": errors })));
     }
@@ -103,12 +104,14 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     // 涂抹层存的是 proxy 分辨率，工作流里 DrawMaskOnImage 又要和照片同幅：上采样与几何段都在服务侧做完
     // （见 adjust::submit_mask——照片过了几何段而遮罩没过，圈到的就是另一块地方）。
     // 读原图与这两步都是全分辨率的活，整段过阻塞池：压在 worker 上时桌面壳的窗口会一起卡住
+    let use_alpha_mask = matches!(&plan, cfg::Plan::Mapped { profile, .. } if profile.bindings.iter().any(|b| b.role == "source_image_mask"));
     let (photo_bytes, mask_bytes, sent_rel) = {
         let ctx2 = ctx.clone();
         let img = i.clone();
         util::blocking(move || -> Result<(Vec<u8>, Vec<u8>, String)> {
-            let (p, rel) = crate::service::adjust::submit_artifact(&ctx2, &img)?;
+            let (mut p, rel) = crate::service::adjust::submit_artifact(&ctx2, &img)?;
             let m = crate::service::adjust::submit_mask(&ctx2, &img)?;
+            if use_alpha_mask { p = crate::service::workflow_graph::alpha_image(&p, &m)?; }
             Ok((p, m, rel))
         })
         .await?
@@ -123,8 +126,13 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
         util::num_or(settings.get("seed"), 0.0) as i64
     };
     let seed = super::common::seed_for(base, i.id);
-    let takeover = matches!(plan, cfg::Plan::Workflow { .. });
+    let takeover = matches!(plan, cfg::Plan::Workflow { .. } | cfg::Plan::Mapped { .. });
     let (graph, outs) = match plan {
+        cfg::Plan::Mapped { graph: g, profile } => {
+            let built = crate::service::workflow_graph::compile(&g, &profile, &photo, &mask, &settings, seed)?;
+            let roles = serde_json::from_value(json!({"out_final":profile.output_node})).unwrap();
+            (built, comfy::Outputs::from_roles(&roles))
+        }
         cfg::Plan::Workflow { graph: g, roles } => {
             let built = comfy::inject_workflow(&g, &roles, &photo, &mask, &settings, seed)?;
             (built, comfy::Outputs::from_roles(&roles))

@@ -14,3 +14,4 @@ pub mod reclaim;
 pub mod releases;
 pub mod setup;
 pub mod workflow;
+pub mod workflow_graph;

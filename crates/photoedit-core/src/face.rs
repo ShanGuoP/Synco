@@ -275,9 +275,118 @@ pub fn parse_points(raw: &str) -> Vec<[f32; 2]> {
 /// 构图建议的候选比例（F1 的宽高比那排按钮同一个表）
 pub const RATIOS: &[(&str, f32)] = &[("free", 0.0), ("1:1", 1.0), ("4:3", 4.0 / 3.0), ("3:4", 3.0 / 4.0), ("16:9", 16.0 / 9.0), ("3:2", 1.5), ("9:16", 9.0 / 16.0)];
 
+/// OpenCV Zoo 2023mar heads. Internal five-point convention is brow midpoint,
+/// image-left eye, image-right eye, nose, mouth midpoint (not YuNet's raw order).
+pub fn decode_yunet(cls: &[f32], obj: &[f32], bbox: &[f32], kps: &[f32], side: usize, stride: usize, lb: (f32,f32,f32), threshold: f32) -> Result<Vec<FaceBox>, &'static str> {
+    if stride == 0 || side == 0 || side % stride != 0 || lb.0 <= 0.0 { return Err("Invalid YuNet geometry"); }
+    let cols = side / stride; let n = cols * cols;
+    if cls.len()!=n || obj.len()!=n || bbox.len()!=n*4 || kps.len()!=n*10 { return Err("Invalid YuNet head dimensions"); }
+    let mut out = Vec::new();
+    for i in 0..n {
+        if !cls[i].is_finite() || !obj[i].is_finite() { continue; }
+        let score = (cls[i].clamp(0.0,1.0)*obj[i].clamp(0.0,1.0)).sqrt();
+        if score < threshold { continue; }
+        let b = &bbox[i*4..i*4+4]; let k = &kps[i*10..i*10+10];
+        if !b.iter().chain(k).all(|x| x.is_finite()) { continue; }
+        let (col,row,s) = ((i%cols) as f32,(i/cols) as f32,stride as f32);
+        let (w,h) = (b[2].exp()*s/lb.0,b[3].exp()*s/lb.0);
+        if !w.is_finite() || !h.is_finite() || w < 1.0 || h < 1.0 { continue; }
+        let (cx,cy) = (((col+b[0])*s-lb.1)/lb.0,((row+b[1])*s-lb.2)/lb.0);
+        let mut p = [[0.0;2];5];
+        for j in 0..5 { p[j] = [((col+k[j*2])*s-lb.1)/lb.0,((row+k[j*2+1])*s-lb.2)/lb.0]; }
+        let mut eyes = [p[0],p[1]]; eyes.sort_by(|a,b| a[0].total_cmp(&b[0]));
+        let mid = |a:[f32;2],b:[f32;2]| [(a[0]+b[0])*0.5,(a[1]+b[1])*0.5];
+        out.push(FaceBox { x:cx-w*0.5,y:cy-h*0.5,w,h,score,points:[mid(eyes[0],eyes[1]),eyes[0],eyes[1],p[2],mid(p[3],p[4])] });
+    }
+    Ok(out)
+}
+
+// Canonical MediaPipe topology; only used with the pinned 468-point export.
+pub const OVAL: &[usize] = &[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+const EYE_L: &[usize] = &[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246];
+const EYE_R: &[usize] = &[263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466];
+const LIPS: &[usize] = &[61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185];
+pub fn shape_from_mesh(p: &[[f32;2]]) -> Option<crate::warp::FaceShape> {
+    if p.len()!=468 || !p.iter().flatten().all(|v| v.is_finite()) { return None; }
+    let group = |ids:&[usize]| ids.iter().map(|&i| p[i]).collect::<Vec<_>>();
+    let oval = group(OVAL);
+    let (mut lo,mut hi) = ([f32::MAX;2],[f32::MIN;2]);
+    for q in &oval { for a in 0..2 { lo[a]=lo[a].min(q[a]); hi[a]=hi[a].max(q[a]); }}
+    if hi[0]-lo[0]<1e-4 || hi[1]-lo[1]<1e-4 { return None; }
+    let center = |ids:&[usize]| { let v=group(ids); [v.iter().map(|q| q[0]).sum::<f32>()/v.len() as f32,v.iter().map(|q| q[1]).sum::<f32>()/v.len() as f32] };
+    Some(crate::warp::FaceShape { box_norm:[lo[0],lo[1],hi[0]-lo[0],hi[1]-lo[1]],jaw:group(&[234,93,132,58,172,136,150,149,176,148,152,377,400,378,379,365,397,288,361,323,454]),eye_l:group(EYE_L),eye_r:group(EYE_R),iris_l:center(EYE_L),iris_r:center(EYE_R),nose_wing_l:p[98],nose_wing_r:p[327],chin:p[152] })
+}
+fn inside(p:[f32;2], polygon:&[[f32;2]]) -> bool {
+    let mut yes=false; let mut j=polygon.len()-1;
+    for i in 0..polygon.len() { let (a,b)=(polygon[i],polygon[j]);
+        if (a[1]>p[1])!=(b[1]>p[1]) && p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0] { yes=!yes; } j=i;
+    } yes
+}
+/// Face oval only, with eye/lip exclusions and a softly feathered boundary.
+pub fn mesh_beauty_region(w:usize,h:usize,groups:&[Vec<[f32;2]>]) -> px_core::Alpha {
+    // Bound polygon rasterization cost for full-resolution exports.
+    if w.max(h) > 1600 {
+        let scale=1600.0/w.max(h) as f32;
+        let mask=mesh_beauty_region((w as f32*scale).round().max(1.0) as usize,(h as f32*scale).round().max(1.0) as usize,groups);
+        return px_core::resize_alpha(&mask,w,h);
+    }
+    let mut out=px_core::Alpha::new(w,h);
+    if w==0 || h==0 { return out; }
+    for points in groups {
+        let Some(shape)=shape_from_mesh(points) else { continue; };
+        let polygon=|ids:&[usize],expand:f32| {
+            let mut v:Vec<_>=ids.iter().map(|&i| [points[i][0]*w as f32,points[i][1]*h as f32]).collect();
+            let c=[v.iter().map(|p| p[0]).sum::<f32>()/v.len() as f32,v.iter().map(|p| p[1]).sum::<f32>()/v.len() as f32];
+            for p in &mut v { for a in 0..2 { p[a]=c[a]+(p[a]-c[a])*expand; }} v
+        };
+        let oval=polygon(OVAL,1.0);
+        let holes=[polygon(EYE_L,1.35),polygon(EYE_R,1.35),polygon(LIPS,1.18)];
+        let feather=(shape.box_norm[2]*w as f32*0.025).max(1.0);
+        let x0=(shape.box_norm[0]*w as f32).max(0.0) as usize;
+        let y0=(shape.box_norm[1]*h as f32).max(0.0) as usize;
+        let x1=((shape.box_norm[0]+shape.box_norm[2])*w as f32).clamp(0.0,w as f32) as usize;
+        let y1=((shape.box_norm[1]+shape.box_norm[3])*h as f32).clamp(0.0,h as f32) as usize;
+        for y in y0..y1 { for x in x0..x1 {
+            let p=[x as f32,y as f32];
+            if !inside(p,&oval) || holes.iter().any(|hole| inside(p,hole)) { continue; }
+            let mut distance=f32::MAX;
+            for poly in std::iter::once(&oval).chain(holes.iter()) {
+                for i in 0..poly.len() { let (a,b)=(poly[i],poly[(i+1)%poly.len()]);
+                    let d=[b[0]-a[0],b[1]-a[1]];
+                    let t=(((p[0]-a[0])*d[0]+(p[1]-a[1])*d[1])/(d[0]*d[0]+d[1]*d[1]).max(1e-6)).clamp(0.0,1.0);
+                    distance=distance.min((p[0]-a[0]-t*d[0]).powi(2)+(p[1]-a[1]-t*d[1]).powi(2));
+                }
+            }
+            let v=(distance.sqrt()/feather).clamp(0.0,1.0); let v=(v*v*(3.0-2.0*v)*255.0).round() as u8;
+            out.v[y*w+x]=out.v[y*w+x].max(v);
+        }}
+    } out
+}
+
 #[cfg(test)]
 mod shape_tests {
     use super::*;
+
+    #[test]
+    fn yunet_head_decode_restores_letterbox_and_internal_five_points() {
+        let faces=decode_yunet(&[1.0],&[1.0],&[2.0,3.0,0.0,0.0],&[1.0,1.0,3.0,1.0,2.0,2.0,1.0,3.0,3.0,3.0],8,8,(2.0,4.0,8.0),0.75).unwrap();
+        let f=faces[0];
+        assert_eq!([f.x,f.y,f.w,f.h],[4.0,6.0,4.0,4.0]);
+        assert_eq!(f.points[1],[2.0,0.0]);
+        assert_eq!(f.points[2],[10.0,0.0]);
+        assert_eq!(f.points[3],[6.0,4.0]);
+        assert_eq!(f.points[4],[6.0,8.0]);
+        assert!(decode_yunet(&[],&[],&[],&[],8,8,(1.0,0.0,0.0),0.75).is_err());
+        assert!(decode_yunet(&[f32::NAN],&[1.0],&[0.0;4],&[0.0;10],8,8,(1.0,0.0,0.0),0.75).unwrap().is_empty());
+    }
+
+    #[test]
+    fn canonical_mesh_rejects_partial_and_nonfinite_faces() {
+        assert!(shape_from_mesh(&vec![[0.5,0.5];24]).is_none());
+        assert!(shape_from_mesh(&vec![[0.5,0.5];468]).is_none());
+        assert!(shape_from_mesh(&vec![[f32::NAN,0.5];468]).is_none());
+        assert_eq!(mesh_beauty_region(40,20,&[vec![[0.5,0.5];24]]).max(),0);
+    }
 
     /// 合成一张"脸"：椭圆轮廓 200 点当外皮，两圈各 14 点当眼圈，鼻尖左右各几点当鼻翼，
     /// 再加一小片内部散点。真实关键点比这密得多，这里要的是几何判据而不是密度。

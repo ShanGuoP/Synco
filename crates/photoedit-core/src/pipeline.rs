@@ -40,16 +40,24 @@ pub fn apply_chain(img: &Rgba, ops: &EditOps, chain: &Chain) -> Rgba {
     };
     // 笔迹活在源图域，几何段换了坐标系就得跟着转一遍；转完还是对不上就是调用方给错了档，
     // 宁可不加限定——静默挪位比"全图生效"更难解释
-    let mask = match chain.mask {
+    let mut mask = match chain.mask {
         Some(m) if !ops.beauty.is_empty() && m.w == img.w && m.h == img.h => {
             Some(if geometric { Cow::Owned(geometry::apply_alpha(m, &ops.geometry)) } else { Cow::Borrowed(m) })
         }
         _ => None,
     };
+    let mapped_shape = chain.shape.map(|s| geometry::map_shape(s, img.w, img.h, &ops.geometry));
+    let shape = mapped_shape.as_ref();
     if ops.warp.strokes.iter().any(|s| !s.points.is_empty())
         || (!ops.warp.auto.is_empty() && chain.shape.is_some())
     {
-        cur = Cow::Owned(warp::apply(&cur, &ops.warp, chain.shape));
+        cur = Cow::Owned(warp::apply(&cur, &ops.warp, shape));
+        // Skin follows the same deformation as the photo, including manual strokes.
+        if let Some(m) = mask.as_deref().filter(|_| ops.beauty.auto_face) {
+            let mut rgba = Rgba::new(m.w, m.h);
+            for (i,v) in m.v.iter().enumerate() { rgba.px[i*4+3]=*v; }
+            mask = Some(Cow::Owned(warp::apply(&rgba, &ops.warp, shape).alpha()));
+        }
     }
     if let (Some(l), Some(table)) = (ops.lut.as_ref(), chain.lut) {
         let strength = l.strength.pos().min(1.0);

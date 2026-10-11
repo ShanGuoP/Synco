@@ -269,6 +269,48 @@ async function main() {
   const rerun = await submit(base, iid, settings);
   ok('角色表改完还能提交', !!rerun.result_id, JSON.stringify(rerun));
 
+  // ---------- 6. 导入与字段映射：未知节点可预览，原图保留，执行使用选定字段与输出 ----------
+  const custom = {
+    '674': { class_type: 'LoadImage', inputs: { image: 'original.png' } },
+    '683': { class_type: 'PrimitiveStringMultiline', inputs: { value: 'original prompt' } },
+    '686': { class_type: 'Seed (rgthree)', inputs: { seed: 7 } },
+    '679': { class_type: 'CustomSampler', inputs: { text: ['683', 0], seed: ['686', 0], image: ['674', 0], steps: 25, cfg: 3 } },
+    '670': { class_type: 'SaveImage', inputs: { images: ['679', 0], filename_prefix: 'Original' } },
+  };
+  const imported = await req(base, 'POST', '/api/workflow/import', { prompt: custom });
+  ok('未知节点也能离线导入并预览连线', imported.status === 200 && imported.body.edges.length === 4 && imported.body.verified === false, JSON.stringify(imported.body));
+  const importedPath = imported.body.path;
+  ok('导入内容已复制到资料目录', importedPath && fs.existsSync(importedPath), importedPath);
+  const profile = { workflow_path: importedPath, output_node: '670', bindings: [
+    { node_id: '674', field: 'image', role: 'source_image_mask' },
+    { node_id: '683', field: 'value', role: 'prompt' },
+    { node_id: '686', field: 'seed', role: 'seed' },
+    { node_id: '679', field: 'steps', role: 'steps' },
+    { node_id: '679', field: 'cfg', role: 'cfg' },
+  ] };
+  const bound = await req(base, 'POST', '/api/workflow/profile', profile);
+  ok('按任意节点号与字段保存映射', bound.status === 200 && bound.body.profile.bindings.length === 5, JSON.stringify(bound.body));
+  const mapped = await submit(base, iid, settings);
+  const mappedGraph = mock.hits.at(-1)?.graph || {};
+  ok('字段映射真正注入完整执行图', !!mapped.result_id && mappedGraph['683']?.inputs.value === settings.prompt && mappedGraph['686']?.inputs.seed === settings.seed + iid && mappedGraph['679']?.inputs.steps === 22, JSON.stringify(mapped));
+  ok('映射不覆盖已有上游连线与原始默认值', JSON.stringify(mappedGraph['679']?.inputs.text) === '["683",0]' && mappedGraph['670']?.inputs.filename_prefix === 'Original', JSON.stringify(mappedGraph));
+  const original = JSON.parse(fs.readFileSync(importedPath, 'utf8'));
+  ok('运行后导入文件保持原样', original['683'].inputs.value === 'original prompt' && original['686'].inputs.seed === 7 && original['674'].inputs.image === 'original.png' && original['679'].inputs.steps === 25, importedPath);
+  const mappedResult = await settle(base, mapped.result_id);
+  ok('结果从用户选定节点返回', mappedResult.status === 'done' && JSON.parse(mappedResult.settings_json || '{}').workflow_out.final === '670', JSON.stringify(mappedResult.error));
+  const connected = await req(base, 'POST', '/api/workflow/profile', { ...profile, bindings: [{ node_id: '679', field: 'text', role: 'prompt' }] });
+  ok('拒绝用输入绑定覆盖连线', connected.status === 400 && connected.body.code === 'srv.graph.binding', JSON.stringify(connected.body));
+  const wrongType = await req(base, 'POST', '/api/workflow/profile', { ...profile, bindings: [{ node_id: '683', field: 'value', role: 'seed' }] });
+  ok('拒绝把字符串绑定为数字', wrongType.status === 400, JSON.stringify(wrongType.body));
+  const uiImport = await req(base, 'POST', '/api/workflow/import', { nodes: [] });
+  const afterBad = await req(base, 'GET', '/api/workflow/graph');
+  ok('错误导入不破坏当前工作流与映射', uiImport.status === 400 && afterBad.body.path === importedPath && afterBad.body.profile.output_node === '670', JSON.stringify(uiImport.body));
+  await req(base, 'POST', '/api/workflow/import', { x: { class_type: 'PreviewImage', inputs: { images: 'placeholder' } } });
+  const stale = await req(base, 'POST', '/api/workflow/profile', profile);
+  ok('旧页面保存不会污染新工作流', stale.status === 409 && stale.body.code === 'srv.graph.changed', JSON.stringify(stale.body));
+  const back = await req(base, 'POST', '/api/workflow/import', custom);
+  ok('重新导入同一工作流恢复独立映射', back.body.path === importedPath && back.body.profile.bindings.length === 5, JSON.stringify(back.body.profile));
+
   proc.kill();
   mock.close();
   // 进程还在退的时候 Windows 锁着目录，删不掉是常事：不能因为它把一次全绿的跑法报成退出码 1
