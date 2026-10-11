@@ -710,9 +710,10 @@ export function createAdjust(deps) {
   }
 
   /* ==================== 换图 ==================== */
-  async function onImage(info) {
+  async function onImage(info, current = () => true) {
     if (mode) exitMode(true);   // 换图：只把界面收掉，绝不替上一张落定（那一下会把旧裁切写进这张）
-    seq++;                       // 上一张图在飞的响应全部作废
+    const generation = ++seq;     // A→B→A 也要认会话，不能只认图片号
+    const mine = () => generation === seq && current() && idOf() === info.id;
     clearTimeout(timer);
     dirty = false;
     stroke = null;
@@ -734,7 +735,7 @@ export function createAdjust(deps) {
     setBrush(tool);
     try {
       const r = await api.adjust(info.id);
-      if (idOf() !== info.id) return;
+      if (!mine()) return;
       const d = blankOps();
       ops = {
         v: r?.ops?.v || 1,
@@ -753,12 +754,12 @@ export function createAdjust(deps) {
       if (isIdentity()) return false;   // 空参数不用换底图：装载流程那侧已经把源图与瓦片摆好了
       // 库里带着参数进来：底图直接换成这套参数渲染的那一张，别让用户对着源图想象结果
       const p = await api.adjustPreview(info.id);
-      if (idOf() !== info.id) return false;
+      if (!mine()) return false;
       applyPreview(p);
       if (geoActive()) brushLocked?.(t('ad.geomLocked'));
       return true;   // 这一张的显示已经是调整预览，装载流程就别再去摆源图瓦片了
     } catch (e) {
-      if (idOf() === info.id) line(t('ad.paramsFail', { msg: short(e) }));
+      if (mine()) line(t('ad.paramsFail', { msg: short(e) }));
     }
     return false;
   }

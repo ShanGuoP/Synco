@@ -371,11 +371,23 @@ pub fn backfill(ctx: &std::sync::Arc<Ctx>) {
 
 /// 成图的 320 缩略图：历史列靠它，不再回落到 20–33MB 的成图
 pub fn result_thumb(ctx: &Ctx, rid: i64, pid: i64, final_rel: &str) -> Option<String> {
+    let rel = write_result_thumb(ctx, rid, pid, final_rel)?;
+    if repo::results::set_thumb(ctx, rid, &rel).is_err() {
+        let _ = std::fs::remove_file(ctx.data.join(&rel));
+        return None;
+    }
+    Some(rel)
+}
+
+/// 云端完成操作自己登记缩略图，准备文件时不能提前改结果行。
+pub fn write_result_thumb(ctx: &Ctx, rid: i64, pid: i64, final_rel: &str) -> Option<String> {
     let bytes = std::fs::read(util::data_file(&ctx.data, final_rel)?).ok()?;
     let decoded = codec::decode(&bytes).ok()?;
     let th = slot(ctx, pid, format!("r{rid}_{}_thumb.jpg", util::now_ms()));
-    write_bytes(&th.abs, &codec::encode_jpeg(&codec::scale_to_long_edge(&decoded, THUMB_EDGE), THUMB_Q)).ok()?;
-    repo::results::set_thumb(ctx, rid, &th.rel).ok()?;
+    if write_bytes(&th.abs, &codec::encode_jpeg(&codec::scale_to_long_edge(&decoded, THUMB_EDGE), THUMB_Q)).is_err() {
+        let _ = std::fs::remove_file(&th.abs);
+        return None;
+    }
     Some(th.rel)
 }
 

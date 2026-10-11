@@ -126,15 +126,48 @@ pub fn set_files_done(ctx: &Ctx, id: i64, final_rel: &str, crop_rel: Option<&str
     Ok(n == 1)
 }
 
-/// 记下"这一行重算得出无损那一张"的三样：窗口原图、当时那份遮罩、参数快照。
-/// 只在行已落定之后写——落定失败时文件已经被清掉，指针留着就是指向空气。
-pub fn set_recompute(ctx: &Ctx, id: i64, raw_rel: &str, mask_snap_rel: Option<&str>, snap_json: &str) -> Result<()> {
-    repo::run(
+/// SQLite 的单条 UPDATE 原子发布全部材料和状态，失败时行仍为 running。
+pub fn complete(ctx: &Ctx, id: i64, final_rel: &str, thumb_rel: Option<&str>, raw_rel: &str, mask_snap_rel: Option<&str>, snap_json: &str) -> Result<bool> {
+    let n = repo::run(
         ctx,
-        "UPDATE results SET raw_path=?, mask_snap_path=?, snap_json=? WHERE id=?",
-        &[repo::s(raw_rel), repo::si(mask_snap_rel), repo::s(snap_json), repo::i(id)],
+        "UPDATE results SET status='done', final_path=?, thumb_path=?, raw_path=?, mask_snap_path=?, snap_json=? WHERE id=? AND status='running'",
+        &[repo::s(final_rel), repo::si(thumb_rel), repo::s(raw_rel), repo::si(mask_snap_rel), repo::s(snap_json), repo::i(id)],
     )?;
+    Ok(n == 1)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_cloud_job(ctx: &Ctx, image_id: i64, project_id: i64, prompt: &str, settings: &str, model: &str, rerun: Option<i64>, spec: &str, mask: &[u8]) -> Result<i64> {
+    let mut conn = ctx.db();
+    let tx = conn.transaction()?;
+    tx.execute("INSERT INTO results(image_id,project_id,status,prompt,steps,cfg,settings_json,backend,model,rerun_of) VALUES(?,?,'queued',?,0,0,?,'cloud',?,?)",
+        (image_id, project_id, prompt, settings, model, rerun))?;
+    let id = tx.last_insert_rowid();
+    tx.execute("INSERT INTO job_specs(result_id,spec_json,mask_png) VALUES(?,?,?)", (id, spec, mask))?;
+    tx.commit()?;
+    Ok(id)
+}
+
+/// 规格与 queued 同一事务生效；规格表没有 API 查询入口。
+pub fn queue_with_spec(ctx: &Ctx, id: i64, spec: &str, mask: &[u8]) -> Result<()> {
+    let mut conn = ctx.db();
+    let tx = conn.transaction()?;
+    tx.execute("INSERT INTO job_specs(result_id,spec_json,mask_png) VALUES(?,?,?)", (id, spec, mask))?;
+    let n = tx.execute("UPDATE results SET status='queued' WHERE id=? AND status='running'", [id])?;
+    if n != 1 { return Err(crate::error::AppError::bad("srv.queue.byHand")); }
+    tx.commit()?;
     Ok(())
+}
+
+pub fn job_spec(ctx: &Ctx, id: i64) -> Result<Option<(String, Vec<u8>)>> {
+    use rusqlite::OptionalExtension;
+    Ok(ctx.db().query_row("SELECT spec_json,mask_png FROM job_specs WHERE result_id=?", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+}
+
+/// 轮询只读超时值，不为一次状态判断复制整份蒙版与 LUT。
+pub fn job_timeout(ctx: &Ctx, id: i64) -> Result<Option<i64>> {
+    use rusqlite::OptionalExtension;
+    Ok(ctx.db().query_row("SELECT json_extract(spec_json,'$.cloud.timeout_ms') FROM job_specs WHERE result_id=? AND json_valid(spec_json)", [id], |r| r.get(0)).optional()?.flatten())
 }
 
 /// 同 [`set_files_done`]：只在行还是 running 时才落定，返回这次是不是我落的定。
@@ -255,6 +288,24 @@ pub fn paths_for_project(ctx: &Ctx, project_id: i64) -> Result<Vec<String>> {
     rows_paths(ctx, "project_id=?", &[repo::i(project_id)])
 }
 
+/// 启动清理时还要保护图片原件和本机输入，不能只认结果产物。
+pub fn registered_paths(ctx: &Ctx) -> Result<Vec<String>> {
+    let mut paths = rows_paths(ctx, "1=1", &[])?;
+    for row in repo::all(ctx, "SELECT orig_path,mask_path,thumb_path,proxy_path FROM images UNION ALL SELECT orig_path,NULL,NULL,NULL FROM results", &[])? {
+        for k in ["orig_path", "mask_path", "thumb_path", "proxy_path"] {
+            if let Some(s) = row.get(k).and_then(Value::as_str) { paths.push(s.to_string()); }
+        }
+    }
+    for row in repo::all(ctx, "SELECT settings_json FROM results", &[])? {
+        if let Some(s) = row.get("settings_json").and_then(Value::as_str).and_then(|s| serde_json::from_str::<Value>(s).ok()) {
+            if let Some(refs) = s.get("refs").and_then(Value::as_array) {
+                paths.extend(refs.iter().filter_map(Value::as_str).map(str::to_string));
+            }
+        }
+    }
+    Ok(paths)
+}
+
 pub fn delete_for_image(ctx: &Ctx, image_id: i64) -> Result<()> {
     repo::run(ctx, "DELETE FROM results WHERE image_id=?", &[repo::i(image_id)])?;
     Ok(())
@@ -269,18 +320,20 @@ pub fn delete_for_project(ctx: &Ctx, project_id: i64) -> Result<()> {
 /// 状态守卫放 `running`/`done` 而不是只放 `running`：本机那一路是"先落定再后台补缩略图"，
 /// 只认 running 会让历史列永远拿不到小档；被中断（error）的那一行则不该记这张马上要清掉的档。
 pub fn set_thumb(ctx: &Ctx, id: i64, thumb_rel: &str) -> Result<()> {
-    repo::run(
+    let n = repo::run(
         ctx,
         "UPDATE results SET thumb_path=? WHERE id=? AND status IN ('running','done')",
         &[repo::s(thumb_rel), repo::i(id)],
     )?;
+    if n != 1 { return Err(crate::error::AppError::bad("srv.queue.byHand")); }
     Ok(())
 }
 
 /// 画布这一版提交时的线稿快照。每一步生成各存一份（不做上限）：
 /// 画稿本身是原地覆写的，用户接着画两笔，"出这张图时我画的是什么"就只剩这一份能证明。
 pub fn set_sketch(ctx: &Ctx, id: i64, sketch_rel: &str) -> Result<()> {
-    repo::run(ctx, "UPDATE results SET sketch_path=? WHERE id=?", &[repo::s(sketch_rel), repo::i(id)])?;
+    let n = repo::run(ctx, "UPDATE results SET sketch_path=? WHERE id=? AND status='running'", &[repo::s(sketch_rel), repo::i(id)])?;
+    if n != 1 { return Err(crate::error::AppError::bad("srv.queue.byHand")); }
     Ok(())
 }
 
@@ -301,13 +354,57 @@ pub fn set_refs(ctx: &Ctx, id: i64, rels: &[String]) -> Result<()> {
         }
         None => return Err(crate::error::AppError::fail("srv.result.snapNotObject")),
     }
-    repo::run(ctx, "UPDATE results SET settings_json=? WHERE id=?", &[repo::s(&obj.to_string()), repo::i(id)])?;
+    let n = repo::run(ctx, "UPDATE results SET settings_json=? WHERE id=? AND status='running'", &[repo::s(&obj.to_string()), repo::i(id)])?;
+    if n != 1 { return Err(crate::error::AppError::bad("srv.queue.byHand")); }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 必需材料写入失败不发布完成状态() {
+        let dir = std::env::temp_dir().join(format!("synco-complete-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::state::Ctx::new(dir.clone(), dir.clone(), crate::repo::db::open(&dir).unwrap());
+        let id = insert_cloud(&ctx, 1, 1, "p", "{}", "m", None).unwrap();
+        ctx.db().execute_batch("CREATE TRIGGER reject_raw BEFORE UPDATE OF raw_path ON results BEGIN SELECT RAISE(ABORT,'reject raw'); END;").unwrap();
+        assert!(complete(&ctx, id, "final.jpg", Some("thumb.jpg"), "raw.png", Some("mask.png"), "{}").is_err());
+        let row = by_id(&ctx, id).unwrap().unwrap();
+        assert!(row.running());
+        assert!(row.final_path.is_none() && row.raw_path.is_none() && row.thumb_path.is_none());
+        ctx.db().execute_batch("DROP TRIGGER reject_raw").unwrap();
+        assert!(complete(&ctx, id, "final.jpg", Some("thumb.jpg"), "raw.png", Some("mask.png"), "{}").unwrap());
+        assert!(!complete(&ctx, id, "late.jpg", None, "late.png", None, "{}").unwrap());
+        let row = by_id(&ctx, id).unwrap().unwrap();
+        assert_eq!(row.final_path.as_deref(), Some("final.jpg"));
+        assert_eq!(row.mask_snap_path.as_deref(), Some("mask.png"));
+        drop(ctx);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn 规格落库失败整条入队回滚且删除连带清理私有规格() {
+        let dir = std::env::temp_dir().join(format!("synco-spec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::state::Ctx::new(dir.clone(), dir.clone(), crate::repo::db::open(&dir).unwrap());
+        ctx.db().execute_batch("CREATE TRIGGER reject_spec BEFORE INSERT ON job_specs BEGIN SELECT RAISE(ABORT,'reject spec'); END;").unwrap();
+        assert!(insert_cloud_job(&ctx, 1, 1, "p", "{}", "m", None, "{}", &[1, 2]).is_err());
+        assert!(list_queued(&ctx).unwrap().is_empty());
+        assert_eq!(ctx.db().query_row("SELECT count(*) FROM results", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        ctx.db().execute_batch("DROP TRIGGER reject_spec").unwrap();
+        let id = insert_cloud_job(&ctx, 1, 1, "p", "{}", "m", None, "{}", &[1, 2]).unwrap();
+        assert_eq!(job_spec(&ctx, id).unwrap().unwrap().1, vec![1, 2]);
+        delete(&ctx, id).unwrap();
+        assert!(job_spec(&ctx, id).unwrap().is_none());
+        let id = insert_cloud_job(&ctx, 1, 1, "p", "{}", "m", None, "{}", &[1, 2]).unwrap();
+        mark_running(&ctx, id).unwrap();
+        complete(&ctx, id, "final.jpg", None, "raw.png", None, "{}").unwrap();
+        assert!(job_spec(&ctx, id).unwrap().is_none(), "终态不再保留执行凭据与输入副本");
+        drop(ctx);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// 落定只认还在跑的那一行：`mark_running` 早就有的守卫，`set_done`/`set_files_done`
     /// 以前没有——点了中断（行置 error）之后才回来的下载会把行原地改回 done。
@@ -326,6 +423,7 @@ mod tests {
         assert!(!mark_running(&ctx, id).unwrap(), "同一行不能被两个泵各领一次");
         ctx.mark_error(id, "已手动中断", serde_json::Value::Null);
         assert!(!set_done(&ctx, id, &format!("projects/{pid}/r.png"), None).unwrap(), "迟到的落定不该把中断的行改回 done");
+        assert!(!complete(&ctx, id, "final.jpg", None, "raw.png", Some("mask.png"), "{}").unwrap());
         let row = value_by_id(&ctx, id).unwrap().unwrap();
         assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("error"));
         assert!(row.get("final_path").and_then(|v| v.as_str()).unwrap_or("").is_empty(), "中断的行不该挂着成图路径");

@@ -18,6 +18,9 @@
     "recent": "Recently opened"
   },
   "shell": {
+    "trackedTasks": "Tracked tasks {n}",
+    "queueUnavailable": "Cloud queue unavailable",
+    "statsUnavailable": "Library statistics unavailable",
     "refresh": "Refresh",
     "settings": "Settings",
     "settingsTip": "Backend / workflow / ComfyUI folder",
@@ -305,6 +308,12 @@
       "reduceAria": "Reduce motion",
       "reduceLabel": "Reduce motion (no page fades, no canvas gesture inertia, theme switches land instantly)",
       "title": "Base colour",
+      "styleTitle": "Interface style",
+      "magazine": "Magazine",
+      "magazineTip": "Paper surfaces, serif headings and fine rules",
+      "glass": "Glass · UI v2",
+      "glassTip": "Neutral surfaces, rounded cards and soft shadows",
+      "styleNote": "Combine either style with any color mode. Your choice is saved on this device.",
       "note": "Only the window, lists and panels change. The band around the canvas stays a neutral dark — judging colour needs a stable surround, so switching themes never pushes the photo warm or cool.",
       "motionTitle": "Motion",
       "motionAll": "Motion: full (canvas inertia, page fades and theme crossfade are on)",
@@ -1371,6 +1380,7 @@
       "levelMismatch": "Tile level maths broke: expected {w}×{h}, found {aw}×{ah}"
     },
     "queue": {
+      "specMissing": "The task has no valid submission snapshot. Please submit it again.",
       "imageGone": "That image is gone, so this one cannot run",
       "cropPanic": "The crop thread crashed: {msg}",
       "stitchPanic": "The stitch thread crashed: {msg}",

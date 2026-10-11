@@ -21,6 +21,14 @@ CREATE TABLE IF NOT EXISTS results(
   final_path TEXT, crop_path TEXT, maskoverlay_path TEXT,
   created_at TEXT DEFAULT (datetime('now','localtime')));
 CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT);
+/* 内部执行规格单独存放，SELECT results 与接口 DTO 不会带出凭据或输入字节。 */
+CREATE TABLE IF NOT EXISTS job_specs(
+  result_id INTEGER PRIMARY KEY, spec_json TEXT NOT NULL, mask_png BLOB);
+CREATE TRIGGER IF NOT EXISTS delete_job_spec AFTER DELETE ON results
+BEGIN DELETE FROM job_specs WHERE result_id=OLD.id; END;
+CREATE TRIGGER IF NOT EXISTS release_job_spec AFTER UPDATE OF status ON results
+WHEN NEW.status IN ('done','error')
+BEGIN DELETE FROM job_specs WHERE result_id=NEW.id; END;
 CREATE TABLE IF NOT EXISTS backends(
   url TEXT PRIMARY KEY, label TEXT,
   added_at TEXT DEFAULT (datetime('now','localtime')));
@@ -324,7 +332,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let db = open(&dir).unwrap();
         let t = tables(&db);
-        for want in ["app_settings", "backends", "images", "presets", "projects", "results", "image_adjust", "image_face", "image_landmark"] {
+        for want in ["app_settings", "backends", "images", "presets", "projects", "results", "job_specs", "image_adjust", "image_face", "image_landmark"] {
             assert!(t.iter().any(|x| x == want), "缺表 {want}，实有 {t:?}");
         }
         assert!(has_column(&db, "results", "backend").unwrap());
@@ -332,7 +340,7 @@ mod tests {
         // 再开一次必须幂等（迁移循环不能重复 ALTER 报错）
         drop(db);
         let db2 = open(&dir).unwrap();
-        assert_eq!(tables(&db2).len(), 9);
+        assert_eq!(tables(&db2).len(), 10);
         // Windows 上句柄还开着就删不掉：连接必须先撒手，否则这句静默失败，每次跑测试留一个目录
         drop(db2);
         std::fs::remove_dir_all(&dir).ok();

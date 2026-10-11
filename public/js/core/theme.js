@@ -6,6 +6,30 @@ import { call, isDesktop } from './desktop.js';
 import { canTransition } from './motion.js';
 
 const KEY = 'synco.theme';
+const STYLE_KEY = 'synco.appearance';
+export const STYLES = [['magazine', 'settings.theme.magazine'], ['glass', 'settings.theme.glass']];
+
+function readAppearance() {
+  try { return localStorage.getItem(STYLE_KEY) === 'magazine' ? 'magazine' : 'glass'; }
+  catch { return 'glass'; }
+}
+// 存储被禁用时仍保留本次页面选择，设置选中态不能退回默认风格。
+let currentAppearance = readAppearance();
+let appearanceRevision = 0;
+export const appearance = () => currentAppearance;
+
+/** 风格与明暗独立；复用主题过渡及减弱动效的判断。 */
+export function applyAppearance(value) {
+  const next = value === 'magazine' ? 'magazine' : 'glass';
+  currentAppearance = next;
+  const revision = ++appearanceRevision;
+  try { localStorage.setItem(STYLE_KEY, next); } catch { /* 本次选择仍生效 */ }
+  transition(() => {
+    if (revision === appearanceRevision) document.documentElement.dataset.appearance = next;
+  },
+    next !== document.documentElement.dataset.appearance);
+  return next;
+}
 
 // 只有键：模块求值早于字典装载，标签必须在渲染时查
 export const MODES = [['system', 'theme.follow'], ['light', 'theme.paper'], ['dark', 'theme.ink']];
@@ -26,24 +50,45 @@ export function resolved(m = mode()) {
    任一成立就落回原来的瞬切——判色区不该被一张半透明的快照污染，也不该为它花一次大纹理拷贝。 */
 const VT_FLAG = 'vt-theme';
 const paint = r => { document.documentElement.dataset.theme = r; tellShell(r); };
+let themeRevision = 0;
+let transitionRevision = 0;
+let activeTransition = null;
 
 /** 传 m 就是"用户选了这一档"（顺带记住），不传只是按当前选择重新上色 */
 export function apply(m) {
   if (m) { try { localStorage.setItem(KEY, m); } catch { /* 隐私模式写不进去，本次显示照样对 */ } }
   const r = resolved(m);
+  const revision = ++themeRevision;
   const flip = r !== document.documentElement.dataset.theme;   // 首帧与重复上色都不演一遍
-  if (!flip || !canTransition()) { paint(r); return r; }
+  transition(() => { if (revision === themeRevision) paint(r); }, flip);
+  return r;
+}
+
+function transition(update, flip) {
+  const revision = ++transitionRevision;
+  // 跳过快照动画并不会取消旧 update 回调，所以每个偏好还各自校验版本。
+  activeTransition?.skipTransition();
+  activeTransition = null;
+  if (!flip || !canTransition()) {
+    document.documentElement.classList.remove(VT_FLAG);
+    update();
+    return;
+  }
   // 类名要在 startViewTransition 之前挂：新旧两侧的 animation-duration 才取到同一个值
   document.documentElement.classList.add(VT_FLAG);
-  const done = () => document.documentElement.classList.remove(VT_FLAG);
+  const done = () => {
+    if (revision !== transitionRevision) return;
+    activeTransition = null;
+    document.documentElement.classList.remove(VT_FLAG);
+  };
   try {
     // finished 会被"后一次过渡顶掉"而 reject，那不是错误：接住它，只为了收尾摘类名
-    document.startViewTransition(() => paint(r)).finished.then(done, done);
+    activeTransition = document.startViewTransition(update);
+    activeTransition.finished.then(done, done);
   } catch {   // 快照阶段出问题（极少）就把这一次当普通上色，颜色不能不落地
     done();
-    paint(r);
+    update();
   }
-  return r;
 }
 
 /* 窗口第一帧的底色是 Rust 在页面之前画的，而它读不到 localStorage：把生效档位递一份给壳，

@@ -73,15 +73,13 @@ const visible = () => {
 function paint() {
   const host = $('#viewHome');
   fill(host,
-    el('div.wrap', {},
+    el('div.wrap.home-layout', {},
       el('div.page-hd', {}, el('h1', { text: t('nav.home') }),
         el('span.sub', { text: t('home.sub') })),
-      heroRow(),
-      el('div.sec-hd', {}, el('h2', { text: t('home.quick') })),
-      quickRow(),
-      el('div.sec-hd', {}, el('h2', { text: t('home.projectsHd') })),
-      listHd(),
-      grid(),
+      el('section.home-import', {}, heroRow()),
+      el('section.home-shortcuts', {}, el('div.sec-hd', {}, el('h2', { text: t('home.quick') })), quickRow()),
+      el('section.home-projects', {},
+        el('div.sec-hd', {}, el('h2', { text: t('home.projectsHd') })), listHd(), grid()),
     ));
 }
 
@@ -197,6 +195,10 @@ function listHd() {
       onclick: () => { setHome({ filter: k }); paint(); },
     })),
     el('div.list-hd__tools', {},
+      el('div.home-create', {},
+        el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('home.emptyBtn'), onclick: () => createEmpty('') }),
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('home.canvasBtn'), onclick: createCanvas }),
+        el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('home.pick'), onclick: () => $('.hero-card input[type="file"]')?.click() })),
       // 这两个 html: 里进的只有整数与字典常量，没有用户文本；数字加粗靠标签
       el('span.chip', { html: t('home.countChip', { shown, all }) }),
       el('button.chip', { type: 'button', html: icon('sort', { cls: 'icon icon--sm' }) + `<span>${t(SORTS[sort])}</span>`,

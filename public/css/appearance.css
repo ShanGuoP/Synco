@@ -1,0 +1,244 @@
+/* UI v2 外观。所有覆盖限定在 data-appearance，明暗继续由主题控制。 */
+.topbar__brand, .workspace-status, .home-create, .workspace-only, .settings-workspace__title { display: none; }
+.appearance-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); margin-bottom: var(--s-2); }
+.appearance-option { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3); text-align: left; font: inherit; color: var(--txt); background: var(--bg-field); border: 1px solid var(--line-hi); border-radius: var(--r-3); cursor: pointer; }
+.appearance-option:hover { border-color: var(--line-strong); }
+.appearance-option[aria-pressed="true"] { border-color: var(--spot); background: var(--spot-dim); box-shadow: var(--focus); }
+.appearance-option__preview { display: grid; grid-template-columns: 22% 1fr; grid-template-rows: 12px 34px; gap: 5px; width: 100%; padding: 8px; background: var(--bg-app); border: 1px solid var(--line-hi); }
+.appearance-option__preview span { background: var(--bg-card); border: 1px solid var(--line-hi); }
+.appearance-option__preview span:first-child { grid-row: 1 / 3; background: var(--spot-dim); border-left: 2px solid var(--spot); }
+.appearance-option__preview[data-style="glass"] { border-radius: 10px; background: #17191f; grid-template-columns: 12% 1fr; }
+.appearance-option__preview[data-style="glass"] span { border-radius: 5px; background: #30333c; border-color: #454953; box-shadow: 0 2px 6px rgb(0 0 0 / .2); }
+.appearance-option__preview[data-style="glass"] span:first-child { background: #452d30; border-left-color: #e87564; }
+
+html[data-appearance="glass"] body {
+  background: radial-gradient(900px 600px at 0 100%, var(--spot-dim), transparent 65%), var(--bg-app);
+}
+html[data-appearance="glass"] :is(.topbar, .ed-top, .cv-top, .rail) {
+  background: linear-gradient(160deg, var(--bg-card), var(--bg-panel));
+  box-shadow: var(--glass-highlight), var(--sh-1);
+}
+html[data-appearance="glass"] .topbar { border-bottom: 1px solid var(--line); }
+html[data-appearance="glass"] .search { padding: 0 10px; background: var(--bg-field); border: 1px solid var(--line-hi); border-radius: var(--r-2); }
+html[data-appearance="glass"] :is(.input, .textarea, .select) { background-color: var(--bg-field); border: 1px solid var(--line-hi); padding: 7px 10px; }
+html[data-appearance="glass"] .select { padding-right: var(--s-7); }
+html[data-appearance="glass"] :is(.input, .textarea, .select):focus { border-color: var(--spot); box-shadow: var(--focus); }
+html[data-appearance="glass"][data-theme="dark"] .select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23c2c5cc' stroke-width='1.4' fill='none'/%3E%3C/svg%3E"); }
+html[data-appearance="glass"] .input--num { padding: 4px; }
+html[data-appearance="glass"] :is(.btn--primary, .btn--accent) { --btn-bg: var(--spot); --btn-bd: var(--spot); --btn-fg: var(--on-spot); --btn-fg-hi: var(--on-spot); --btn-bg-hi: var(--danger); }
+html[data-appearance="glass"] :is(.hero-card, .tile-card, .quick-card, .pcard__cov, .dlg-card) { border-radius: var(--r-3); box-shadow: var(--glass-highlight), var(--sh-1); }
+html[data-appearance="glass"] .hero-card { background: linear-gradient(160deg, var(--bg-card-hi), var(--bg-card)); }
+html[data-appearance="glass"] .hero-card::before { border-radius: var(--r-2); }
+html[data-appearance="glass"] .hero-card:hover { border-color: var(--spot-line); box-shadow: var(--glass-highlight), var(--sh-2); }
+html[data-appearance="glass"] .hero-card.is-drop { background: var(--spot-dim); }
+html[data-appearance="glass"] .hero-card__badge { flex-shrink: 0; background: var(--spot-dim); color: var(--spot-txt); box-shadow: var(--glass-highlight); }
+html[data-appearance="glass"] .tile-card { border-top: 1px solid var(--line-hi); }
+html[data-appearance="glass"] .tile-card__ico { background: var(--spot-dim); border-color: var(--spot-line); color: var(--spot-txt); }
+html[data-appearance="glass"] :is(.tile-card, .quick-card):hover { box-shadow: var(--glass-highlight), var(--sh-2); border-color: var(--spot-line); }
+html[data-appearance="glass"] .pcard::after { display: none; }
+html[data-appearance="glass"] .pcard__nm { margin-top: var(--s-3); }
+html[data-appearance="glass"] .pcard__del:hover { color: var(--on-spot); }
+html[data-appearance="glass"] :is(.modal, .toast) { background: var(--glass); backdrop-filter: blur(20px) saturate(1.12); box-shadow: var(--glass-highlight), var(--sh-3); }
+html[data-appearance="glass"] .modal { border-top: 1px solid var(--line-hi); }
+html[data-appearance="glass"] :is(.seg, .chip, .set__nav__it) { border-radius: var(--r-2); }
+html[data-appearance="glass"] .toggle { border-radius: 999px; }
+html[data-appearance="glass"] .toggle::after { border-radius: 50%; }
+html[data-appearance="glass"] .slider__track { height: 4px; border-radius: 999px; }
+html[data-appearance="glass"] .slider__thumb { border-radius: 50%; background: var(--spot); }
+
+/* 窄侧栏只收视觉标签；可访问名称与原生提示保留在按钮上。 */
+@media (min-width: 901px) {
+  /* 内容决定行高；翻译或入口换行时四卡一起长高，不能把图标和操作挤掉。 */
+  html[data-appearance="glass"] .hero-row > * { height: auto; min-height: var(--hero-h); }
+  html[data-appearance="glass"] .hero-card { padding: var(--s-4); gap: var(--s-1); }
+  html[data-appearance="glass"] .hero-card > * { flex-shrink: 0; }
+  html[data-appearance="glass"] .hero-card__badge { width: var(--s-8); height: var(--s-8); margin-bottom: 0; }
+  html[data-appearance="glass"] .hero-card__form { margin-top: var(--s-1); }
+  html[data-appearance="glass"] .hero-card__form .input { min-width: 0; }
+  html[data-appearance="glass"] .hero-card__alts { display: flex; justify-content: center; flex-wrap: wrap; gap: var(--s-2); }
+  html[data-appearance="glass"] .rail { padding: 12px 8px; }
+  html[data-appearance="glass"] .rail__brand { justify-content: center; padding: 0 0 14px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
+  html[data-appearance="glass"] .rail__nav { gap: 6px; }
+  html[data-appearance="glass"] :is(.rail__link, .rail__recent) { justify-content: center; padding: 0; height: 42px; border-radius: 10px; }
+  html[data-appearance="glass"] .rail__link.is-active { color: var(--spot-txt); background: var(--spot-dim); box-shadow: var(--glass-highlight), inset 0 0 0 1px var(--spot-line), 0 2px 10px var(--brand-glow); }
+  html[data-appearance="glass"] .rail__group { font-size: 0; margin: 14px 0 6px; padding: 0; }
+  html[data-appearance="glass"] .rail__recent .cov { width: 28px; height: 28px; }
+  html[data-appearance="glass"] :is(.rail__brand > span, .rail__link > span, .rail__recent > .nowrap, .rail__comfy > .nowrap, .promo > span:last-child, .status-line > span:last-child) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  html[data-appearance="glass"] :is(.rail__comfy, .promo) { justify-content: center; padding: 6px; }
+  html[data-appearance="glass"] .status-line { justify-content: center; }
+}
+@media (max-width: 600px) {
+  .appearance-options { grid-template-columns: 1fr; }
+  html[data-appearance="glass"] .set__nav { flex-wrap: nowrap; overflow-x: auto; }
+  html[data-appearance="glass"] .set__nav__it { flex: 0 0 auto; white-space: nowrap; }
+}
+
+/* 工作区采用同一套节点：原风格还原时无需重建画布、输入与文件选择器。 */
+html[data-appearance="glass"] .shell {
+  display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--status-h);
+  grid-template-areas: "top top" "rail content" "status status";
+  visibility: visible !important;
+}
+html[data-appearance="glass"] .main { display: contents; }
+html[data-appearance="glass"] .topbar {
+  grid-area: top; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: 0 var(--s-4); position: relative; z-index: 150; height: var(--topbar-h);
+}
+html[data-appearance="glass"] .topbar__brand { display: flex; align-items: center; gap: var(--s-2); white-space: nowrap; }
+html[data-appearance="glass"] .topbar__mark { width: var(--s-4); height: var(--s-4); border-radius: var(--r-1); background: var(--spot); box-shadow: 0 0 var(--s-3) var(--brand-glow); }
+html[data-appearance="glass"] .topbar__zone--l { overflow: hidden; white-space: nowrap; }
+html[data-appearance="glass"] .topbar__zone--l b { overflow: hidden; text-overflow: ellipsis; }
+html[data-appearance="glass"] .search { width: clamp(120px, 18vw, 240px); max-width: none; }
+html[data-appearance="glass"] .topbar__zone--r .btn, html[data-appearance="glass"] .topbar__zone--r .chip { display: inline-flex; }
+html[data-appearance="glass"] #wfChip { max-width: 160px; }
+html[data-appearance="glass"] .rail { grid-area: rail; min-height: 0; overflow-y: auto; }
+html[data-appearance="glass"] .rail__brand { display: none; }
+html[data-appearance="glass"] .scroll { grid-area: content; min-height: 0; }
+html[data-appearance="glass"] .workspace-status {
+  grid-area: status; display: flex; align-items: center; gap: var(--s-4); padding: 0 var(--s-3);
+  font-size: var(--f-xs); color: var(--txt-3); background: var(--bg-panel); border-top: 1px solid var(--line);
+  min-width: 0; overflow-x: auto; white-space: nowrap; z-index: 150;
+}
+html[data-appearance="glass"] .workspace-status__item { flex: 0 0 auto; max-width: 36vw; overflow: hidden; text-overflow: ellipsis; font: inherit; color: inherit; background: transparent; border: 0; padding: 0; }
+html[data-appearance="glass"] button.workspace-status__item { cursor: pointer; }
+html[data-appearance="glass"] .workspace-status__stats { flex: 0 0 auto; }
+html[data-appearance="glass"]:has(:is(#editor, #canvasView):not([hidden])) .scroll { visibility: hidden; }
+
+html[data-appearance="glass"] .home-layout { display: flex; flex-direction: column; max-width: 1400px; padding: var(--s-7) var(--s-8); gap: var(--s-6); }
+html[data-appearance="glass"] .home-layout > .page-hd { order: 0; margin: 0; padding-bottom: 0; border-bottom: 0; }
+html[data-appearance="glass"] .home-projects { order: 1; }
+html[data-appearance="glass"] .home-import { order: 2; }
+html[data-appearance="glass"] .home-shortcuts { order: 3; }
+html[data-appearance="glass"] .home-projects > .sec-hd { margin-bottom: var(--s-3); }
+html[data-appearance="glass"] .sec-hd::before, html[data-appearance="glass"] .sec-hd::after { display: none; }
+html[data-appearance="glass"] .home-create { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+html[data-appearance="glass"] .list-hd { align-items: center; gap: var(--s-2); border: 0; }
+html[data-appearance="glass"] .list-hd__tools { flex-wrap: wrap; }
+html[data-appearance="glass"] .home-import .hero-row, html[data-appearance="glass"] .home-shortcuts .quick-row { margin-bottom: 0; }
+html[data-appearance="glass"] .pcard { background: var(--bg-card); border: 1px solid var(--line-hi); border-radius: var(--r-3); overflow: hidden; box-shadow: var(--glass-highlight), var(--sh-1); }
+html[data-appearance="glass"] .pcard__cov { border: 0; border-radius: 0; box-shadow: none; }
+html[data-appearance="glass"] .pcard__nm { margin: var(--s-3) var(--s-4) var(--s-1); }
+html[data-appearance="glass"] .pcard__meta { padding: 0 var(--s-4) var(--s-3); }
+
+/* 大画布占完整工作区，面板浮在边缘；收起只隐藏显示，不销毁编辑会话。 */
+html[data-appearance="glass"] :is(.editor, .canvas-view) { inset: var(--topbar-h) 0 var(--status-h) var(--rail-w); }
+html[data-appearance="glass"] .editor {
+  --ed-top-h: var(--workspace-bar-h); --col-prop: var(--workspace-panel-w); --col-pre: var(--workspace-history-w);
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--ed-top-h) minmax(0, 1fr) var(--film-h);
+  grid-template-areas: "top" "stage" "film";
+}
+html[data-appearance="glass"] .ed-top { grid-template-columns: minmax(0, 1fr) auto; }
+html[data-appearance="glass"] .ed-top__c { display: none; }
+html[data-appearance="glass"] .ed-top__r .wctl { display: none; }
+html[data-appearance="glass"] .ed-params-btn { display: inline-flex; }
+html[data-appearance="glass"] :is(.editor > .ed-tools, .cv > .ed-tools) {
+  grid-area: auto; position: absolute; left: var(--s-3); right: var(--s-3); bottom: calc(var(--film-h, 0px) + var(--s-8));
+  height: calc(var(--workspace-bar-h) + var(--s-3)); width: max-content; max-width: calc(100% - var(--s-6));
+  padding: var(--s-1); z-index: 115; border: 1px solid var(--line-hi); border-radius: var(--r-3);
+  background: var(--glass); backdrop-filter: blur(20px); box-shadow: var(--glass-highlight), var(--sh-2);
+}
+html[data-appearance="glass"] .tool { width: 44px; height: var(--workspace-bar-h); border-radius: var(--r-2); }
+html[data-appearance="glass"] .tool > span:last-child { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-appearance="glass"] .tool-slider { display: flex; }
+html[data-appearance="glass"] .tool-slider .slider { width: 80px; flex-basis: 80px; }
+html[data-appearance="glass"] :is(.editor > .ed-prop, .editor > .ed-pre) {
+  grid-area: auto; display: flex; position: absolute; top: calc(var(--ed-top-h) + var(--s-3)); bottom: calc(var(--film-h) + var(--s-3));
+  height: auto; min-height: 0; width: var(--workspace-panel-w); z-index: 112;
+  border: 1px solid var(--line-hi); border-radius: var(--r-3); background: var(--glass); backdrop-filter: blur(20px);
+  box-shadow: var(--glass-highlight), var(--sh-2); overflow: hidden;
+}
+html[data-appearance="glass"] .editor > .ed-prop { right: var(--s-3); }
+html[data-appearance="glass"] .editor.is-drawer > .ed-prop { left: auto; max-height: none; }
+html[data-appearance="glass"] .editor > .ed-pre { left: var(--s-3); width: var(--workspace-history-w); bottom: auto; height: 55%; max-height: 55%; }
+html[data-appearance="glass"] .editor.no-pre > .ed-pre, html[data-appearance="glass"] .editor.no-prop > .ed-prop { display: none; }
+html[data-appearance="glass"] .editor > .ed-rail {
+  grid-area: auto; position: absolute; right: var(--s-3); top: auto; bottom: calc(var(--film-h) + var(--s-3));
+  display: flex; flex-direction: row; width: auto; height: var(--workspace-bar-h); padding: 0 var(--s-1); z-index: 116;
+  border: 1px solid var(--line-hi); border-radius: var(--r-2); background: var(--bg-card); box-shadow: var(--sh-2);
+}
+html[data-appearance="glass"] .ed-rail .rail-btn { width: var(--workspace-bar-h); height: var(--workspace-bar-h); }
+html[data-appearance="glass"] .ed-rail .rail-btn > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+html[data-appearance="glass"] .ed-rail .rail-btn.is-on::before { display: none; }
+html[data-appearance="glass"] .ed-film { min-width: 0; }
+html[data-appearance="glass"] .cv { position: relative; --ed-top-h: var(--workspace-bar-h); grid-template-rows: var(--ed-top-h) minmax(0, 1fr); grid-template-areas: "top" "main"; }
+html[data-appearance="glass"] .cv-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-template-areas: "stage"; position: relative; }
+html[data-appearance="glass"] :is(.cv-side, .cv-hist) {
+  grid-area: auto; position: absolute; top: var(--s-3); bottom: var(--s-3); width: var(--workspace-panel-w); max-height: none; min-height: 0; z-index: 112;
+  border: 1px solid var(--line-hi); border-radius: var(--r-3); background: var(--glass); backdrop-filter: blur(20px);
+  box-shadow: var(--glass-highlight), var(--sh-2); overflow: hidden;
+}
+html[data-appearance="glass"] .cv-side { right: var(--s-3); }
+html[data-appearance="glass"] .cv-hist { left: var(--s-3); width: var(--workspace-history-w); bottom: auto; height: 55%; max-height: 55%; }
+html[data-appearance="glass"] .cv-hist .ed-pre { display: flex; min-width: 0; }
+html[data-appearance="glass"] .cv.is-gen-collapsed .cv-side, html[data-appearance="glass"] .cv.is-history-collapsed .cv-hist { display: none; }
+html[data-appearance="glass"] .workspace-only { display: inline-flex; }
+
+/* 设置是工作区内的页面，仍复用同一 modal 的关闭/键盘与分区工厂。 */
+html[data-appearance="glass"] .settings-workspace { inset: var(--topbar-h) 0 var(--status-h) var(--rail-w); padding: 0; background: var(--bg-app); backdrop-filter: none; }
+html[data-appearance="glass"] .settings-workspace > .modal { width: 100%; height: 100%; max-height: none; display: flex; flex-direction: column; border: 0; border-radius: 0; background: var(--bg-app); box-shadow: none; backdrop-filter: none; }
+html[data-appearance="glass"] .settings-workspace .modal__hd { flex: 0 0 auto; border-bottom: 1px solid var(--line); padding: var(--s-3) var(--s-5); }
+html[data-appearance="glass"] .settings-workspace .modal__bd { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
+html[data-appearance="glass"] .settings-workspace .set { height: 100%; grid-template-columns: 200px minmax(0, 1fr); gap: 0; align-items: stretch; }
+html[data-appearance="glass"] .settings-workspace .set__nav { padding: var(--s-5) var(--s-3); background: var(--bg-panel); overflow-y: auto; }
+html[data-appearance="glass"] .settings-workspace .set__pane { max-height: none; padding: var(--s-6) var(--s-7); }
+html[data-appearance="glass"] .settings-workspace .set__pane > .dlg-flow { max-width: 880px; }
+html[data-appearance="glass"] .settings-workspace__title { display: block; margin-bottom: var(--s-5); font-size: var(--f-xl); color: var(--txt); }
+html[data-appearance="glass"] .settings-workspace .modal__ft { padding: var(--s-2) var(--s-5); }
+
+@media (max-width: 1100px) {
+  html[data-appearance="glass"] .topbar__brand b { display: none; }
+  html[data-appearance="glass"] #wfChip { max-width: 96px; }
+  html[data-appearance="glass"] .ed-tools .tool-slider { min-width: 180px; }
+}
+@media (min-width: 701px) {
+  html[data-appearance="glass"] .editor > .ed-pre, html[data-appearance="glass"] .cv-hist {
+    left: calc(var(--workspace-bar-h) + var(--s-3) * 3);
+  }
+  html[data-appearance="glass"] :is(.editor > .ed-tools, .cv > .ed-tools) {
+    top: calc(var(--ed-top-h) + var(--s-3)); bottom: calc(var(--film-h, 0px) + var(--s-8)); right: auto;
+    width: calc(var(--workspace-bar-h) + var(--s-3)); max-width: none; height: auto;
+    flex-direction: column; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin;
+    background: var(--bg-card); backdrop-filter: none;
+  }
+  html[data-appearance="glass"] .ed-tools::-webkit-scrollbar { display: block; width: var(--s-1); }
+  html[data-appearance="glass"] .ed-tools .tool { flex: 0 0 var(--workspace-bar-h); width: var(--workspace-bar-h); }
+  html[data-appearance="glass"] .ed-tools .tool > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  html[data-appearance="glass"] .ed-tools .tool-sep { height: 1px; width: var(--s-6); margin: var(--s-1) 0; }
+  html[data-appearance="glass"] .ed-tools .tool-zoom { min-height: 28px; margin: 0; }
+  /* 固定控件的包含块是视口，脱离工具栏滚动区；只复用这一枚笔刷滑杆。 */
+  html[data-appearance="glass"] .ed-tools .tool-slider {
+    position: fixed; left: calc(var(--rail-w) + var(--workspace-bar-h) + var(--s-8));
+    bottom: calc(var(--status-h) + var(--film-h, 0px) + var(--s-3)); margin: 0; padding: var(--s-2);
+    border: 1px solid var(--line-hi); border-radius: var(--r-2); background: var(--bg-card); box-shadow: var(--sh-2);
+    min-width: 0; z-index: 116;
+  }
+}
+@media (max-width: 900px) {
+  html[data-appearance="glass"] .rail { position: static; flex-direction: column; align-items: stretch; width: var(--rail-w); height: auto; padding: var(--s-3) var(--s-2); border-top: 0; border-bottom: 0; border-right: 1px solid var(--line-hi); }
+  html[data-appearance="glass"] .rail__nav { display: flex; flex-direction: column; gap: var(--s-1); }
+  html[data-appearance="glass"] .rail__link { width: 100%; height: 42px; padding: 0; justify-content: center; border-radius: var(--r-2); }
+  html[data-appearance="glass"] .rail__link > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  html[data-appearance="glass"] .rail__list, html[data-appearance="glass"] .rail__group, html[data-appearance="glass"] .rail__foot { display: none; }
+  html[data-appearance="glass"] .home-layout { padding: var(--s-5); }
+  html[data-appearance="glass"] .home-import .hero-row { grid-template-columns: 1fr 1fr; }
+  html[data-appearance="glass"] .home-import .hero-card { grid-column: 1 / -1; }
+  html[data-appearance="glass"] .settings-workspace .set { grid-template-columns: 156px minmax(0, 1fr); }
+  html[data-appearance="glass"] .settings-workspace .set__pane { padding: var(--s-4); }
+}
+@media (max-width: 700px) {
+  html[data-appearance="glass"] { --topbar-h: 88px; --workspace-panel-w: min(320px, calc(100vw - var(--rail-w) - var(--s-6))); }
+  html[data-appearance="glass"] .topbar { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 44px 44px; gap: 0 var(--s-2); padding: 0 var(--s-3); }
+  html[data-appearance="glass"] .topbar__brand { grid-column: 1; grid-row: 1; }
+  html[data-appearance="glass"] .topbar__zone--l { grid-column: 2; grid-row: 1; }
+  html[data-appearance="glass"] .topbar__zone--r { grid-column: 3; grid-row: 1; }
+  html[data-appearance="glass"] .topbar__zone--c { grid-column: 1 / -1; grid-row: 2; justify-content: stretch; }
+  html[data-appearance="glass"] .search { width: 100%; }
+  html[data-appearance="glass"] .ed-top__r .btn--sm span { display: inline; }
+  html[data-appearance="glass"] .ed-top, html[data-appearance="glass"] .cv-top { overflow-x: auto; }
+  html[data-appearance="glass"] .ed-top__r, html[data-appearance="glass"] .cv-top__r { flex: 0 0 auto; }
+  html[data-appearance="glass"] .ed-file b { max-width: 100px; }
+  html[data-appearance="glass"] .settings-workspace .set { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  html[data-appearance="glass"] .settings-workspace .set__nav { flex-direction: row; overflow-x: auto; flex-wrap: nowrap; padding: var(--s-2); }
+  html[data-appearance="glass"] .settings-workspace .set__nav__it { flex: 0 0 auto; }
+}

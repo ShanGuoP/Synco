@@ -18,6 +18,9 @@
     "recent": "最近打开"
   },
   "shell": {
+    "trackedTasks": "跟踪任务 {n}",
+    "queueUnavailable": "云端队列暂不可读",
+    "statsUnavailable": "资料库统计未读取",
     "refresh": "刷新",
     "settings": "设置",
     "settingsTip": "后端 / 工作流 / ComfyUI 目录",
@@ -305,6 +308,12 @@
       "reduceAria": "减弱动效",
       "reduceLabel": "减弱动效（翻页不再淡入、画布手势不再滑行，主题一改就到位）",
       "title": "界面底色",
+      "styleTitle": "界面风格",
+      "magazine": "杂志风格",
+      "magazineTip": "纸面、衬线标题与细墨线",
+      "glass": "玻璃质感 · UI v2",
+      "glassTip": "中性色、圆角卡片与柔和光影",
+      "styleNote": "风格与底色可以自由组合，选择会在这台设备上保存。",
       "note": "只换窗口、列表与面板。画布四周那一圈一直是中性深底——判色要在稳定底色下做，换主题不会把照片往冷暖任何一边带。",
       "motionTitle": "动效",
       "motionAll": "动效：全开（画布惯性、翻页淡入、主题淡入都在）",
@@ -1371,6 +1380,7 @@
       "levelMismatch": "瓦片层级算不通：期望 {w}×{h}，实有 {aw}×{ah}"
     },
     "queue": {
+      "specMissing": "任务缺少有效的提交规格，请重新提交",
       "imageGone": "图片已不存在，这一张没法跑",
       "cropPanic": "裁切线程崩了：{msg}",
       "stitchPanic": "缝合线程崩了：{msg}",

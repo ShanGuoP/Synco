@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod adjust;
 pub mod cloud;
+pub mod canvas;
 pub mod comfy;
 pub mod face;
 pub mod imagesvc;

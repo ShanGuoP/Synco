@@ -30,6 +30,7 @@ Most of the Rust code was written by Qwen-3.8-Flash, then cross-audited by GLM-5
 - **Canvas (image-to-image)**: start from a blank sheet — write one line and generate the whole frame in the cloud; drafts auto-save and results hang off the same project's history
 - **Drag to import**: many files at once, or drop a whole folder onto the import card on the home page
 - **Light and dark**: follow system / paper white / ink black; the area around the canvas always stays a neutral dark, so judging colour isn't thrown off by the UI background
+- **Interface appearance**: glass UIv2 is the default; switch to the magazine style in Settings → Appearance. Your saved appearance choice is preserved
 - **Bilingual interface**: Settings → Appearance → Language, one click. Every sentence lives in a language pack, so errors and queue status follow the language you picked. What doesn't get translated: prompts sent to the model, names you typed, and the raw text your OS or backend returned — translating those would be editing your data
 - **Restrained motion**: page turns, theme switches and tile entrances animate; the canvas area never does (no flashing where colour is judged). There's a "reduce motion" switch in Settings with the same meaning as `prefers-reduced-motion`
 

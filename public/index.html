@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh">
+<html lang="zh" data-appearance="glass">
 <head>
 <meta charset="utf-8">
 <!-- 不写 maximum-scale：画布之外的那此页面（列表、设置）在手机上要能捏合放大 -->
@@ -20,6 +20,7 @@
 <link rel="stylesheet" href="/public/css/editor.css">
 <link rel="stylesheet" href="/public/css/adjust.css">
 <link rel="stylesheet" href="/public/css/canvas.css">
+<link rel="stylesheet" href="/public/css/appearance.css">
 </head>
 <body>
 
@@ -48,6 +49,7 @@
 
   <div class="main">
     <header class="topbar" data-tauri-drag-region="deep">
+      <div class="topbar__brand"><span class="topbar__mark" aria-hidden="true"></span><b data-i18n="app.title">Synco 新刻</b></div>
       <div class="topbar__zone topbar__zone--l" id="topLeft"></div>
       <div class="topbar__zone topbar__zone--c">
         <label class="search" id="searchBox">
@@ -64,6 +66,7 @@
       <section class="view" id="viewProject"></section>
     </div>
   </div>
+  <footer class="workspace-status" id="workspaceStatus" data-i18n-aria="app.title"></footer>
 </div>
 
 <!-- 编辑器：全屏覆盖层 -->

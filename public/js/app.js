@@ -77,14 +77,14 @@ const router = createRouter()
   .on('/p/:id/e/:imgId', async params => {
     closeCanvas();
     show('project');
-    setCrumb([{ label: t('crumb.home'), href: '/' }, { label: store.peek('project')?.name || t('crumb.project'), href: `/p/${params.id}` }, { label: t('crumb.editor') }]);
+    setCrumb([{ label: t('crumb.home'), href: '/' }, { label: store.peek('project')?.id === +params.id ? store.peek('project').name : t('crumb.project'), href: `/p/${params.id}` }, { label: t('crumb.editor') }]);
     setActiveNav('');
     await openEditor(+params.id, +params.imgId);
   })
   .on('/p/:id/c/:imgId', async params => {
     closeEditor();
     show('project');
-    setCrumb([{ label: t('crumb.home'), href: '/' }, { label: store.peek('project')?.name || t('crumb.project'), href: `/p/${params.id}` }, { label: t('nav.canvas') }]);
+    setCrumb([{ label: t('crumb.home'), href: '/' }, { label: store.peek('project')?.id === +params.id ? store.peek('project').name : t('crumb.project'), href: `/p/${params.id}` }, { label: t('nav.canvas') }]);
     setActiveNav('');
     await openCanvas(+params.id, +params.imgId);
   })
@@ -132,7 +132,7 @@ async function boot() {
     onRefresh: () => router.refresh(),
     onHelp: () => helpModal(),
     onGuide: () => flowModal(),
-    onBackends: () => settingsModal('backend'),
+    onBackends: section => settingsModal(section || 'backend'),
     onSearch: value => {
       setHome({ query: value });
       /* 搜索是本地过滤：走 renderHome 的话每敲一个字都要重新拉一遍全部项目与详情，还会顶一串"读取项目…" */
@@ -141,7 +141,7 @@ async function boot() {
   });
 
   try {
-    const [cfg, be, cloud] = await Promise.all([api.cfg(), api.backends(), api.cloud().catch(() => null), loadPhrases()]);
+    const [cfg, be, cloud] = await Promise.all([api.cfg(), api.backends(), api.cloud().catch(() => null), loadPhrases(), loadProjects().catch(() => null)]);
     store.set({ cfg, comfy: be.active, cloud: cloud || { kind: 'comfyui' } }, 'comfy');
     paintChip();
   } catch (e) {

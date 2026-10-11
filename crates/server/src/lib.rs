@@ -131,6 +131,8 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     lock_data_dir(&data)?;
     sweep_legacy_runtime_files(&data);
     let ctx = Ctx::new(data.clone(), public, db::open(&data)?);
+    let recovery_ctx = ctx.clone();
+    util::blocking(move || service::queue::recover_files(&recovery_ctx)).await?;
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), want);
     // 端口被占就退随机：桌面壳拿的是 Boot.port，跟着走就行

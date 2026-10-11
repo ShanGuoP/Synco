@@ -14,6 +14,7 @@ use crate::lut;
 use crate::ops::EditOps;
 use crate::warp::{self, FaceShape};
 use px_core::{Alpha, Rgba};
+use std::borrow::Cow;
 
 /// 链的可选输入。都是引用：内核不认领内存，也不去磁盘找东西。
 #[derive(Default)]
@@ -31,19 +32,38 @@ pub fn apply_chain(img: &Rgba, ops: &EditOps, chain: &Chain) -> Rgba {
     if ops.is_identity() {
         return img.clone();
     }
-    let mut cur = geometry::apply(img, &ops.geometry);
+    let geometric = geometry::needs_pass(&ops.geometry);
+    let mut cur = if geometric {
+        Cow::Owned(geometry::apply(img, &ops.geometry))
+    } else {
+        Cow::Borrowed(img)
+    };
     // 笔迹活在源图域，几何段换了坐标系就得跟着转一遍；转完还是对不上就是调用方给错了档，
     // 宁可不加限定——静默挪位比"全图生效"更难解释
     let mask = match chain.mask {
-        Some(m) if m.w == img.w && m.h == img.h => Some(geometry::apply_alpha(m, &ops.geometry)),
+        Some(m) if !ops.beauty.is_empty() && m.w == img.w && m.h == img.h => {
+            Some(if geometric { Cow::Owned(geometry::apply_alpha(m, &ops.geometry)) } else { Cow::Borrowed(m) })
+        }
         _ => None,
     };
-    cur = warp::apply(&cur, &ops.warp, chain.shape);
-    if let (Some(l), Some(table)) = (ops.lut.as_ref(), chain.lut) {
-        cur = lut::apply(&cur, table, l.strength.pos().min(1.0));
+    if ops.warp.strokes.iter().any(|s| !s.points.is_empty())
+        || (!ops.warp.auto.is_empty() && chain.shape.is_some())
+    {
+        cur = Cow::Owned(warp::apply(&cur, &ops.warp, chain.shape));
     }
-    cur = color::apply(&cur, &ops.color);
-    beauty::apply(&cur, &ops.beauty, mask.as_ref())
+    if let (Some(l), Some(table)) = (ops.lut.as_ref(), chain.lut) {
+        let strength = l.strength.pos().min(1.0);
+        if strength > 0.0 {
+            cur = Cow::Owned(lut::apply(&cur, table, strength));
+        }
+    }
+    if !ops.color.is_empty() {
+        cur = Cow::Owned(color::apply(&cur, &ops.color));
+    }
+    if !ops.beauty.is_empty() {
+        cur = Cow::Owned(beauty::apply(&cur, &ops.beauty, mask.as_deref()));
+    }
+    cur.into_owned()
 }
 
 #[cfg(test)]
@@ -80,6 +100,88 @@ mod tests {
         let a = apply_chain(&img, &o, &Chain::default());
         let b = color::apply(&img, &o.color);
         assert_eq!(a, b, "链上多跑的空段不该改变结果");
+    }
+
+    /// 保留优化前的阶段调用顺序作为参考，覆盖空段、缺少可选输入与混合算子。
+    fn staged_reference(img: &Rgba, ops: &EditOps, chain: &Chain) -> Rgba {
+        if ops.is_identity() {
+            return img.clone();
+        }
+        let mut cur = geometry::apply(img, &ops.geometry);
+        let mask = match chain.mask {
+            Some(m) if m.w == img.w && m.h == img.h => Some(geometry::apply_alpha(m, &ops.geometry)),
+            _ => None,
+        };
+        cur = warp::apply(&cur, &ops.warp, chain.shape);
+        if let (Some(l), Some(table)) = (ops.lut.as_ref(), chain.lut) {
+            cur = lut::apply(&cur, table, l.strength.pos().min(1.0));
+        }
+        cur = color::apply(&cur, &ops.color);
+        beauty::apply(&cur, &ops.beauty, mask.as_ref())
+    }
+
+    #[test]
+    fn 跳过空阶段与原链逐像素一致() {
+        let mut img = ramp(24, 16);
+        for (i, p) in img.px.chunks_exact_mut(4).enumerate() {
+            p[3] = (i * 37 % 256) as u8;
+        }
+        let mask = Alpha::from_vec(24, 16, (0..384).map(|i| (i * 19 % 256) as u8).collect());
+        let wrong = Alpha::new(16, 24);
+        let table = lut::parse_cube("LUT_1D_SIZE 2\n1 0 0\n0 1 1\n").unwrap();
+        for mode in 0..4 {
+            for active in 0..16 {
+                let mut o = EditOps::default();
+                match mode {
+                    1 => o.geometry.rotate_deg = 90.0,
+                    2 => { o.geometry.flip_h = true; o.geometry.crop = Some([0.1, 0.1, 0.8, 0.8]); }
+                    3 => { o.geometry.rotate_deg = 7.0; o.warp.auto.eye_big = Slider(30); }
+                    _ => {}
+                }
+                if active & 1 != 0 { o.color.exposure = Slider(25); o.color.sharpen = Slider(10); }
+                if active & 2 != 0 {
+                    o.beauty.smooth = Slider(40);
+                    o.beauty.blemish = Slider(50);
+                    o.beauty.even_tone = Slider(25);
+                }
+                if active & 4 != 0 {
+                    o.warp.strokes.push(Stroke { points: vec![[0.3, 0.5], [0.6, 0.5]],
+                        radius: 0.1, strength: Slider(35), ..Default::default() });
+                } else { o.warp.strokes.push(Stroke::default()); }
+                // 同时覆盖强度零与缺失 LUT 表：它们都应该保持恒等。
+                o.lut = Some(ops::Lut { name: "test.cube".into(),
+                    strength: Slider(if active & 8 != 0 { 70 } else { 0 }) });
+                for m in [None, Some(&mask), Some(&wrong)] {
+                    for l in [None, Some(&table)] {
+                        let chain = Chain { mask: m, lut: l, shape: None };
+                        assert_eq!(apply_chain(&img, &o, &chain), staged_reference(&img, &o, &chain),
+                            "mode={mode}, active={active}, mask={}, lut={}", m.is_some(), l.is_some());
+                    }
+                }
+            }
+        }
+    }
+
+    /// 同一进程比较原链与跳过空阶段的链，纯内核计时，不包含解码与 IO。
+    #[test]
+    #[ignore]
+    fn bench_二十四mp只开调色() {
+        use std::{hint::black_box, time::Instant};
+        let img = ramp(6000, 4000);
+        let mut o = EditOps::default();
+        o.color.exposure = Slider(20);
+        o.color.contrast = Slider(15);
+        let chain = Chain::default();
+        for _ in 0..3 {
+            let t = Instant::now();
+            let old = black_box(staged_reference(&img, &o, &chain));
+            let old_ms = t.elapsed().as_secs_f64() * 1000.0;
+            let t = Instant::now();
+            let new = black_box(apply_chain(&img, &o, &chain));
+            let new_ms = t.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(old, new);
+            println!("只开调色 6000×4000：原链 {old_ms:.1}ms / 跳过空段 {new_ms:.1}ms");
+        }
     }
 
     #[test]

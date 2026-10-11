@@ -248,13 +248,13 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
     },
 
     /** 载入图片：按给定的涂抹层分辨率重设画布，清撤销栈，可选铺上已有遮罩。id 是这批笔迹的归属 */
-    async load(w, h, maskUrl, id, paint) {
+    async load(w, h, maskUrl, id, paint, current = () => true) {
       const seq = ++loadSeq;
       /* 先把上一张还没存出去的笔迹落盘再动这块画布：直接 resize 会把没保存的墨抹掉，
          而防抖到点那次 save 见没有新笔迹直接 return，用户视角就是"涂完切图，回来遮罩空了" */
       clearTimeout(saveTimer);
       if (dirtyAt !== savedAt || inflight) { try { await save(); } catch { /* 存不上也别挡住换图，钩子里已经报过 */ } }
-      if (seq !== loadSeq) return false;   //等的这段时间里已经有人换过图了，这一批参数不属于这里
+      if (seq !== loadSeq || !current()) return false;   // 保存期间可能换图或关闭视图
       iw = w; ih = h;
       owner = id || 0;
       // 涂抹层的档位由调用方定（修图页见 PAINT_EDGE），保存时原样落盘，上采样交服务端
@@ -276,14 +276,14 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
         im.onload = () => {
           /* 迟到的 onload 不能往已经换掉的画布上画：那会把上一张的遮罩铺进当前这张，
              接着任意一笔落盘就是"B 图上带着 A 图的笔迹"——外层 showSeq 判在 load 返回之后，撤不回这一步 */
-          if (seq === loadSeq) { ctx.drawImage(im, 0, 0, mask.width, mask.height); drew = true; }
+          if (seq === loadSeq && current()) { ctx.drawImage(im, 0, 0, mask.width, mask.height); drew = true; }
           res(true);
         };
         im.onerror = () => res(false);
         // 遮罩是原地覆写的文件，服务端对它发 ETag + no-cache：判新交给条件请求，不再自己拼 ?t=
         im.src = maskUrl;
       });
-      if (seq !== loadSeq) return false;
+      if (seq !== loadSeq || !current()) return false;
       baseline = drew;                // 已有遮罩的覆盖范围未知，之后判空读整幅
       return drew;                    // 落盘的遮罩一定是非空的，不必为此整幅回读
     },

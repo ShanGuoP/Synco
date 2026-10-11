@@ -72,9 +72,8 @@ pub fn strokes(img: &Rgba, warp: &Warp) -> Rgba {
     if warp.strokes.is_empty() {
         return cur;
     }
-    let base = img.clone();
     for s in &warp.strokes {
-        apply_stroke(&base, &mut cur, s);
+        apply_stroke(img, &mut cur, s);
     }
     cur
 }
@@ -290,7 +289,7 @@ fn bbox(pts: &[[f32; 2]], r: f32, w: usize, h: usize) -> Span {
 
 /// 一键塑形需要的关键点组（归一化坐标）。由人脸关键点链路准备好交进来，
 /// 内核不认识模型，只认识这些点。
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FaceShape {
     /// 人脸框 `[x, y, w, h]`
     pub box_norm: [f32; 4],

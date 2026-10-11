@@ -122,6 +122,7 @@ pub fn add_from_result(ctx: &Ctx, img: &Image, row: &ResultRow) -> Result<Vec<St
 /// 提交这一刻：把当次槽位复制成**这一行自己的**快照，名字带 rid 所以永不覆写。
 pub fn snapshot(ctx: &Ctx, img: &Image, rid: i64, slots: &[String]) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
+    let mut pending = crate::service::queue::PendingFiles::new(ctx.data.clone());
     for (i, rel) in slots.iter().enumerate() {
         let src = util::data_file(&ctx.data, rel)
             .ok_or_else(|| AppError::bad_args("srv.image.refFileGone", json!({ "path": rel.clone() })))?;
@@ -130,9 +131,10 @@ pub fn snapshot(ctx: &Ctx, img: &Image, rid: i64, slots: &[String]) -> Result<Ve
             img.project_id.to_string(),
             format!("g{}_{rid}_ref{}.png", img.id, i + 1),
         ]);
-        std::fs::copy(&src, ctx.data.join(&dst)).map_err(|e| AppError::fail_detail("srv.image.refCopy", e))?;
+        std::fs::copy(&src, pending.track(&dst)).map_err(|e| AppError::fail_detail("srv.image.refCopy", e))?;
         out.push(dst);
     }
+    pending.commit();
     Ok(out)
 }
 
@@ -197,4 +199,3 @@ pub fn clear(ctx: &Ctx, pid: i64, iid: i64) -> Result<()> {
     drop(ctx, pid, &slots_of(ctx, pid, iid));
     rset::put(ctx, &key(iid), "[]")
 }
-

@@ -130,6 +130,80 @@
   --sh-3: 0 16px 40px rgba(0, 0, 0, .65);
 }
 
+/* UI v2 外观令牌：独立于明暗，画布中性底色继续沿用原主题。 */
+html[data-appearance="glass"] {
+  color-scheme: light;
+  --bg-app: oklch(.96 .004 260);
+  --bg-rail: oklch(.93 .005 260);
+  --bg-panel: oklch(.93 .005 260);
+  --bg-card: oklch(.98 .003 260);
+  --bg-card-hi: oklch(1 0 0);
+  --bg-field: oklch(.96 .004 260);
+  --bg-ink: oklch(.22 .008 260);
+  --txt: oklch(.22 .008 260);
+  --txt-2: oklch(.38 .008 260);
+  --txt-3: oklch(.50 .008 260);
+  --txt-inv: oklch(.98 .003 260);
+  --line: rgb(0 0 0 / .06);
+  --line-hi: rgb(0 0 0 / .12);
+  --line-strong: rgb(0 0 0 / .24);
+  --wash: rgb(0 0 0 / .045);
+  --spot: oklch(.60 .19 25);
+  --spot-txt: oklch(.49 .16 25);
+  --spot-dim: color-mix(in oklch, var(--spot) 12%, transparent);
+  --spot-line: color-mix(in oklch, var(--spot) 35%, transparent);
+  --on-spot: white;
+  --danger: oklch(.49 .18 25);
+  --ph-a: oklch(.86 .007 260);
+  --ph-b: oklch(.90 .006 260);
+  --scroll: rgb(0 0 0 / .18);
+  --scroll-hi: rgb(0 0 0 / .32);
+  --r-1: 6px; --r-2: 8px; --r-3: 12px; --r-4: 20px;
+  --f-display: var(--f-body);
+  --rail-w: 64px; --topbar-h: 44px;
+  --hero-h: 208px;
+  --status-h: 28px;
+  --workspace-panel-w: 320px;
+  --workspace-history-w: 208px;
+  --workspace-bar-h: 40px;
+  --t-fast: 220ms; --t: 300ms;
+  --ease: cubic-bezier(.22, 1, .36, 1);
+  --sh-1: 0 1px 2px rgb(0 0 0 / .08), 0 2px 8px rgb(0 0 0 / .06);
+  --sh-2: 0 1px 2px rgb(0 0 0 / .08), 0 8px 24px rgb(0 0 0 / .10), 0 20px 48px rgb(0 0 0 / .08);
+  --sh-3: 0 2px 4px rgb(0 0 0 / .10), 0 16px 40px rgb(0 0 0 / .14), 0 36px 80px rgb(0 0 0 / .12);
+  --glass: color-mix(in oklch, var(--bg-card) 86%, transparent);
+  --glass-highlight: inset 0 1px 0 var(--line-hi);
+  --brand-glow: color-mix(in oklch, var(--spot) 18%, transparent);
+}
+html[data-appearance="glass"][data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: oklch(.14 .008 260);
+  --bg-rail: oklch(.17 .008 260);
+  --bg-panel: oklch(.17 .008 260);
+  --bg-card: oklch(.20 .009 260);
+  --bg-card-hi: oklch(.23 .010 260);
+  --bg-field: oklch(.17 .008 260);
+  --bg-ink: oklch(.93 .005 260);
+  --txt: oklch(.93 .005 260);
+  --txt-2: oklch(.74 .005 260);
+  --txt-3: oklch(.60 .005 260);
+  --txt-inv: oklch(.14 .008 260);
+  --line: rgb(255 255 255 / .08);
+  --line-hi: rgb(255 255 255 / .14);
+  --line-strong: rgb(255 255 255 / .26);
+  --wash: rgb(255 255 255 / .06);
+  --spot: oklch(.68 .19 25);
+  --spot-txt: oklch(.78 .13 25);
+  --spot-dim: color-mix(in oklch, var(--spot) 18%, transparent);
+  --danger: oklch(.66 .20 30);
+  --ph-a: oklch(.23 .010 260);
+  --ph-b: oklch(.20 .009 260);
+  --scroll: rgb(255 255 255 / .18);
+  --scroll-hi: rgb(255 255 255 / .32);
+  --sh-1: 0 1px 2px rgb(0 0 0 / .3), 0 2px 8px rgb(0 0 0 / .18);
+  --sh-2: 0 1px 2px rgb(0 0 0 / .35), 0 8px 24px rgb(0 0 0 / .28), 0 20px 48px rgb(0 0 0 / .18);
+  --sh-3: 0 2px 4px rgb(0 0 0 / .4), 0 16px 40px rgb(0 0 0 / .35), 0 36px 80px rgb(0 0 0 / .25);
+}
 /* ============================================================
    减弱动效（F7 的兜底那一档）：两个来源任一到就一律瞬时——
      · 系统的 prefers-reduced-motion

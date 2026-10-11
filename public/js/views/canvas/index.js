@@ -9,6 +9,7 @@ import { encodeMask } from '../../core/maskEncode.js';
 import { dx, t } from '../../core/i18n.js';
 import { store, loadProject, loadPhrases } from '../../state.js';
 import { go } from '../../core/router.js';
+import { createViewSession } from '../../core/viewSession.js';
 import { hold } from '../../core/guard.js';
 import { toastOk, toastErr, toastBusy } from '../../ui/toast.js';
 import { confirm, modal } from '../../ui/modal.js';
@@ -36,6 +37,7 @@ const ZOOMS = [
 ];
 
 let c = null;                      // 上下文：只建一次，换画布复用
+const session = createViewSession();
 const inFlight = new Set();        // 有提交在飞的画布 id：闸门要按画布存，切走再回来才知道按钮该不该禁着
 let seq = 0;                       // 装载序号，晚到的旧响应要能认出自己过期
 let rerunFrom = null;              // 下一次生成是"哪条成图的再来一版"
@@ -119,7 +121,7 @@ function build() {
     onChange: v => { brushVal.textContent = String(v); c.painter.setBrush(v); },
   });
   const toolBtn = (k, ico, label, tip, onclick) => el('button.tool', {
-    type: 'button', dataset: { k }, 'data-tip': tip, onclick,
+    type: 'button', dataset: { k }, 'data-tip': tip, 'aria-label': label, onclick,
   }, el('span.tool__ico', { html: icon(ico) }), el('span', { text: label }));
   const tools = el('div.ed-tools', {},
     el('button.tool-zoom', { type: 'button', 'data-tip': t('ed.zoomTip'), onclick: () => viewport.fit() }, zoomPct),
@@ -132,11 +134,22 @@ function build() {
     el('div.tool-slider', {}, el('span.tool-slider__lab', { text: t('ed.brushLab') }), brushSlider.node, brushVal));
 
   const name = el('b.nowrap');
+  const togglePanel = key => {
+    const off = node.classList.toggle(key === 'gen' ? 'is-gen-collapsed' : 'is-history-collapsed');
+    if (!off && document.documentElement.dataset.appearance === 'glass' && window.matchMedia('(max-width: 960px)').matches) {
+      node.classList.add(key === 'gen' ? 'is-history-collapsed' : 'is-gen-collapsed');
+    }
+    for (const button of node.querySelectorAll('[data-panel]')) {
+      button.setAttribute('aria-expanded', String(!node.classList.contains(button.dataset.panel === 'gen' ? 'is-gen-collapsed' : 'is-history-collapsed')));
+    }
+  };
   const top = el('div.cv-top', {},
     el('div.cv-top__l', {},
       el('button.btn.btn--ghost.btn--icon.btn--sm', { type: 'button', 'aria-label': t('ed.back'), 'data-tip': t('ed.back'), html: icon('left', { cls: 'icon icon--sm' }), onclick: goBack }),
       el('div.ed-file', {}, name, el('span', { class: 'cv-tag', text: t('nav.canvas') }))),
     el('div.cv-top__r', {}, saveFlag,
+      el('button.btn.btn--ghost.btn--sm.workspace-only', { type: 'button', dataset: { panel: 'gen' }, 'aria-expanded': 'true', text: t('ed.railProp'), onclick: () => togglePanel('gen') }),
+      el('button.btn.btn--ghost.btn--sm.workspace-only', { type: 'button', dataset: { panel: 'history' }, 'aria-expanded': 'false', text: t('ed.railHist'), onclick: () => togglePanel('history') }),
       el('button.btn.btn--ghost.btn--sm', { type: 'button', html: icon('refresh', { cls: 'icon icon--sm' }) + `<span>${t('cv.refreshResult')}</span>`, onclick: () => load(c.imgId) })));
 
   /* 右侧：提示词 + 短语胶囊 + 参考图槽 + 提交 */
@@ -191,7 +204,7 @@ function build() {
     onSaved: onSketchSaved,
   });
 
-  const node = el('div.cv', {}, top, tools, el('div.cv-main', {}, stage, side, histCol));
+  const node = el('div.cv.is-history-collapsed', {}, top, tools, el('div.cv-main', {}, stage, side, histCol));
   const cur = {
     node, stage, vpBox, layer, paper, viewport, painter, tools, ta, chips, count, line, hud, name, saveFlag, setFlag,
     history, compare, go2, paintGo, side, refGrid, refCount, rows: [], refList: [], refMax: 4,
@@ -207,6 +220,13 @@ function setFlag(txt, kind = '') {
 
 /* ==================== 打开 / 关闭 ==================== */
 export async function openCanvas(projectId, imgId) {
+  const opening = session.begin();
+  ++seq;
+  if (c) {
+    try { await c.painter.flush(); }
+    catch (e) { if (opening.current()) toastErr(t('cv.openFail'), e.message); return; }
+    if (!opening.current()) return;
+  }
   const host = $('#canvasView');
   if (!c) {
     c = build();
@@ -216,17 +236,21 @@ export async function openCanvas(projectId, imgId) {
   // 数据到手再掀覆盖层：脏 URL 不该显示一个空画布
   const p = store.peek('project');
   if (!p || p.id !== +projectId) {
-    try { await loadProject(projectId); } catch (e) { toastErr(t('ed.projFail'), e.message || String(e)); go('/'); return; }
+    try { await loadProject(projectId, opening.current); } catch (e) { if (opening.current()) { toastErr(t('ed.projFail'), e.message || String(e)); go('/'); } return; }
   }
+  if (!opening.current()) return;
   host.hidden = false;
   $('#shell').style.visibility = 'hidden';
   c.projectId = +projectId;
   await loadPhrases();          // 胶囊与修图页共用同一批短语；没加载过就是空的
+  if (!opening.current()) return;
   paintChips();
   await load(+imgId);
 }
 
 export function closeCanvas() {
+  session.end();
+  ++seq;
   const host = $('#canvasView');
   if (host) host.hidden = true;
   const shell = $('#shell');
@@ -239,11 +263,12 @@ const goBack = () => { const p = store.peek('project'); go(p ? `/p/${p.id}` : '/
 
 /* ==================== 装载一张画布 ==================== */
 async function load(imgId) {
+  if (!session.current()) return;
   const mine = ++seq;
-  const stale = () => mine !== seq;
+  const stale = () => mine !== seq || !session.current();
   const busy = toastBusy(t('cv.openBusy'));
   let d;
-  try { d = await api.canvas(imgId); } catch (e) { busy.close(); toastErr(t('cv.openFail'), e.message); goBack(); return; }
+  try { d = await api.canvas(imgId); } catch (e) { busy.close(); if (!stale()) { toastErr(t('cv.openFail'), e.message); goBack(); } return; }
   busy.close();
   if (stale()) return;
   c.imgId = imgId;
@@ -256,7 +281,7 @@ async function load(imgId) {
   c.hud.textContent = t('cv.dimsCloud', { wh: `${im.w}×${im.h}` });
   c.viewport.setContentSize(im.w, im.h);
   // 画稿就是内容本身：1:1 装载，不做任何降采样
-  await c.painter.load(im.w, im.h, d.sketch_url, imgId, { w: im.w, h: im.h });
+  await c.painter.load(im.w, im.h, d.sketch_url, imgId, { w: im.w, h: im.h }, () => !stale());
   if (stale()) return;
   c.viewport.fit();
   setTool('brush');

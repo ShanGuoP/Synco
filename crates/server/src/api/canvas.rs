@@ -9,7 +9,7 @@ use super::common::{bad, bad_args, body_of, err, ok, path_id};
 use crate::error::{AppError, Result};
 use crate::models::{dto, entity::Image};
 use crate::repo::{images as rimg, projects as rproj, results as rres};
-use crate::service::{cloud, imagesvc, queue, refs};
+use crate::service::{imagesvc, queue, refs};
 use crate::state::Shared;
 use crate::util;
 use axum::body::Bytes;
@@ -133,52 +133,7 @@ pub async fn canvas_generate(State(ctx): State<Shared>, APath(id): APath<String>
     if prompt.is_empty() {
         return Ok(bad("srv.canvas.needPrompt"));
     }
-    if !util::file_alive(&ctx.data, &Value::String(img.orig_path.clone())) {
-        return Ok(bad("srv.canvas.sketchGone"));
-    }
-    queue::sketch_fit(img.w.max(1) as usize, img.h.max(1) as usize)?;
-    let s = cloud::settings(&ctx);
-    if s.base.is_empty() || s.model.is_empty() || s.key.is_empty() {
-        return Ok(bad("srv.canvas.needCloud"));
-    }
-    // 参考图缺文件时**建行之前**就拒：一旦插了行再失败，用户看到的是一条挂着空气的"生成中"
-    let slots = refs::slots(&ctx, &img);
-    if let Some(missing) = slots.iter().find(|r| !util::file_alive(&ctx.data, &Value::String(r.to_string()))) {
-        return Ok(bad_args("srv.canvas.refsGone", json!({ "missing": missing })));
-    }
-    let rerun_of = body.get("rerun_of").and_then(|v| v.as_i64());
-    let payload = serde_json::json!({ "prompt": prompt, "negative": "", "steps": 0, "cfg": 0, "loras": [], "canvas": true });
-    let rid = rres::insert_cloud(&ctx, img.id, img.project_id, &prompt, &payload.to_string(), &s.model, rerun_of)?;
-    // 先把这一版的线稿原样复制一份再排队：画稿是原地覆写的，用户接着画两笔，
-    // "出这张图时我画的是什么"就只剩这一份能证明。复制而不重编码——转一档会把笔迹变糊
-    if let Err(e) = snapshot_sketch(&ctx, &img, rid).await {
-        eprintln!("  画稿快照没存下（#{rid}）：{e}"); /* 日志：控制台给人读 */
-    }
-    // 参考图同理复制成这一行自己的快照：排着队的时候换槽位，不该改"这一版参考了哪几张"
-    if !slots.is_empty() {
-        // 行已经建起来了，这两步再往上传 Err 就是留一条永远"生成中"又没人跑它的僵尸：
-        // 判死这一行、把原因还给用户。也不能退化成"少发几张照跑"——界面上写着带 N 张参考图
-        let snap_try = {
-            let (ctx2, im, sl) = (ctx.clone(), img.clone(), slots.clone());
-            util::blocking(move || refs::snapshot(&ctx2, &im, rid, &sl))
-                .await
-        };
-        let snapped = match snap_try {
-            Ok(v) => v,
-            Err(e) => {
-                // 内层已经有自己的钥匙（画稿不在盘上 / 复制失败），原样传出去，不再包一句中文
-                ctx.mark_error_of(rid, &e);
-                return Err(e);
-            }
-        };
-        if let Err(e) = rres::set_refs(&ctx, rid, &snapped) {
-            refs::drop(&ctx, img.project_id, &snapped);
-            ctx.mark_error_of(rid, &e);
-            return Err(e);
-        }
-    }
-    rres::set_queued(&ctx, rid)?;
-    rproj::touch(&ctx, img.project_id)?;
+    let rid = crate::service::canvas::generate(&ctx, &img, &prompt, body.get("rerun_of").and_then(Value::as_i64)).await?;
     queue::pump(&ctx).await;
     Ok(ok(serde_json::json!({ "result_id": rid, "image_id": img.id, "queued": true })))
 }
@@ -299,21 +254,6 @@ fn sketch_relate(img: &Image) -> std::result::Result<(), AppError> {
     } else {
         Err(AppError::bad("srv.canvas.badPathNoOverwrite"))
     }
-}
-
-/// 先把这一版的线稿原样复制一份再排队：复制而不重编码——转一档会把笔迹变糊。
-/// 一张画稿是几十 MB 的同步拷贝，所以整段走阻塞池。
-async fn snapshot_sketch(ctx: &Shared, img: &Image, rid: i64) -> crate::error::Result<()> {
-    let rel = util::rel_path(&["projects".into(), img.project_id.to_string(), format!("k{}_{rid}_sketch.png", img.id)]);
-    let src = util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| AppError::fail("srv.canvas.sketchGoneRaw"))?;
-    let ctx2 = ctx.clone();
-    let dst = ctx.data.join(&rel);
-    util::blocking(move || -> Result<()> {
-        std::fs::copy(&src, &dst).map_err(|e| AppError::fail_args("srv.common.copyFail", json!({ "msg": e.to_string() })))?;
-        rres::set_sketch(&ctx2, rid, &rel)?;
-        Ok(())
-    })
-    .await
 }
 
 /// 取回某一版当时的画稿：把那份快照写回画稿本体。

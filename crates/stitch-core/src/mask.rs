@@ -91,9 +91,19 @@ pub fn dilate(src: &Alpha, r: f64) -> Alpha {
         let row = y * w + x0;
         sub.extend_from_slice(&src.v[row..row + aw]);
     }
-    // 二值化后的那一层缓冲按等级重建：每级一次分配，换掉手搓的缓冲复用可读得多，
-    // 而这块面积本来就是"笔迹包围盒 + r"，不是整幅
-    for &lv in DILATE_LEVELS.iter() {
+    // 相邻阈值之间没有像素时，两层的二值输入相同：只计算这组的最高一级。
+    // 纯黑白蒙版因此只跑 255 层；全灰度蒙版仍沿用原来的八层与输出量级。
+    let mut present = [false; 256];
+    for &a in &sub {
+        present[a as usize] = true;
+    }
+    for (i, &lv) in DILATE_LEVELS.iter().enumerate() {
+        let next = DILATE_LEVELS.get(i + 1).map_or(256, |&v| v as usize);
+        // imageproc 用 255 同时表示最大距离与无前景：半径钳到 255 时，
+        // 空层也会命中。保留这个边界上的原八层行为，避免改变历史结果。
+        if k < 255 && !present[lv as usize..next].iter().any(|&v| v) {
+            continue;
+        }
         let bits: Vec<u8> = sub.iter().map(|&a| if a >= lv { 255 } else { 0 }).collect();
         let img = GrayImage::from_vec(aw as u32, ah as u32, bits).expect("子图缓冲与尺寸不符");
         // Norm::L2 = 欧氏圆盘（imageproc 用"上取整的整数距离"表达，阈值判据与精确圆盘一致）
@@ -256,6 +266,50 @@ mod tests {
     fn dilate_半径不足一像素原样返回() {
         let a = blob(8, 8, 2, 2, 4, 4);
         assert_eq!(dilate(&a, 0.5), a);
+    }
+
+    /// 固定八层、整幅计算的参考算子：验证层合并不会改变任何灰度或边界像素。
+    fn eight_layer_reference(src: &Alpha, r: f64) -> Alpha {
+        if !(r > 0.5) || src.w == 0 || src.h == 0 || ink_bbox(src, 0).is_none() {
+            return src.clone();
+        }
+        let k = r.floor().clamp(0.0, 255.0) as u8;
+        let mut out = src.clone();
+        for &lv in &DILATE_LEVELS {
+            let bits = src.v.iter().map(|&v| if v >= lv { 255 } else { 0 }).collect();
+            let img = GrayImage::from_vec(src.w as u32, src.h as u32, bits).unwrap();
+            for (dst, &v) in out.v.iter_mut().zip(ip_dilate(&img, Norm::L2, k).as_raw()) {
+                if v != 0 {
+                    *dst = (*dst).max(lv);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn 合并膨胀层与八层参考逐像素一致() {
+        // 每个等级的两侧、稀疏半透明、黑白、空蒙版，以及超出图幅的半径。
+        let edges = [0, 1, 31, 32, 33, 63, 64, 65, 95, 96, 97, 127, 128,
+            129, 159, 160, 161, 191, 192, 193, 223, 224, 225, 254, 255];
+        for (w, h) in [(1, 1), (1, 19), (23, 1), (37, 29)] {
+            for kind in 0..5 {
+                let mut src = Alpha::new(w, h);
+                for (i, v) in src.v.iter_mut().enumerate() {
+                    *v = match kind {
+                        0 => 0,
+                        1 => if i % 7 == 0 { 255 } else { 0 },
+                        2 => if i % 7 == 0 { 100 } else { 0 },
+                        3 => edges[i % edges.len()],
+                        _ => ((i * 73 + i / 11) % 256) as u8,
+                    };
+                }
+                for r in [0.5, 0.51, 0.99, 1.0, 3.0, 9.0, 255.0, 300.0] {
+                    assert_eq!(dilate(&src, r), eight_layer_reference(&src, r),
+                        "{w}×{h}, kind={kind}, r={r}");
+                }
+            }
+        }
     }
 
     /// 抗锯齿边与半擦除残留是**半透明**的，膨胀只能把那个量级往外传，不能把它抬成满墨：

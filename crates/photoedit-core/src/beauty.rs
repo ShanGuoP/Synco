@@ -244,7 +244,7 @@ fn blemish_luma(w: usize, h: usize, y: &mut [f32], msk: &Option<Vec<f32>>, stren
     let plane = Plane { w, h, v: y.to_vec() };
     // 窗口随强度放大：轻档只收最扎眼的那几个点，满档连浅斑一起收
     let radius = 2 + (4.0 * strength).round() as usize;
-    let low = plane.box_blur_passes(radius, 2);
+    let low = plane.into_box_blur_passes(radius, 2);
     let t = BLEMISH_T_HI - (BLEMISH_T_HI - BLEMISH_T_LO) * strength;
     for i in 0..y.len() {
         let k = m_at(msk, i) * strength;
@@ -263,8 +263,8 @@ fn blemish_luma(w: usize, h: usize, y: &mut [f32], msk: &Option<Vec<f32>>, stren
 /// 匀肤：把 Cb/Cr 往大尺度那一层搬，亮度与细节都不动。
 /// 只在肤色域里做——蓝天与白墙的色度也照搬就会整片发灰。
 fn even_tone_chroma(w: usize, h: usize, cb: &mut [f32], cr: &mut [f32], msk: &Option<Vec<f32>>, strength: f32) {
-    let low_b = Plane { w, h, v: cb.to_vec() }.box_blur_passes(EVEN_TONE_RADIUS, 3);
-    let low_r = Plane { w, h, v: cr.to_vec() }.box_blur_passes(EVEN_TONE_RADIUS, 3);
+    let low_b = Plane { w, h, v: cb.to_vec() }.into_box_blur_passes(EVEN_TONE_RADIUS, 3);
+    let low_r = Plane { w, h, v: cr.to_vec() }.into_box_blur_passes(EVEN_TONE_RADIUS, 3);
     for i in 0..cb.len() {
         // 门限读搬动前的色度：先取值再写，不然第二格用到的就是被第一格改过的
         let (b0, r0) = (cb[i], cr[i]);

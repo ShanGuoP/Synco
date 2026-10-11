@@ -393,6 +393,30 @@ pub fn photo_with(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Rgba> {
     pixels(ctx, img, ops, Grade::Full)
 }
 
+/// 参数引用的人脸点与 LUT 同样可变，不能在排队结束或无损重算时重新读取。
+pub(crate) fn snapshot_inputs(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Value> {
+    let shape = if ops.warp.auto.is_empty() { None } else { shape_for(ctx, img) };
+    let lut = match &ops.lut { Some(l) => lut_table(ctx, &l.name)?, None => None };
+    Ok(json!({ "shape": shape, "lut": lut }))
+}
+
+pub(crate) fn photo_from_snapshot(ctx: &Ctx, img: &Image, ops: &EditOps, inputs: &Value, mask_png: Option<&[u8]>) -> Result<Rgba> {
+    let base = orig_rgba(ctx, img)?;
+    if ops.is_identity() { return Ok(base); }
+    let shape: Option<FaceShape> = serde_json::from_value(inputs["shape"].clone()).map_err(|_| AppError::bad("srv.lossless.noSnap"))?;
+    let lut: Option<LutTable> = serde_json::from_value(inputs["lut"].clone()).map_err(|_| AppError::bad("srv.lossless.noSnap"))?;
+    let mask = if ops.beauty.by_mask {
+        match mask_png {
+            Some(png) => {
+                let m = codec::decode(png)?;
+                Some(stitch_core::crop_scale_rgba(&m, 0, 0, m.w, m.h, base.w, base.h).alpha())
+            },
+            None => None,
+        }
+    } else { None };
+    Ok(apply_chain(&base, ops, &Chain { mask: mask.as_ref(), shape: shape.as_ref(), lut: lut.as_ref() }))
+}
+
 /// 面板要的初始状态：参数 + 内置预设 + 盘上可用的 LUT 名单。
 /// LUT 名单从 `data/luts/` 现扫，只认 `.cube`，按名字排序——前端不需要第二个接口就能把下拉摆满。
 pub fn panel(ctx: &Ctx, id: i64) -> Result<Value> {
@@ -454,6 +478,34 @@ mod tests {
     fn cleanup(ctx: std::sync::Arc<Ctx>, dir: &std::path::PathBuf) {
         drop(ctx);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn 调整快照在蒙版和lut改动后仍逐位相同() {
+        let (dir, ctx, mut img) = fixture("frozeninputs");
+        let lut_dir = dir.join("luts");
+        std::fs::create_dir_all(&lut_dir).unwrap();
+        let lut_path = lut_dir.join("frozen.cube");
+        std::fs::write(&lut_path, "LUT_1D_SIZE 2\n1 1 1\n0 0 0\n").unwrap();
+        let mask_rel = "projects/1/mask.png";
+        let mut m = Rgba::new(20, 10);
+        for y in 0..10 { for x in 0..10 { m.set(x, y, [255, 255, 255, 255]); } }
+        let mask = codec::encode_png(&m);
+        std::fs::write(dir.join(mask_rel), &mask).unwrap();
+        img.mask_path = Some(mask_rel.into());
+        let mut ops = EditOps::default();
+        ops.lut = Some(photoedit_core::LutRef { name: "frozen.cube".into(), strength: photoedit_core::Slider(100) });
+        ops.beauty.by_mask = true;
+        ops.beauty.brighten = photoedit_core::Slider(50);
+        let want = photo_with(&ctx, &img, &ops).unwrap();
+        let inputs = snapshot_inputs(&ctx, &img, &ops).unwrap();
+        // 覆盖 LUT 与蒙版之后按原快照重放，与提交时实际计算结果逐位比较。
+        std::fs::write(&lut_path, "LUT_1D_SIZE 2\n0 0 0\n1 1 1\n").unwrap();
+        std::fs::write(dir.join(mask_rel), codec::encode_png(&Rgba::new(20, 10))).unwrap();
+        let got = photo_from_snapshot(&ctx, &img, &ops, &inputs, Some(&mask)).unwrap();
+        assert_eq!(want.px, got.px);
+        assert_ne!(want.px, photo_with(&ctx, &img, &ops).unwrap().px);
+        cleanup(ctx, &dir);
     }
 
     #[test]

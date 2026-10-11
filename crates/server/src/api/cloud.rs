@@ -41,7 +41,9 @@ pub async fn cloud_edit(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
         return Ok(err(404, "srv.canvas.noImage"));
     }
     let settings = body.get("settings").cloned().unwrap_or(Value::Object(Map::new()));
-    let (rows, skipped) = crate::service::queue::enqueue(&ctx, &[iid], &settings, body.get("rerun_of").and_then(|v| v.as_i64()))?;
+    let rerun = body.get("rerun_of").and_then(|v| v.as_i64());
+    let ctx2 = ctx.clone();
+    let (rows, skipped) = crate::util::blocking(move || crate::service::queue::enqueue(&ctx2, &[iid], &settings, rerun)).await?;
     if rows.is_empty() {
         // 理由可能是队列带上来的一句原文（还没交钥匙），也可能根本没有理由：后者才用钥匙
         match skipped.first().and_then(|v| v.get("reason")).and_then(|v| v.as_str()) {
@@ -65,7 +67,9 @@ pub async fn queue_post(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
     if prompt.is_empty() {
         return Ok(bad("srv.cloud.promptEmpty"));
     }
-    let (rows, skipped) = crate::service::queue::enqueue(&ctx, &ids_in, &settings, body.get("rerun_of").and_then(|v| v.as_i64()))?;
+    let rerun = body.get("rerun_of").and_then(|v| v.as_i64());
+    let ctx2 = ctx.clone();
+    let (rows, skipped) = crate::util::blocking(move || crate::service::queue::enqueue(&ctx2, &ids_in, &settings, rerun)).await?;
     crate::service::queue::pump(&ctx).await;
     // 与 /api/run 同一个形状：每张都要知道"行 id + 图 id"，前端才挂得上轮询
     let results: Vec<Value> = rows.iter().map(|(rid, iid)| serde_json::json!({ "result_id": rid, "image_id": iid })).collect();

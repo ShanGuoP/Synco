@@ -6,20 +6,20 @@ use crate::error::AppError;
 use crate::repo::settings::{del as del_setting, get_raw, put as put_setting};
 use crate::state::Ctx;
 use crate::util::{clamp_round, clip};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::time::Duration;
 
 pub const TIMEOUT_MIN: i64 = 30_000;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudSettings {
     pub kind: String,
     pub base: String,
     pub model: String,
     pub size: String,
     pub quality: String,
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     pub key: String,
     pub timeout_ms: i64,
     pub concurrency: i64,
@@ -269,6 +269,11 @@ pub struct Edit<'a> {
 /// 与其造一张全透明的巨图（各家的遮罩体积上限还不一样），不如按接口本来的样子省略。
 pub async fn edit(ctx: &Ctx, e: Edit<'_>) -> crate::error::Result<Vec<u8>> {
     let s = settings(ctx);
+    edit_with(ctx, &s, e).await
+}
+
+/// 已提交任务只使用自己的配置；调度并发仍取当前设置。
+pub async fn edit_with(ctx: &Ctx, s: &CloudSettings, e: Edit<'_>) -> crate::error::Result<Vec<u8>> {
     if s.base.is_empty() {
         return Err(AppError::bad("srv.cloud.noBase"));
     }

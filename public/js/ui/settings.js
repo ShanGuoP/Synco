@@ -4,7 +4,7 @@ import { el, fill } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { api } from '../core/api.js';
 import { isDesktop, call, pickFolder, human, openExternal } from '../core/desktop.js';
-import { MODES, apply, mode, resolved, watch } from '../core/theme.js';
+import { MODES, STYLES, apply, mode, resolved, watch, appearance, applyAppearance } from '../core/theme.js';
 import { osReduce, reduce, saved, set as setMotion, watch as watchMotion } from '../core/motion.js';
 import { dl, dx, flushForSwitch, getLang, t } from '../core/i18n.js';
 import { store } from '../state.js';
@@ -639,8 +639,9 @@ function createDataPane() {
   return { node };
 }
 
-/** 外观：三档底色 + 减弱动效 + 当前实际生效的那一档 */
+/** 外观：界面风格 + 三档底色 + 减弱动效 + 当前实际生效的那一档 */
 function createThemePane() {
+  const styleRow = el('div.appearance-options');
   const row = el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
   const now = el('div.set__state');
   /* 减弱动效（F7 的兜底开关）：和系统的 prefers-reduced-motion 同一个语义，任一到就全站瞬时——
@@ -662,9 +663,17 @@ function createThemePane() {
 
   function paint() {
     const cur = mode();
+    fill(styleRow, ...STYLES.map(([k, key]) => el('button.appearance-option', {
+      type: 'button', 'aria-pressed': String(k === appearance()),
+      onclick: () => { applyAppearance(k); paint(); },
+    }, el('span.appearance-option__preview', { dataset: { style: k }, 'aria-hidden': 'true' },
+      el('span'), el('span'), el('span')),
+    el('b', { text: t(key) }),
+    el('span.muted', { text: t(`settings.theme.${k}Tip`) }))));
     /* MODES 里存的是键名：字典在 boot 之后才装载，模块级常量取文案只会拿到 ⟨键名⟩ */
     fill(row, ...MODES.map(([k, key]) => el('button.btn.btn--sm', {
       type: 'button', class: `btn btn--sm${k === cur ? ' btn--primary' : ' btn--ghost'}`,
+      'aria-pressed': String(k === cur),
       text: t(key), onclick: () => { apply(k); paint(); },
     })));
     sw.setAttribute('aria-checked', String(saved()));
@@ -703,6 +712,8 @@ function createThemePane() {
   }
 
   const node = el('div.dlg-flow', {},
+    el('div', {}, el('h4.dlg-h4', { text: t('settings.theme.styleTitle') }), styleRow,
+      el('p.muted', { text: t('settings.theme.styleNote') })),
     el('div', {}, el('h4.dlg-h4', { text: t('settings.theme.title') }), row,
       el('p.muted', { text: t('settings.theme.note') })),
     el('div', {}, el('h4.dlg-h4', { text: t('settings.appearance.langName') }), langRow, langLine),
@@ -803,6 +814,7 @@ function createAboutPane() {
 }
 
 export function settingsModal(section = 'backend') {
+  const previousFocus = document.activeElement;
   let cur = section;
   const pane = el('div.set__pane');
   const built = {};
@@ -821,7 +833,7 @@ export function settingsModal(section = 'backend') {
         : k === 'about' ? createAboutPane()
         : k === 'phrases' ? createPhrasesPane()
         : createPresetsPane({ projectId: store.peek('project')?.id || null }));
-      fill(pane, built[k].node);
+      fill(pane, el('h2.settings-workspace__title', { text: t(key) }), built[k].node);
     },
   })));
   nav.querySelector('.is-on').click();
@@ -829,6 +841,18 @@ export function settingsModal(section = 'backend') {
     title: t('shell.settings'), wide: true,
     body: el('div.set', {}, nav, pane),
     actions: [{ label: t('common.close'), kind: 'ghost' }],
+    onClose: () => { if (previousFocus?.isConnected) previousFocus.focus(); },
+  });
+  m.node.classList.add('settings-workspace');
+  // 工作区继续是同一对话框会话；Tab 不漏进被遮住的画布，Esc/关闭仍走原工厂。
+  m.node.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const nodes = [...m.node.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"]')]
+      .filter(n => !n.disabled && n.getClientRects().length);
+    if (!nodes.length) return;
+    const first = nodes[0], last = nodes[nodes.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
   return m;
 }

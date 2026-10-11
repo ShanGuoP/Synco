@@ -157,16 +157,20 @@ impl Plane {
     /// `passes` 次行+列盒式模糊。清晰度用 3 次摊出大半径低频，
     /// 锐化只要 1 次 3×3（多摊就把要保留的高频吃掉了）。成本与半径无关。
     pub fn box_blur_passes(&self, radius: usize, passes: usize) -> Plane {
+        clone_plane(self).into_box_blur_passes(radius, passes)
+    }
+
+    /// 已拥有的工作平面直接复用为输出，不再先复制一份整幅 f32 缓冲。
+    pub fn into_box_blur_passes(mut self, radius: usize, passes: usize) -> Plane {
         if radius == 0 || passes == 0 {
-            return clone_plane(self);
+            return self;
         }
-        let mut cur = clone_plane(self);
         let mut tmp = Plane::new(self.w, self.h);
         for _ in 0..passes {
-            blur_rows(&cur.v, self.w, self.h, radius, &mut tmp.v);
-            blur_cols(&tmp.v, self.w, self.h, radius, &mut cur.v);
+            blur_rows(&self.v, self.w, self.h, radius, &mut tmp.v);
+            blur_cols(&tmp.v, self.w, self.h, radius, &mut self.v);
         }
-        cur
+        self
     }
 }
 

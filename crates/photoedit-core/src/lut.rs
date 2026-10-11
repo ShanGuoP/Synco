@@ -6,7 +6,7 @@
 use px_core::{par::par_chunks_mut, Rgba};
 
 /// 一张已解析的 LUT
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Lut {
     dim: Dim,
     size: usize,
@@ -16,7 +16,7 @@ pub struct Lut {
     data: Vec<f32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Dim {
     One,
     Three,

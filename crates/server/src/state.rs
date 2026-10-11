@@ -28,7 +28,7 @@ impl Drop for DlGuard<'_> {
 pub struct Ctx {
     pub data: PathBuf,
     pub public: PathBuf,
-    pub conn: Mutex<Connection>,
+    conn: Mutex<Connection>,
     /// ComfyUI 连不上时的"连判几轮才认失败"计数
     pub misses: Mutex<HashMap<i64, u8>>,
     /// 本进程正在跑的云端任务。队列 worker 进出这里，读接口靠它区分"还在飞"和"上一轮留下的僵尸"

@@ -132,14 +132,15 @@ export async function loadPhrases() {
   return { rows, error: '' };
 }
 
-export async function loadProject(id) {
+export async function loadProject(id, current = () => true) {
   const g = routeGen();
   const d = await api.project(id);
   // 连着切两个项目时，前一个的响应可能后到：那一份 images/settings 属于已经走掉的那一页，
   // 写进 store 就是"屏幕上开着 B，数据却是 A"，随后任何一张卡片的动作都作用在错的图上
-  if (g !== routeGen()) return d;
+  if (g !== routeGen() || !current()) return d;
   if (!d.project) throw new Error(t('common.projectMissing'));
   const cfg = store.peek('cfg') || await api.cfg().then(c => { store.set({ cfg: c }); return c; });
+  if (g !== routeGen() || !current()) return d;
   store.set({
     project: d.project,
     images: d.images.map(normImage),

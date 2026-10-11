@@ -11,9 +11,22 @@ use crate::{img::codec, service::imagesvc, service::refs, util};
 use serde_json::{json, Map, Value};
 use stitch_core::{build_crop_payload, stitch_crop, Build, StitchParams};
 use std::sync::atomic::{AtomicUsize, Ordering};
+mod spec;
+mod files;
+pub(crate) use files::PendingFiles;
+use spec::{JobKind, JobSpec};
 
 /// 并发上限就是云端设置里那个 concurrency 的刻度，钳在 1–6
 pub const CONCURRENCY_MAX: usize = 6;
+
+pub(crate) fn recover_files(ctx: &Shared) -> Result<usize> { files::recover(ctx) }
+
+/// 画稿和参考图已经复制完才发布 queued；配置取提交入口那一刻的值。
+pub fn queue_canvas(ctx: &Shared, img: &Image, id: i64, config: cloud::CloudSettings) -> Result<()> {
+    let (spec, mask) = spec::capture(ctx, img, &json!({}), config)?;
+    let json = serde_json::to_string(&spec).map_err(|e| AppError::fail_detail("srv.queue.specMissing", e))?;
+    rres::queue_with_spec(ctx, id, &json, &mask)
+}
 
 /// 在飞计数的 RAII 守卫：任务里 panic 走 unwind 时也要把这一格还回去，
 /// 普通语句会被 unwind 跳过，所以不能写成 fetch_sub。
@@ -52,7 +65,7 @@ pub fn enqueue(ctx: &Shared, image_ids: &[i64], settings: &Value, rerun_of: Opti
     let prompt = settings.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
     // 反向涂抹时"一笔没涂"是合法输入（= 整幅重绘），所以不要求遮罩文件存在
     let invert = settings.get("invert").and_then(Value::as_bool).unwrap_or(false);
-    let model = cloud::settings(ctx).model;
+    let config = cloud::settings(ctx);
     let mut ids = Vec::new();
     let mut skipped = Vec::new();
     for &img_id in image_ids {
@@ -101,8 +114,12 @@ pub fn enqueue(ctx: &Shared, image_ids: &[i64], settings: &Value, rerun_of: Opti
         if !mask_ok {
             continue;
         }
-        let id = rres::insert_cloud(ctx, img.id, img.project_id, &prompt, &settings.to_string(), &model, rerun_of)?;
-        rres::set_queued(ctx, id)?;
+        let (spec, mask) = match spec::capture(ctx, &img, settings, config.clone()) {
+            Ok(v) => v,
+            Err(e) => { bad(&e); continue; }
+        };
+        let json = serde_json::to_string(&spec).map_err(|e| AppError::fail_detail("srv.queue.specMissing", e))?;
+        let id = rres::insert_cloud_job(ctx, img.id, img.project_id, &prompt, &settings.to_string(), &config.model, rerun_of, &json, &mask)?;
         ids.push((id, img.id));
     }
     Ok((ids, skipped))
@@ -124,6 +141,11 @@ pub async fn snapshot(ctx: &Shared) -> Result<Value> {
         "items": items, "queued": queued, "running": running,
         "concurrency": cloud::settings(ctx).concurrency,
     }))
+}
+
+pub(crate) fn job_grace_ms(ctx: &Shared, id: i64) -> u128 {
+    rres::job_timeout(ctx, id).ok().flatten().filter(|t| *t >= cloud::TIMEOUT_MIN)
+        .map(|t| t as u128 + cloud::CLOUD_GRACE_MS).unwrap_or_else(|| cloud::grace_ms(ctx))
 }
 
 /// 有空位就把 queued 行叫起来。每次入队、每个任务收尾、每次启动都调它。
@@ -187,27 +209,29 @@ async fn run_job(ctx: &Shared, id: i64) {
 }
 
 async fn run_inner(ctx: &Shared, row: &entity::ResultRow) -> Result<()> {
-    let img = rimg::by_id(ctx, row.image_id)?
+    let mut img = rimg::by_id(ctx, row.image_id)?
         .ok_or_else(|| AppError::fail("srv.queue.imageGone"))?;
-    if img.is_sketch() {
-        return run_sketch(ctx, row, img).await;
+    let (spec, mask) = spec::load(ctx, row.id)?;
+    img.orig_path = spec.orig_path.clone();
+    if matches!(spec.kind, JobKind::Sketch) {
+        return run_sketch(ctx, row, img, spec.cloud).await;
     }
     // 整图重绘：把整张原图发过去按提示词生成。它和画布那条同形（不带遮罩、回来不缝合），
     // 差别只在输入是照片、且原图不透明
-    if row.settings().get("full").and_then(Value::as_bool).unwrap_or(false) {
-        return run_full(ctx, row, img).await;
+    if matches!(spec.kind, JobKind::Full) {
+        return run_full(ctx, row, img, spec, mask).await;
     }
     let prompt = row.prompt.clone();
-    let settings = row.settings();
+    let config = spec.cloud.clone();
     let pre = {
         let ctx = ctx.clone();
         let img = img.clone();
-        let settings = settings.clone();
-        tokio::task::spawn_blocking(move || prepare(&ctx, &img, &settings)).await
+        tokio::task::spawn_blocking(move || spec::prepare_job(&ctx, &img, &spec, mask)).await
     }
     .map_err(|e| AppError::fail_detail("srv.queue.cropPanic", e))??;
-    let bytes = cloud::edit(
+    let bytes = cloud::edit_with(
         ctx,
+        &config,
         cloud::Edit {
             image: Some(pre.crop.clone()),
             mask: if pre.no_mask { None } else { Some(pre.mask.clone()) },
@@ -275,43 +299,10 @@ fn build_prepared(photo: stitch_core::Rgba, mask_alpha: stitch_core::Alpha, para
 /// 裁切目标长边取**这一行提交时的快照**（`settings.edge`），不是跑到的那一刻的全局设置：
 /// 精修页的尺寸胶囊以前写进 settings 却没人读，等于一个骗人的旋钮。
 /// `settings.invert` 同理按行生效（反向涂抹只开云端这条路）。
+#[cfg(test)]
 fn prepare(ctx: &Shared, img: &Image, settings: &Value) -> Result<Prepared> {
-    let s = cloud::settings(ctx);
-    let edge = util::number_of(settings.get("edge")).filter(|n| *n >= 1.0).map(|n| n.clamp(512.0, 3840.0) as i64);
-    let params = StitchParams {
-        expand: s.stitch_expand as f64,
-        context: stitch_core::DEFAULT_CONTEXT,
-        crop_edge: edge.unwrap_or(s.stitch_edge.max(1)) as u32,
-        feather: s.stitch_feather as f64,
-        levels: stitch_core::DEFAULT_LEVELS,
-        invert: settings.get("invert").and_then(Value::as_bool).unwrap_or(false),
-    };
-    // 云端吃的也是"调整后"的那一张（拍板 4）
-    let ops = crate::service::adjust::load_ops(ctx, img.id);
-    let photo = crate::service::adjust::photo_with(ctx, img, &ops)?;
-    // 反向涂抹且没存过遮罩 = 一笔没保 = 整幅重绘，这时没有遮罩文件是合法输入；正向仍然要拦。
-    // 遮罩文件的字节也原样留着：无损重算要的是"这一枪实际发出去的那份笔迹"，而提交之后遮罩
-    // 还能接着涂——事后按库里那条路径再读一次，拿到的就不是当年那一份了
-    let (mask_alpha, mask_png) = match img.mask_path.as_deref().and_then(|m| util::data_file(&ctx.data, m)) {
-        Some(p) => {
-            let bytes = std::fs::read(&p).map_err(|e| AppError::fail_detail("srv.image.maskRead", e))?;
-            let a = codec::decode(&bytes)?.alpha();
-            // 笔迹活在**源图域**（带着裁切/旋转时画笔是锁住的），而 photo 是几何段之后那张。
-            // 不带着遮罩一起过这一段，下游那个 `k = 图宽 / 遮罩宽` 就把源图的比例硬套到转过的画幅上：
-            // 0.3.0 实测转 90° 提交，发出去的裁切区还是横长的一格，重绘落在别处，而这一行照样落 done
-            (photoedit_core::geometry::apply_alpha(&a, &ops.geometry), bytes)
-        }
-        // 按**已解码的真实尺寸**开这张空笔迹缓冲：库里那对 w/h 是导入时客户端自报的（只夹到 3 万），
-        // 跟着它开就是 30000×30000 = 900MB，dilate 再 clone 一份，ink_bbox 单线程扫 9 亿个点
-        None if params.invert => (stitch_core::Alpha::new(photo.w, photo.h), Vec::new()),
-        None => return Err(AppError::bad("srv.queue.noInk")),
-    };
-    let mut pre = build_prepared(photo, mask_alpha, &params)?;
-    pre.mask_png = mask_png;
-    // `expand`/`feather`/`crop_edge` 是全局设置里的缝合参数：改在两张中间，后一张就跟着变，
-    // 而重算无损要的是"这一枪当时那一套"，所以连它们一起进快照，不事后从设置里读
-    pre.snap = stitch_snapshot(&params, &ops);
-    Ok(pre)
+    let (spec, mask) = spec::capture(ctx, img, settings, cloud::settings(ctx))?;
+    spec::prepare_job(ctx, img, &spec, mask)
 }
 
 /// 无损重算的全部前提：缝合参数、几何与调整参数、缝合代码的规则版本。
@@ -343,7 +334,12 @@ fn prepared_from_snapshot(ctx: &Shared, img: &Image, snap: &Value, mask_png: Opt
     };
     let ops: photoedit_core::EditOps = serde_json::from_value(snap.get("ops").cloned().unwrap_or(Value::Null))
         .map_err(|_| AppError::bad("srv.lossless.noSnap"))?;
-    let photo = crate::service::adjust::photo_with(ctx, img, &ops)?;
+    let photo = if let Some(inputs) = snap.get("adjust_inputs") {
+        crate::service::adjust::photo_from_snapshot(ctx, img, &ops, inputs, mask_png)?
+    } else {
+        // 旧结果的重算格式没有辅助输入快照，保持旧导出行为。
+        crate::service::adjust::photo_with(ctx, img, &ops)?
+    };
     // 与 prepare 同一套分岔：反向涂抹且一笔没保 = 没有遮罩文件也是合法输入
     let mask_alpha = match mask_png {
         Some(b) => photoedit_core::geometry::apply_alpha(&codec::decode(b)?.alpha(), &ops.geometry),
@@ -371,30 +367,26 @@ fn compose(ctx: &Shared, id: i64, img: &Image, pre: &Prepared, bytes: &[u8]) -> 
     let dir = ctx.data.join("projects").join(img.project_id.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| AppError::fail_detail("srv.common.mkdirFail", e))?;
     let ts = util::now_ms();
+    let mut pending = files::PendingFiles::new(ctx.data.clone());
     let rel = |kind: &str, ext: &str| util::rel_path(&["projects".into(), img.project_id.to_string(), format!("r{id}_{ts}_{kind}.{ext}")]);
     let fin = rel("final", "jpg");
-    std::fs::write(ctx.data.join(&fin), codec::encode_jpeg(&final_img, imagesvc::FINAL_Q)).map_err(|e| AppError::fail_detail("srv.queue.finalWrite", e))?;
+    std::fs::write(pending.track(&fin), codec::encode_jpeg(&final_img, imagesvc::FINAL_Q)).map_err(|e| AppError::fail_detail("srv.queue.finalWrite", e))?;
     // 这两份必须是原样字节：重编码一次就把"当年那一张"换成"这一次的又一张"
     let raw = rel("raw", "png");
-    std::fs::write(ctx.data.join(&raw), bytes).map_err(|e| AppError::fail_detail("srv.queue.rawWrite", e))?;
+    std::fs::write(pending.track(&raw), bytes).map_err(|e| AppError::fail_detail("srv.queue.rawWrite", e))?;
     let msnap = if pre.mask_png.is_empty() {
         None
     } else {
         let p = rel("msnap", "png");
-        std::fs::write(ctx.data.join(&p), &pre.mask_png).map_err(|e| AppError::fail_detail("srv.queue.msnapWrite", e))?;
+        std::fs::write(pending.track(&p), &pre.mask_png).map_err(|e| AppError::fail_detail("srv.queue.msnapWrite", e))?;
         Some(p)
     };
     // 缩略图失败不影响这一张成图：历史列回落到 final_url 就行
-    let thumb = imagesvc::result_thumb(ctx, id, img.project_id, &fin);
-    if !rres::set_done(ctx, id, &fin, thumb.as_deref())? {
-        // 这几秒里那一行被中断或删掉了：刚落盘的四份都不该留在盘上指着空气
-        for p in [&fin, &raw].into_iter().chain(msnap.iter()).chain(thumb.iter()) {
-            let _ = std::fs::remove_file(ctx.data.join(p));
-        }
-        return Ok(());
+    let thumb = imagesvc::write_result_thumb(ctx, id, img.project_id, &fin);
+    if let Some(t) = &thumb { pending.track(t); }
+    if rres::complete(ctx, id, &fin, thumb.as_deref(), &raw, msnap.as_deref(), &pre.snap.to_string())? {
+        pending.commit();
     }
-    // 落定之后才写快照：那一行还不是 done 的时候，指针指向空气比缺快照更难查
-    rres::set_recompute(ctx, id, &raw, msnap.as_deref(), &pre.snap.to_string())?;
     Ok(())
 }
 
@@ -464,12 +456,12 @@ pub fn lossless_bytes(ctx: &Shared, row: &entity::ResultRow) -> Result<OutImage>
 ///
 /// 这里没有裁切与缝合——画布不存在"蒙版外要保持"这件事。状态机、并发闸、
 /// 重启续跑都照用队列这一套，所以只有"准备载荷"和"落盘"两段是画布自己的。
-async fn run_sketch(ctx: &Shared, row: &entity::ResultRow, img: Image) -> Result<()> {
+async fn run_sketch(ctx: &Shared, row: &entity::ResultRow, img: Image, config: cloud::CloudSettings) -> Result<()> {
     let prompt = row.prompt.clone();
     /* 发出去的是**这一行提交那一刻**的那份快照，不是此刻的画稿：排着队的时候接着画两笔，
        画稿会被自动保存覆写，那时图对应 t1 而行上的 sketch_url 还是 t0，
-       对比层与「取回这一版画稿」就都拿 t0 说话。快照没留下时才回落到此刻的画稿。 */
-    let src = row.sketch_path.clone().unwrap_or_else(|| img.orig_path.clone());
+       对比层与「取回这一版画稿」就都拿 t0 说话。没有快照就明确失败，不能回落到后来改过的画稿。 */
+    let src = row.sketch_path.clone().ok_or_else(|| AppError::bad("srv.queue.specMissing"))?;
     let (png, size, inked) = {
         let ctx2 = ctx.clone();
         let src2 = src.clone();
@@ -489,8 +481,9 @@ async fn run_sketch(ctx: &Shared, row: &entity::ResultRow, img: Image) -> Result
     // 一笔没涂又挂了参考图：那张全白的纸不必发出去，这一枪就是"按参考图与提示词生成"。
     // 没参考图时维持老行为（发空白画稿），免得动了既有语义。
     let image = if inked || refs_bytes.is_empty() { Some(png) } else { None };
-    let bytes = cloud::edit(
+    let bytes = cloud::edit_with(
         ctx,
+        &config,
         cloud::Edit { image, mask: None, refs: refs_bytes, prompt: &prompt, size: Some(&size) },
     )
     .await?;
@@ -532,19 +525,19 @@ pub fn sketch_fit(w: usize, h: usize) -> Result<()> {
 }
 
 /// 整图重绘的一次生成：整张原图折进云端几何框、不带遮罩，回来的图就是成图。
-async fn run_full(ctx: &Shared, row: &entity::ResultRow, img: Image) -> Result<()> {
+async fn run_full(ctx: &Shared, row: &entity::ResultRow, img: Image, spec: JobSpec, mask: Vec<u8>) -> Result<()> {
     let prompt = row.prompt.clone();
-    let settings = row.settings();
+    let config = spec.cloud.clone();
     let (buf, size) = {
         let ctx2 = ctx.clone();
         let img2 = img.clone();
-        let settings = settings.clone();
-        tokio::task::spawn_blocking(move || prepare_full(&ctx2, &img2, &settings))
+        tokio::task::spawn_blocking(move || prepare_full(&ctx2, &img2, &spec, &mask))
             .await
             .map_err(|e| AppError::fail_detail("srv.queue.wholePanic", e))??
     };
-    let bytes = cloud::edit(
+    let bytes = cloud::edit_with(
         ctx,
+        &config,
         cloud::Edit { image: Some(buf), mask: None, refs: Vec::new(), prompt: &prompt, size: Some(&size) },
     )
     .await?;
@@ -587,16 +580,12 @@ pub fn raw_sendable(raw: &[u8]) -> bool {
 
 /// 折整张原图：已经在框里且**本来就是 PNG** 才原样发（JPEG 转一次 PNG 再转回来是平白多一道损失），
 /// 其余一律按这一行选的长边重采样到 `full_target` 给的合法尺寸并重编码。
-fn prepare_full(ctx: &Shared, img: &Image, settings: &Value) -> Result<(Vec<u8>, String)> {
-    let s = cloud::settings(ctx);
-    let edge = util::number_of(settings.get("edge"))
-        .filter(|n| *n >= 1.0)
-        .map(|n| n.clamp(512.0, 3840.0) as u32)
-        .unwrap_or_else(|| s.stitch_edge.max(1) as u32);
+fn prepare_full(ctx: &Shared, img: &Image, spec: &JobSpec, mask: &[u8]) -> Result<(Vec<u8>, String)> {
+    let edge = spec.snapshot["stitch"]["crop_edge"].as_u64().ok_or_else(|| AppError::bad("srv.queue.specMissing"))? as u32;
     // 整图重绘同样吃"调整后"的图；调整过就不能再走"原样透传文件字节"那条捷径，
     // 透传的意义是不为一张没动过的图多付一次解码重编码
-    let ops = crate::service::adjust::load_ops(ctx, img.id);
-    let dec = crate::service::adjust::photo_with(ctx, img, &ops)?;
+    let ops: photoedit_core::EditOps = serde_json::from_value(spec.snapshot["ops"].clone()).map_err(|_| AppError::bad("srv.queue.specMissing"))?;
+    let dec = crate::service::adjust::photo_from_snapshot(ctx, img, &ops, &spec.snapshot["adjust_inputs"], if mask.is_empty() { None } else { Some(mask) })?;
     let (fw, fh, passthrough) = full_target(dec.w, dec.h, edge)?;
     if passthrough && ops.is_identity() {
         let raw = std::fs::read(util::data_file(&ctx.data, &img.orig_path).ok_or_else(|| AppError::bad("srv.queue.origUnread"))?)
@@ -629,14 +618,11 @@ fn compose_whole(ctx: &Shared, id: i64, img: &Image, bytes: &[u8], prefix: &str)
         img.project_id.to_string(),
         format!("{prefix}{id}_{}_final.png", util::now_ms()),
     ]);
-    imagesvc::write_bytes(&ctx.data.join(&rel), bytes)?;
-    let thumb = imagesvc::result_thumb(ctx, id, img.project_id, &rel);
-    if !rres::set_done(ctx, id, &rel, thumb.as_deref())? {
-        let _ = std::fs::remove_file(ctx.data.join(&rel));
-        if let Some(t) = thumb.as_deref() {
-            let _ = std::fs::remove_file(ctx.data.join(t));
-        }
-    }
+    let mut pending = files::PendingFiles::new(ctx.data.clone());
+    imagesvc::write_bytes(&pending.track(&rel), bytes)?;
+    let thumb = imagesvc::write_result_thumb(ctx, id, img.project_id, &rel);
+    if let Some(t) = &thumb { pending.track(t); }
+    if rres::set_done(ctx, id, &rel, thumb.as_deref())? { pending.commit(); }
     Ok(())
 }
 

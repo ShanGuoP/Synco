@@ -3282,7 +3282,7 @@ dependencies = [
 
 [[package]]
 name = "photoedit-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "moving-least-squares",
  "px-core",
@@ -3526,7 +3526,7 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "px-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "fast_image_resize",
 ]
@@ -4594,7 +4594,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stitch-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "fast_image_resize",
  "imageproc",
@@ -4697,7 +4697,7 @@ dependencies = [
 
 [[package]]
 name = "synco-desktop"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4710,7 +4710,7 @@ dependencies = [
 
 [[package]]
 name = "synco-server"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "axum",
  "base64 0.23.1",

@@ -10,6 +10,10 @@ try {
       : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 } catch (e) { /* 读不到就按纸白走，:root 本身就是亮色 */ }
 try {
+  document.documentElement.dataset.appearance =
+    localStorage.getItem('synco.appearance') === 'magazine' ? 'magazine' : 'glass';
+} catch (e) { document.documentElement.dataset.appearance = 'glass'; }
+try {
   if (localStorage.getItem('synco.motion') === '1' ||
       matchMedia('(prefers-reduced-motion: reduce)').matches) {
     document.documentElement.classList.add('reduce-motion');

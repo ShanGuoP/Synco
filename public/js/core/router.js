@@ -41,7 +41,8 @@ export function createRouter() {
   };
 
   /* 换页动作本身：与包过渡之前一模一样（世代号先自增，慢响应靠它作废） */
-  async function swap(path) {
+  async function swap(path, generation) {
+    if (generation !== gen) return;
     for (const r of routes) {
       const m = r.re.exec(path);
       if (!m) continue;
@@ -58,16 +59,16 @@ export function createRouter() {
      canTransition() 是第三道闸：API 不在 / 减弱动效 / 画布覆盖层正挂在屏幕上，任一成立就瞬切。 */
   async function resolve(animate) {
     const path = parse();
-    gen++;
+    const generation = ++gen;
     if (!animate || first || NO_TRANSITION.test(path) || !canTransition()) {
       first = false;
-      await swap(path);
+      await swap(path, generation);
       return;
     }
     hold(true);
     // 回调里的 await 会推迟"新快照"的抓取：数据没回来之前屏幕上还是上一页，回来才淡。
     // 拉得太久（>5s）浏览器会放弃这次过渡直接换页，那也是对的——过渡是锦上添花，不是流程。
-    const t = document.startViewTransition(() => swap(path));
+    const t = document.startViewTransition(() => swap(path, generation));
     try { await t.finished; } catch { /* 被后一次过渡顶掉，不是错误 */ }
     hold(false);
   }

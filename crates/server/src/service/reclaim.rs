@@ -5,7 +5,7 @@
 use crate::error::{AppError, Result};
 use crate::models::dto;
 use crate::repo::results as rres;
-use crate::service::{backend, cloud, comfy};
+use crate::service::{backend, comfy};
 use crate::state::Shared;
 use crate::util;
 use serde_json::Value;
@@ -16,7 +16,7 @@ use std::time::Duration;
 /// 或者起表超过宽限期还没落盘，就判掉；还在飞的原样返回，让前端继续轮询。
 /// 返回 true 表示这张已经被标成 error。
 pub(crate) fn judge_cloud(ctx: &Shared, id: i64) -> bool {
-    if ctx.job_live(id) && !ctx.job_overdue(id, cloud::grace_ms(ctx)) {
+    if ctx.job_live(id) && !ctx.job_overdue(id, crate::service::queue::job_grace_ms(ctx, id)) {
         return false;
     }
     ctx.mark_error(id, "srv.reclaim.cloudStalled", serde_json::Value::Null);

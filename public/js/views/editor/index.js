@@ -5,6 +5,7 @@ import { icon } from '../../core/icons.js';
 import { api } from '../../core/api.js';
 import { mountWindowControls } from '../../core/desktop.js';
 import { go } from '../../core/router.js';
+import { createViewSession } from '../../core/viewSession.js';
 import { store, loadProject, saveSettings, stateOf, toggleSel, selectWhere, invertSel, clearSel, touchImage, diffSettings, defaultsFromCfg, settingsFromPreset, setJob, isCloud, effMode, patchSettings, cloudPrompt } from '../../state.js';
 import { submit, adopt, drop } from '../../gen.js';
 import { toastOk, toastErr, toastBusy } from '../../ui/toast.js';
@@ -24,8 +25,10 @@ import { createCompare } from './compare.js';
 import { fmtFile, fmtDims } from '../../core/format.js';
 import { beforeSwitch, dx, t } from '../../core/i18n.js';
 import { hold } from '../../core/guard.js';
+import { appearance } from '../../core/theme.js';
 
 let ctx = null;   // 当前编辑器上下文（只建一次，切图复用）
+const session = createViewSession();
 let rerunFrom = null;       // 下一次提交是「哪条结果的重跑」
 let lastSubmitted = null;   // 上次提交的参数快照，用来判断面板里是否有未提交改动
 
@@ -90,7 +93,7 @@ function buildShell() {
   } });
 
   const toolBtn = (k, ico, label, tip, onclick) => el('button.tool', {
-    type: 'button', dataset: { k }, 'data-tip': tip, onclick,
+    type: 'button', dataset: { k }, 'data-tip': tip, 'aria-label': label, onclick,
   }, el('span.tool__ico', { html: icon(ico) }), el('span', { text: label }));
 
   const brushVal = el('span.tool-slider__val', { text: '70' });
@@ -185,7 +188,7 @@ function buildShell() {
 }
 
 function railBtn(key, ico, labelKey, on, onclick) {
-  return el('button.rail-btn', { type: 'button', dataset: { key }, class: `rail-btn${on ? ' is-on' : ''}`, onclick },
+  return el('button.rail-btn', { type: 'button', dataset: { key }, 'aria-label': t(labelKey), 'data-tip': t(labelKey), class: `rail-btn${on ? ' is-on' : ''}`, onclick },
     el('span.ic', { html: icon(ico) }), el('span', { text: t(labelKey) }));
 }
 
@@ -193,18 +196,25 @@ const narrow = () => window.matchMedia('(max-width: 1100px)').matches;
 
 function toggleCol(cls, key) {
   /* 窄屏没有三栏可收，图标轨改当抽屉/浮层开关 */
-  if (narrow()) {
+  if (narrow() && appearance() !== 'glass') {
     if (key === 'prop') toggleDrawer();
     else if (key === 'pre') toastErr(t('ed.narrowHist'), t('ed.narrowHistBody'));
     return;
   }
   const off = $('#editor').classList.toggle(cls);
+  if (!off && appearance() === 'glass' && window.matchMedia('(max-width: 960px)').matches) {
+    const other = key === 'pre' ? 'prop' : 'pre';
+    $('#editor').classList.add(other === 'pre' ? 'no-pre' : 'no-prop');
+    const otherButton = $(`.ed-rail [data-key="${other}"]`);
+    if (otherButton) { otherButton.classList.remove('is-on'); otherButton.setAttribute('aria-expanded', 'false'); }
+  }
   const b = $(`.ed-rail [data-key="${key}"]`);
-  if (b) b.classList.toggle('is-on', !off);
+  if (b) { b.classList.toggle('is-on', !off); b.setAttribute('aria-expanded', String(!off)); }
 }
 
 /** 窄屏：属性面板走底部抽屉 */
 function toggleDrawer() {
+  if (appearance() === 'glass') { toggleCol('no-prop', 'prop'); return; }
   const ed = $('#editor');
   const on = ed.classList.toggle('is-drawer');
   ed.classList.remove('no-prop');
@@ -213,18 +223,32 @@ function toggleDrawer() {
 
 /* ==================== 打开 / 关闭 ==================== */
 export async function openEditor(projectId, imgId) {
+  const opening = session.begin();
+  if (ctx) {
+    ctx.showSeq = (ctx.showSeq || 0) + 1;
+    try { await Promise.all([ctx.painter.flush(), ctx.adjust.flush()]); }
+    catch (e) { if (opening.current()) toastErr(t('ed.loadFail'), e.message); return; }
+    if (!opening.current()) return;
+  }
   const ed = $('#editor');
   if (!ctx) {
     ctx = buildShell();
     for (const part of [ctx.top, ctx.tools, ctx.stage, ctx.history.node, ctx.params.node, ctx.rail, ctx.film.node]) ed.append(part);
+    if (appearance() === 'glass') {
+      ed.classList.add('no-pre');
+      const historyButton = ctx.rail.querySelector('[data-key="pre"]');
+      historyButton.classList.remove('is-on');
+      historyButton.setAttribute('aria-expanded', 'false');
+    }
     wireKeys(ctx);
   }
   /* 数据到手再掀覆盖层：脏 URL（比如 #/p/undefined/e/3）会在这里抛，此时应留在原页面而不是显示一个空编辑器 */
   const { project, images } = store.get();
   if (!project || project.id !== +projectId || !images.some(i => i.id === +imgId)) {
-    try { await loadProject(projectId); }
-    catch (e) { toastErr(t('ed.projFail'), e.message || String(e)); go('/'); return; }
+    try { await loadProject(projectId, opening.current); }
+    catch (e) { if (opening.current()) { toastErr(t('ed.projFail'), e.message || String(e)); go('/'); } return; }
   }
+  if (!opening.current()) return;
   ed.hidden = false;
   ed.classList.remove('is-drawer');
   $('#shell').style.visibility = 'hidden';
@@ -235,6 +259,9 @@ export async function openEditor(projectId, imgId) {
 }
 
 export function closeEditor() {
+  session.end();
+  if (ctx) ctx.showSeq = (ctx.showSeq || 0) + 1;
+  ctx?.compare?.hide();
   $('#editor').hidden = true;
   $('#shell').style.visibility = '';
   /* 不等：路由已经要走了。这笔由画笔模块串行排出去，下一次 showImage 的 load() 会 await 到它 */
@@ -262,17 +289,18 @@ const goBack = () => { const p = store.peek('project'); go(p ? `/p/${p.id}` : '/
 
 /* ==================== 单图装载 ==================== */
 async function showImage(imgId) {
+  if (!session.current()) return;
   const row = store.peek('images').find(i => i.id === imgId);
   if (!row) { toastErr(t('ed.notInProject')); return; }
   /* 连点胶片条会并发跑好几次装载：认领 imgId 之后还有三个 await，
      晚到的旧响应必须能认出自己已经过期，否则它会把画布、海报与 painter 的归属写成上一张 */
   const seq = (ctx.showSeq = (ctx.showSeq || 0) + 1);
-  const stale = () => seq !== ctx.showSeq;
+  const stale = () => seq !== ctx.showSeq || !session.current();
   ctx.imgId = imgId;
 
   const busy = toastBusy(t('ed.loadingImage'));
   let info;
-  try { info = await api.image(imgId); } catch (e) { busy.close(); toastErr(t('ed.loadFail'), e.message); return; }
+  try { info = await api.image(imgId); } catch (e) { busy.close(); if (!stale()) toastErr(t('ed.loadFail'), e.message); return; }
   busy.close();
   if (stale()) return;
 
@@ -305,12 +333,12 @@ async function showImage(imgId) {
   // 原图文件已丢失时底图 naturalWidth 是 0，过去会退化成按库里的报称尺寸开满尺寸缓冲（24MP 的撤销栈≈768MB）
   const s = Math.min(1, PAINT_EDGE / Math.max(1, info.w, info.h));
   const paint = { w: Math.max(1, Math.round(info.w * s)), h: Math.max(1, Math.round(info.h * s)) };
-  const had = await ctx.painter.load(info.w, info.h, info.mask_url, imgId, paint);
+  const had = await ctx.painter.load(info.w, info.h, info.mask_url, imgId, paint, () => !stale());
   if (stale()) return;
   /* 「本地调整」要在这一步把底图换成库里那套参数渲染出来的预览（如果有参数）。
      它排在 fit 之前：裁切/旋转会换画幅尺寸，先定尺寸再适应窗口才不会再歪一次。
      返回 true = 这一张显示的是调整预览，源图瓦片就不该再去摆 */
-  const adjustedView = await ctx.adjust.onImage(info);
+  const adjustedView = await ctx.adjust.onImage(info, () => !stale());
   if (stale()) return;
   syncInvertHint();
   ctx.viewport.fit();
