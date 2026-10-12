@@ -214,13 +214,14 @@ pub struct EditOps {
     pub warp: Warp,
     pub color: Color,
     pub beauty: Beauty,
+    pub portrait: crate::portrait_ops::Portrait,
     pub lut: Option<Lut>,
 }
 
 /// `v` 的默认值就是当前版本号：新起的参数对象序列化出去要能被后续版本认出来
 impl Default for EditOps {
     fn default() -> Self {
-        Self { v: 1, geometry: Geometry::default(), warp: Warp::default(), color: Color::default(), beauty: Beauty::default(), lut: None }
+        Self { v: 1, geometry: Geometry::default(), warp: Warp::default(), color: Color::default(), beauty: Beauty::default(), portrait: Default::default(), lut: None }
     }
 }
 
@@ -238,8 +239,11 @@ impl EditOps {
     pub fn parse(raw: &str) -> Result<(EditOps, Vec<String>), String> {
         // 这里只把 serde 的原文带出去：那句"参数不是合法 JSON"属于界面文案，在服务端的字典里
         let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+        let portrait = v.get("portrait").map(|p| serde_json::from_value::<crate::portrait_ops::Portrait>(p.clone()))
+            .transpose().map_err(|e| e.to_string())?;
         let mut rep = Vec::new();
-        let ops = read_ops(&v, &mut rep);
+        let mut ops = read_ops(&v, &mut rep);
+        if let Some(mut p) = portrait { p.clamp(&mut rep); ops.portrait=p; }
         Ok((ops, rep))
     }
 
@@ -262,6 +266,7 @@ impl EditOps {
             && self.warp.auto.is_empty()
             && self.color.is_empty()
             && self.beauty.is_empty()
+            && self.portrait.is_empty()
             && self.lut.is_none()
     }
 
@@ -274,6 +279,7 @@ impl EditOps {
 }
 
 fn clamp_ops(o: &mut EditOps, rep: &mut Vec<String>) {
+    o.portrait.clamp(rep);
     if !o.geometry.rotate_deg.is_finite() {
         rep.push("geometry.rotate_deg".to_string());
     }
@@ -314,11 +320,7 @@ fn clamp_ops(o: &mut EditOps, rep: &mut Vec<String>) {
             }
         }
     }
-    let a = &mut o.warp.auto;
-    a.face_slim.0 = clamp_i(a.face_slim.0 as i64, SLIDER_MIN, SLIDER_MAX, "warp.auto.face_slim", rep);
-    a.eye_big.0 = clamp_i(a.eye_big.0 as i64, SLIDER_MIN, SLIDER_MAX, "warp.auto.eye_big", rep);
-    a.nose_slim.0 = clamp_i(a.nose_slim.0 as i64, SLIDER_MIN, SLIDER_MAX, "warp.auto.nose_slim", rep);
-    a.chin.0 = clamp_i(a.chin.0 as i64, SLIDER_MIN, SLIDER_MAX, "warp.auto.chin", rep);
+    clamp_auto(&mut o.warp.auto,"warp.auto",rep);
     let c = &mut o.color;
     for (name, s) in [
         ("color.exposure", &mut c.exposure),
@@ -334,20 +336,22 @@ fn clamp_ops(o: &mut EditOps, rep: &mut Vec<String>) {
     ] {
         s.0 = clamp_i(s.0 as i64, SLIDER_MIN, SLIDER_MAX, name, rep);
     }
-    let b = &mut o.beauty;
-    for (name, s) in [
-        ("beauty.smooth", &mut b.smooth),
-        ("beauty.texture", &mut b.texture),
-        ("beauty.blemish", &mut b.blemish),
-        ("beauty.even_tone", &mut b.even_tone),
-        ("beauty.brighten", &mut b.brighten),
-        ("beauty.de_shine", &mut b.de_shine),
-        ("beauty.sharpen", &mut b.sharpen),
-    ] {
-        s.0 = clamp_i(s.0 as i64, 0, 100, name, rep);
-    }
+    clamp_beauty(&mut o.beauty,"beauty",rep);
     if let Some(l) = o.lut.as_mut() {
         l.strength.0 = clamp_i(l.strength.0 as i64, 0, 100, "lut.strength", rep);
+    }
+}
+
+pub(crate) fn clamp_auto(a:&mut Auto,prefix:&str,rep:&mut Vec<String>) {
+    for (name,s) in [("face_slim",&mut a.face_slim),("eye_big",&mut a.eye_big),("nose_slim",&mut a.nose_slim),("chin",&mut a.chin)] {
+        s.0=clamp_i(s.0 as i64,SLIDER_MIN,SLIDER_MAX,&format!("{prefix}.{name}"),rep);
+    }
+}
+
+pub(crate) fn clamp_beauty(b:&mut Beauty,prefix:&str,rep:&mut Vec<String>) {
+    for (name,s) in [("smooth",&mut b.smooth),("texture",&mut b.texture),("blemish",&mut b.blemish),
+        ("even_tone",&mut b.even_tone),("brighten",&mut b.brighten),("de_shine",&mut b.de_shine),("sharpen",&mut b.sharpen)] {
+        s.0=clamp_i(s.0 as i64,0,100,&format!("{prefix}.{name}"),rep);
     }
 }
 

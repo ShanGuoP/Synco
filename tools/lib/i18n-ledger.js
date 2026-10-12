@@ -6,6 +6,7 @@
 
 // R6 的账本：前端搬完一个文件就加一行，只增不减。
 const DONE_I18N = [
+  'public/js/views/editor/portrait.js',
   'public/js/core/i18n.js', 'public/js/shell.js',
   'public/js/core/desktop.js', 'public/js/core/maskEncode.js', 'public/js/core/api.js', 'public/js/core/format.js',
   'public/js/state.js', 'public/js/ui/progress.js', 'public/js/ui/modal.js', 'public/js/views/editor/filmstrip.js',
@@ -24,6 +25,7 @@ const DONE_I18N = [
 //     读者是坐在机器前的人，不是界面。
 //   · `crates/*/examples/*.rs`——对拍用的开发工具，同上。
 const DONE_I18N_RS = [
+  'crates/photoedit-core/src/portrait.rs', 'crates/photoedit-core/src/portrait_ops.rs',
 'crates/photoedit-core/src/beauty.rs', 'crates/photoedit-core/src/color.rs', 'crates/photoedit-core/src/face.rs',
   'crates/photoedit-core/src/geometry.rs', 'crates/photoedit-core/src/lib.rs', 'crates/photoedit-core/src/lut.rs',
   'crates/photoedit-core/src/ops.rs', 'crates/photoedit-core/src/pipeline.rs', 'crates/photoedit-core/src/px.rs',

@@ -1,7 +1,7 @@
 //! 本地精修内核。全部是"给一张图和一组参数，还一张图"的纯函数：
 //! 没有 IO、没有 tokio、不认 HTTP，`tools/lint-layers.js` 的 R4 就是钉这件事的。
 //!
-//! 链的固定顺序是 **几何 → 变形 → 调色 → 美颜**：变形产生的插值像素先落定，
+//! 链的固定顺序是 **源图局部精修 → 几何 → 变形 → 调色 → 美颜**：变形产生的插值像素先落定，
 //! 调色吃的是最终几何，美颜蒙版的坐标则约定在"变形之后"的那个域里。
 
 pub mod beauty;
@@ -11,6 +11,8 @@ pub mod geometry;
 pub mod lut;
 pub mod ops;
 pub mod pipeline;
+pub mod portrait;
+pub mod portrait_ops;
 pub mod warp;
 pub(crate) mod px;
 

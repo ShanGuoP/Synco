@@ -26,7 +26,7 @@ pub(super) fn capture(ctx: &Shared, img: &Image, settings: &Value, cloud: cloud:
         Some(s) => serde_json::from_str(&s).map_err(|_| AppError::bad("srv.queue.specMissing"))?,
         None => photoedit_core::EditOps::default(),
     };
-    let mask = if matches!(kind, JobKind::Crop) || ops.beauty.by_mask {
+    let mask = if matches!(kind, JobKind::Crop) || ops.beauty.by_mask || ops.portrait.faces.iter().any(|f| f.beauty.by_mask) {
         match img.mask_path.as_deref().and_then(|m| util::data_file(&ctx.data, m)) {
             Some(p) => std::fs::read(p).map_err(|e| AppError::fail_detail("srv.image.maskRead", e))?,
             None if params.invert || !matches!(kind, JobKind::Crop) => Vec::new(),

@@ -11,6 +11,7 @@ import { confirm } from '../../ui/modal.js';
 import { icon } from '../../core/icons.js';
 import { dx, t } from '../../core/i18n.js';
 import { hold } from '../../core/guard.js';
+import { blankPortrait, portraitEmpty, makePortraitPanel } from './portrait.js';
 
 /** 与后端 photoedit-core 的 EditOps 同形：缺的字段服务端按默认补，多余字段会被拒 */
 const blankOps = () => ({
@@ -19,6 +20,7 @@ const blankOps = () => ({
   warp: { strokes: [], auto: { face_slim: 0, eye_big: 0, nose_slim: 0, chin: 0 } },
   color: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, temp: 0, tint: 0, saturation: 0, vibrance: 0, clarity: 0, sharpen: 0, preset: null },
   beauty: { smooth: 0, texture: 0, blemish: 0, even_tone: 0, brighten: 0, de_shine: 0, sharpen: 0, by_mask: false, auto_face: false },
+  portrait: blankPortrait(),
   lut: null,
 });
 
@@ -142,30 +144,30 @@ export function createAdjust(deps) {
       el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.clearStrokes'), onclick: clearStrokes })),
     el('p.muted', { text: t('ad.warpNote') }));
 
-  const AUTO_KEYS = [['face_slim', 'ad.faceSlim'], ['eye_big', 'ad.eyeBig'], ['nose_slim', 'ad.noseSlim'], ['chin', 'ad.chin']];
-  const AUTO = {};
+  const portraitPanel = makePortraitPanel({getOps:()=>ops,getAnalysis:()=>faceAnalysis,onChange:()=>touch(),onSelection:()=>paintFace(),layer,getFrame:()=>frame,geometryActive:()=>geoActive()});
+  const legacyAuto = {};
+  const legacyBox = el('details', {hidden:true}, el('summary',{text:t('portrait.savedMainShape')}),
+    ...[['face_slim','ad.faceSlim'],['eye_big','ad.eyeBig'],['nose_slim','ad.noseSlim'],['chin','ad.chin']].map(([k,label])=>{
+      const ctl=makeProw({label:t(label),min:-100,max:100,step:1,value:0,tip:t('ad.autoShapeTip'),onChange:v=>{ops.warp.auto[k]=v;touch();}});
+      legacyAuto[k]=ctl;return ctl.node;
+    }));
   const faceStatus = el('p.muted', { role: 'status', text: t('ad.facePending') });
   const detectBtn = el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.detectFaces'), onclick: () => detectFaces() });
   const naturalBtn = el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('ad.naturalShape'), onclick: () => {
-    if (!faceAnalysis?.has_landmarks) return;
-    ops.warp.auto = { face_slim: 20, eye_big: 12, nose_slim: 10, chin: 8 };
-    paintPaints(); touch();
+    if (!portraitPanel.ready()) return;
+    portraitPanel.natural();
   } });
   const suggestions = el('div.chips');
   const faceBox = el('div', { style: { display: 'grid', gap: '10px' } },
     faceStatus, el('div.adj-row', {}, detectBtn, naturalBtn),
-    ...AUTO_KEYS.map(([k, label]) => {
-      const ctl = makeProw({ label: t(label), min: -100, max: 100, step: 1, value: 0, tip: t('ad.autoShapeTip'), onChange: v => { ops.warp.auto[k] = v; touch(); } });
-      AUTO[k] = ctl; return ctl.node;
-    }),
-    el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.resetShape'), onclick: () => { ops.warp.auto = blankOps().warp.auto; paintPaints(); touch(); } }),
+    portraitPanel.faceNode, legacyBox,
+    el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('ad.resetShape'), onclick: () => { ops.warp.auto = blankOps().warp.auto; portraitPanel.resetShape(); paintPaints(); touch(); } }),
     el('span.muted', { text: t('ad.faceScope') }),
     el('span.muted', { text: t('ad.faceComposition') }), suggestions);
   function paintFace() {
-    const ready = !faceBusy && !!faceAnalysis?.has_landmarks;
     detectBtn.disabled = faceBusy;
-    naturalBtn.disabled = !ready;
-    for (const [k] of AUTO_KEYS) AUTO[k].setDisabled(!ready);
+    portraitPanel.sync();
+    naturalBtn.disabled = faceBusy || !portraitPanel.ready();
     faceStatus.textContent = faceBusy ? t('ad.faceDetecting') : !faceAnalysis ? t('ad.facePending')
       : !faceAnalysis.count ? t('ad.faceNone') : !faceAnalysis.has_landmarks ? t('ad.faceSparse', { n: faceAnalysis.count }) : t('ad.faceReady', { n: faceAnalysis.count });
     fill(suggestions, ...(faceAnalysis?.suggestions || []).map(s => el('button.chip-s', {
@@ -246,6 +248,7 @@ export function createAdjust(deps) {
     el('p.muted', { text: t('ad.footNote') }),
     grp(t('ad.grpGeo'), true, geoBox),
     grp(t('ad.grpFace'), false, faceBox),
+    grp(t('portrait.bodyGroup'), true, portraitPanel.bodyNode),
     grp(t('ad.grpWarp'), true, warpBox),
     grp(t('ad.grpColor'), true, el('div', { style: { display: 'grid', gap: '10px' } },
       el('span.muted', { text: t('ad.presetNote') }), presetChips, lutSel, lutCtl.node, colorBox)),
@@ -272,9 +275,10 @@ export function createAdjust(deps) {
     && COLOR_KEYS.every(([k]) => !ops.color[k])
     // texture 不参与判恒等，服务端那条也是同一个口径：磨皮归零时它不碰像素，
     // 算进来只会逼出一张与上一版逐位相同的白渲染
-    && BEAUTY_KEYS.every(([k]) => k === 'texture' || !ops.beauty[k]) && !ops.lut;
+    && BEAUTY_KEYS.every(([k]) => k === 'texture' || !ops.beauty[k]) && portraitEmpty(ops.portrait) && !ops.lut;
 
   function paintGeo() {
+    portraitPanel.syncGuide();
     fineCtl.set(ops.geometry.rotate_deg - quad(), true);
     for (const b of fillSeg.children) b.classList.toggle('is-on', b.dataset.f === ops.geometry.fill);
     paintRatio();
@@ -299,7 +303,8 @@ export function createAdjust(deps) {
     BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
     maskSw.set(!!ops.beauty.by_mask);
     autoSkinSw.set(!!ops.beauty.auto_face);
-    for (const [k] of AUTO_KEYS) AUTO[k].set(ops.warp.auto[k] ?? 0, true);
+    legacyBox.hidden=Object.values(ops.warp.auto).every(v=>!v);
+    for(const [k,ctl] of Object.entries(legacyAuto)){ctl.set(ops.warp.auto[k]??0,true);ctl.setDisabled(!faceAnalysis?.has_landmarks);}
     paintFace();
     paintPreset();
     lutSel.value = ops.lut?.name || '';
@@ -393,6 +398,7 @@ export function createAdjust(deps) {
     viewIdentity = !!p.identity;
     setContentSize(frame.w, frame.h);
     onFrame?.(frame.w, frame.h);
+    portraitPanel.syncGuide();
     poster.src = p.preview_url;
     poster.hidden = false;
     // 海报解出来才知道它那档分辨率够不够屏幕用；不够就补真像素那一档（见 ensureTiles）
@@ -816,9 +822,11 @@ export function createAdjust(deps) {
         warp: { ...d.warp, ...(r?.ops?.warp || {}), auto: { ...d.warp.auto, ...(r?.ops?.warp?.auto || {}) } },
         color: { ...d.color, ...(r?.ops?.color || {}) },
         beauty: { ...d.beauty, ...(r?.ops?.beauty || {}) },
+        portrait: { ...d.portrait, ...(r?.ops?.portrait || {}), body: { ...d.portrait.body, ...(r?.ops?.portrait?.body || {}) } },
         lut: r?.ops?.lut ?? null,
       };
       faceAnalysis = r?.face_analysis || null;
+      portraitPanel.resetSelection();
       paintFace();
       if (!faceAnalysis?.analyzed) void detectFaces();
       ratioPick = 0;

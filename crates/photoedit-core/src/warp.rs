@@ -414,12 +414,18 @@ pub fn control_pairs(auto: &Auto, shape: &FaceShape, w: usize, h: usize) -> (Vec
 /// 一键塑形：在人脸框外扩 1.2 倍的局部域里跑稀疏网格 MLS，域外恒等。
 /// 全图 dense 在 24MP 上是分钟级，局部域 + 网格把问题缩到万级节点。
 pub fn mls(img: &Rgba, auto: &Auto, shape: &FaceShape) -> Rgba {
-    let mut out = img.clone();
     if auto.is_empty() || shape.box_norm[2] <= 0.0 || shape.box_norm[3] <= 0.0 {
-        return out;
+        return img.clone();
     }
+    let (p, q) = control_pairs(auto, shape, img.w, img.h);
+    mls_pairs(img, shape, &p, &q, None)
+}
+
+/// 精细塑形复用同一个 MLS 实现。保护图是源图域的位移权重，零权重处逐位保留。
+pub(crate) fn mls_pairs(img: &Rgba, shape: &FaceShape, p: &[(f32, f32)], q: &[(f32, f32)], protection: Option<&px_core::Alpha>) -> Rgba {
+    let mut out = img.clone();
     let (w, h) = (img.w, img.h);
-    let (p, q) = control_pairs(auto, shape, w, h);
+    if w==0 || h==0 || shape.box_norm[2]<=0.0 || shape.box_norm[3]<=0.0 || !shape.box_norm.iter().all(|v|v.is_finite()) {return out;}
     if p.len() < 2 {
         return out;
     }
@@ -444,7 +450,7 @@ pub fn mls(img: &Rgba, auto: &Auto, shape: &FaceShape) -> Rgba {
         for gx in 0..gw {
             let x = x0 as f32 + gx as f32 * MLS_GRID as f32;
             let y = y0 as f32 + gy as f32 * MLS_GRID as f32;
-            let (dx, dy) = mls_at(&p, &q, x, y);
+            let (dx, dy) = mls_at(p, q, x, y);
             field[gy * gw + gx] = [dx, dy];
         }
     }
@@ -466,7 +472,8 @@ pub fn mls(img: &Rgba, auto: &Auto, shape: &FaceShape) -> Rgba {
             let edge = (x-x0).min(x1-x).min(y-y0).min(y1-y) as f32;
             let feather = ((x1-x0).min(y1-y0) as f32 * 0.08).max(1.0);
             let fade = (edge/feather).clamp(0.0,1.0);
-            let fade = fade*fade*(3.0-2.0*fade);
+            let fade = fade*fade*(3.0-2.0*fade) * protection.map(|m| m.get(x,y) as f32 / 255.0).unwrap_or(1.0);
+            if fade == 0.0 { continue; }
             let v = sample(src, w, h, x as f32 - dx*fade, y as f32 - dy*fade, Pad::Edge);
             let i = (y * w + x) * 4;
             out.px[i] = v[0].round().clamp(0.0, 255.0) as u8;

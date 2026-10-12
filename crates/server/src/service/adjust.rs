@@ -63,9 +63,9 @@ pub fn ops_hash(json: &str) -> String {
 /// Face-dependent pixels get a different immutable URL when analysis changes.
 /// Submitted inputs are records: a refresh must never delete their history.
 fn render_hash(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<String> {
-    if ops.warp.auto.is_empty() && !ops.beauty.auto_face { return Ok(ops_hash(&ops.to_json())); }
+    if ops.warp.auto.is_empty() && !ops.beauty.auto_face && !ops.portrait.needs_faces() { return Ok(ops_hash(&ops.to_json())); }
     let points=radj::landmarks(ctx,img.id)?;
-    Ok(ops_hash(&json!({"ops":ops,"face_pipeline":1,"points":points}).to_string()))
+    Ok(ops_hash(&json!({"ops":ops,"face_pipeline":2,"points":points}).to_string()))
 }
 
 fn stem(img: &Image) -> String {
@@ -209,7 +209,9 @@ pub fn pixels(ctx: &Ctx, img: &Image, ops: &EditOps, grade: Grade) -> Result<Rgb
         Some(l) => lut_table(ctx, &l.name)?,
         None => None,
     };
-    let chain = Chain { mask: mask.as_ref(), shape: shape.as_ref(), lut: table.as_ref() };
+    let meshes = if ops.portrait.needs_faces() { crate::service::face::cached_meshes(ctx,img)? } else { Vec::new() };
+    let portrait_mask = if ops.portrait.faces.iter().any(|f| f.beauty.by_mask) { mask_plane(ctx,img,base.w,base.h)? } else { None };
+    let chain = Chain { mask: mask.as_ref(), shape: shape.as_ref(), lut: table.as_ref(), meshes:&meshes, portrait_mask:portrait_mask.as_ref() };
     Ok(apply_chain(&base, ops, &chain))
 }
 
@@ -415,7 +417,8 @@ pub(crate) fn snapshot_inputs(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<V
     let shape = if ops.warp.auto.is_empty() { None } else { shape_for(ctx, img) };
     let lut = match &ops.lut { Some(l) => lut_table(ctx, &l.name)?, None => None };
     let skin = if ops.beauty.auto_face { Some(radj::landmarks(ctx,img.id)?) } else { None };
-    Ok(json!({ "shape": shape, "lut": lut, "skin": skin }))
+    let meshes = if ops.portrait.needs_faces() { Some(crate::service::face::cached_meshes(ctx,img)?) } else { None };
+    Ok(json!({ "shape": shape, "lut": lut, "skin": skin, "meshes": meshes }))
 }
 
 pub(crate) fn photo_from_snapshot(ctx: &Ctx, img: &Image, ops: &EditOps, inputs: &Value, mask_png: Option<&[u8]>) -> Result<Rgba> {
@@ -439,7 +442,13 @@ pub(crate) fn photo_from_snapshot(ctx: &Ctx, img: &Image, ops: &EditOps, inputs:
         if let Some(m) = mask { for (a,b) in skin.v.iter_mut().zip(m.v) { *a=((*a as u16*b as u16)/255) as u8; } }
         mask = Some(skin);
     }
-    Ok(apply_chain(&base, ops, &Chain { mask: mask.as_ref(), shape: shape.as_ref(), lut: lut.as_ref() }))
+    let meshes: Vec<photoedit_core::portrait_ops::Mesh> = if ops.portrait.needs_faces() {
+        serde_json::from_value(inputs["meshes"].clone()).map_err(|_| AppError::bad("srv.lossless.noSnap"))?
+    } else { Vec::new() };
+    let portrait_mask = if ops.portrait.faces.iter().any(|f| f.beauty.by_mask) {
+        match mask_png { Some(png) => { let m=codec::decode(png)?; Some(stitch_core::crop_scale_rgba(&m,0,0,m.w,m.h,base.w,base.h).alpha()) }, None=>None }
+    } else { None };
+    Ok(apply_chain(&base, ops, &Chain { mask: mask.as_ref(), shape: shape.as_ref(), lut: lut.as_ref(),meshes:&meshes,portrait_mask:portrait_mask.as_ref() }))
 }
 
 /// 面板要的初始状态：参数 + 内置预设 + 盘上可用的 LUT 名单。
@@ -503,6 +512,36 @@ mod tests {
     fn cleanup(ctx: std::sync::Arc<Ctx>, dir: &std::path::PathBuf) {
         drop(ctx);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn portrait_snapshot_preserves_each_face_and_painted_mask_after_refresh() {
+        let (dir,ctx,mut img)=fixture("portrait-snapshot");
+        let mut source=Rgba::new(160,140);
+        for y in 0..140 {for x in 0..160 {source.set(x,y,[150+(x%60) as u8,120+(y%50) as u8,110,255]);}}
+        std::fs::write(dir.join(&img.orig_path),codec::encode_png(&source)).unwrap();img.w=160;img.h=140;
+        let make_mesh=|cx:f32| {
+            let mut points=vec![[cx,0.48];468];
+            let mut ring=|ids:&[usize],c:[f32;2],r:[f32;2]| {for (j,&i) in ids.iter().enumerate() {let a=-std::f32::consts::FRAC_PI_2+j as f32/ids.len() as f32*std::f32::consts::TAU;points[i]=[c[0]+r[0]*a.cos(),c[1]+r[1]*a.sin()];}};
+            ring(photoedit_core::face::OVAL,[cx,0.48],[0.18,0.32]);
+            ring(&[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246],[cx-0.075,0.39],[0.045,0.025]);
+            ring(&[263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466],[cx+0.075,0.39],[0.045,0.025]);
+            points[98]=[cx-0.035,0.51];points[327]=[cx+0.035,0.51];points
+        };
+        radj::put_analysis(&ctx,img.id,&[],&[json!({"points":make_mesh(0.25)}),json!({"points":make_mesh(0.75)})]).unwrap();
+        let mut mask=Rgba::new(160,140);for y in 0..140 {for x in 80..160 {mask.set(x,y,[255;4]);}}
+        let mask_png=codec::encode_png(&mask);let rel="projects/1/portrait-mask.png";
+        std::fs::write(dir.join(rel),&mask_png).unwrap();img.mask_path=Some(rel.into());
+        let (ops,_)=EditOps::parse(r#"{"portrait":{"faces":[{"idx":0,"shape":{"face_width":30}},{"idx":1,"beauty":{"smooth":35,"by_mask":true},"retouch":{"rosy":70}}],"body":{"strength":{"waist":35}}},"geometry":{"rotate_deg":90,"flip_h":true}}"#).unwrap();
+        let expected=photo_with(&ctx,&img,&ops).unwrap();assert_ne!(expected,photoedit_core::apply_geometry(&source,&ops.geometry));
+        let before=render_hash(&ctx,&img,&ops).unwrap();let snapshot=snapshot_inputs(&ctx,&img,&ops).unwrap();
+        radj::put_analysis(&ctx,img.id,&[],&[json!({"points":[]})]).unwrap();
+        std::fs::write(dir.join(rel),codec::encode_png(&Rgba::new(160,140))).unwrap();
+        assert_ne!(render_hash(&ctx,&img,&ops).unwrap(),before);
+        assert_eq!(photo_from_snapshot(&ctx,&img,&ops,&snapshot,Some(&mask_png)).unwrap(),expected);
+        assert!(photo_from_snapshot(&ctx,&img,&ops,&json!({"shape":null,"lut":null}),Some(&mask_png)).is_err());
+        drop(ctx);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

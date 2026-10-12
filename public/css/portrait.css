@@ -1,0 +1,9 @@
+.portrait-panel, .portrait-section__body { display: grid; gap: var(--s-3); }
+.portrait-section { border-top: 1px solid var(--line); padding-top: var(--s-2); }
+.portrait-section > summary { cursor: pointer; padding: var(--s-2) 0; }
+.portrait-toggle { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.portrait-toggle input[type="checkbox"] { accent-color: var(--spot); }
+.portrait-toggle input[type="color"] { width: 40px; height: 28px; border: 0; background: transparent; }
+.portrait-guide { position: absolute; pointer-events: none; z-index: 4; border: calc(2px * var(--iz, 1)) solid var(--spot); }
+.portrait-guide__line { position: absolute; left: 0; right: 0; border-top: calc(1px * var(--iz, 1)) dashed var(--spot); }
+.portrait-guide__line span { position: absolute; transform: scale(var(--iz, 1)); transform-origin: left top; padding: 2px 4px; background: var(--bg-card); color: var(--txt); white-space: nowrap; }

@@ -23,7 +23,14 @@ pub fn has_landmarks(ctx: &Ctx, img: &Image) -> bool { cached_shape(ctx, img).is
 pub fn cached_analysis(ctx: &Ctx, img: &Image) -> Result<Value> {
     let faces = cached_faces(ctx, img, img.w.max(1) as usize, img.h.max(1) as usize)?;
     let suggestions: Vec<_> = faces.first().map(|f| face::RATIOS.iter().filter(|(_,r)| *r > 0.0).map(|(label,r)| json!({"ratio":label,"crop":face::crop_suggestion(img.w.max(1) as usize,img.h.max(1) as usize,f,*r)})).collect()).unwrap_or_default();
-    Ok(json!({"analyzed": !radj::landmarks(ctx,img.id)?.is_empty(), "count":faces.len(), "has_landmarks":has_landmarks(ctx,img),"suggestions":suggestions}))
+    let meshes = cached_meshes(ctx,img)?;
+    let entries: Vec<_> = faces.iter().enumerate().map(|(idx,f)| json!({"idx":idx,"box":[f.x/img.w as f32,f.y/img.h as f32,f.w/img.w as f32,f.h/img.h as f32],"has_landmarks":meshes.iter().any(|m| m.idx==idx && face::shape_from_mesh(&m.points).is_some())})).collect();
+    Ok(json!({"analyzed": !radj::landmarks(ctx,img.id)?.is_empty(), "count":faces.len(), "has_landmarks":has_landmarks(ctx,img),"suggestions":suggestions,"faces":entries}))
+}
+pub fn cached_meshes(ctx: &Ctx, img: &Image) -> Result<Vec<photoedit_core::portrait_ops::Mesh>> {
+    Ok(radj::landmarks(ctx,img.id)?.iter().filter_map(|r| Some(photoedit_core::portrait_ops::Mesh {
+        idx:r["idx"].as_u64()? as usize,points:face::parse_points(r["points"].as_str()?)
+    })).collect())
 }
 pub fn auto_mask(ctx: &Ctx, img: &Image, w: usize, h: usize) -> Result<Alpha> {
     let groups: Vec<Vec<[f32;2]>> = radj::landmarks(ctx,img.id)?.iter().filter_map(|r| r["points"].as_str().map(face::parse_points)).collect();

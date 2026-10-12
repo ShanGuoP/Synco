@@ -1,4 +1,4 @@
-//! 链的组装：几何 → 变形 → LUT → 调色 → 美颜。
+//! 链的组装：源图局部精修 → 几何 → 变形 → LUT → 调色 → 美颜。
 //!
 //! 顺序是有理由的，不是随手排的：
 //! - 变形在调色之前，插值出来的像素才不会再被色彩算子二次改动；
@@ -26,21 +26,32 @@ pub struct Chain<'a> {
     pub shape: Option<&'a FaceShape>,
     /// 已解析好的 LUT（读文件是调用方的事）
     pub lut: Option<&'a lut::Lut>,
+    pub meshes: &'a [crate::portrait_ops::Mesh],
+    /// 多人局部美颜专用的手绘蒙版，源图坐标域。
+    pub portrait_mask: Option<&'a Alpha>,
 }
 
 pub fn apply_chain(img: &Rgba, ops: &EditOps, chain: &Chain) -> Rgba {
     if ops.is_identity() {
         return img.clone();
     }
+    // 局部精修在源图域完成后随整张照片做几何变换，人体区域不受裁切坐标歧义影响。
+    let input = if ops.portrait.is_empty() { Cow::Borrowed(img) } else {
+        Cow::Owned(crate::portrait::apply(img,&ops.portrait,chain.meshes,chain.portrait_mask))
+    };
+    let portrait_skin = chain.mask.filter(|m| ops.beauty.auto_face && !ops.portrait.is_empty() && m.w==img.w && m.h==img.h)
+        .map(|m| crate::portrait::deform_mask(m,&ops.portrait,chain.meshes));
     let geometric = geometry::needs_pass(&ops.geometry);
     let mut cur = if geometric {
-        Cow::Owned(geometry::apply(img, &ops.geometry))
+        let out=geometry::apply(&input, &ops.geometry);
+        drop(input);
+        Cow::Owned(out)
     } else {
-        Cow::Borrowed(img)
+        input
     };
     // 笔迹活在源图域，几何段换了坐标系就得跟着转一遍；转完还是对不上就是调用方给错了档，
     // 宁可不加限定——静默挪位比"全图生效"更难解释
-    let mut mask = match chain.mask {
+    let mut mask = match portrait_skin.as_ref().or(chain.mask) {
         Some(m) if !ops.beauty.is_empty() && m.w == img.w && m.h == img.h => {
             Some(if geometric { Cow::Owned(geometry::apply_alpha(m, &ops.geometry)) } else { Cow::Borrowed(m) })
         }
@@ -161,7 +172,7 @@ mod tests {
                     strength: Slider(if active & 8 != 0 { 70 } else { 0 }) });
                 for m in [None, Some(&mask), Some(&wrong)] {
                     for l in [None, Some(&table)] {
-                        let chain = Chain { mask: m, lut: l, shape: None };
+                        let chain = Chain { mask: m, lut: l, shape: None, ..Default::default() };
                         assert_eq!(apply_chain(&img, &o, &chain), staged_reference(&img, &o, &chain),
                             "mode={mode}, active={active}, mask={}, lut={}", m.is_some(), l.is_some());
                     }
