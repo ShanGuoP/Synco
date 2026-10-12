@@ -76,12 +76,12 @@ export function createParams({ onSubmit, onStop, onMode, onInk }) {
   store.subscribe((s, key) => { if (key === 'phrases') paintChips(); });
 
   const panePrompt = el('div', { style: { display: 'grid', gap: '14px' } },
-    grp(t('pm.prompt'), { badge: t('pm.charCount', { n: 0 }) }, ta),
     grp(t('pm.quickPhrases'), { collapsed: true }, chips),
+    grp(t('pm.prompt'), { badge: t('pm.charCount', { n: 0 }) }, ta),
     grp(t('pm.negative'), { badge: t('pm.optionalBadge'), collapsed: true }, neg),
   );
   /* 把 grp 里的徽标换成可更新的计数节点 */
-  panePrompt.children[0].querySelector('.badge').replaceWith(count);
+  ta.closest('.grp').querySelector('.badge').replaceWith(count);
   const cloudNote = el('p', { class: 'muted', hidden: true, text: t('pm.cloudNote') });
   /* 整图重绘唯一的画质旋钮就是输出长边，所以放进提交区而不是设置里 */
   const EDGE_STEPS = [['pm.edgeFollow', 0], ['pm.edge1k', 1024], ['pm.edge15k', 1536], ['pm.edge2k', 2048], ['pm.edge3k', 3072], ['pm.edge4k', 3840]];
