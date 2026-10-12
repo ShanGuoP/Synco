@@ -5,7 +5,7 @@
 use crate::error::{AppError, Result};
 use crate::models::dto;
 use crate::repo::results as rres;
-use crate::service::{backend, comfy};
+use crate::service::comfy;
 use crate::state::Shared;
 use crate::util;
 use serde_json::Value;
@@ -27,7 +27,8 @@ pub(crate) fn judge_cloud(ctx: &Shared, id: i64) -> bool {
 pub async fn settle(ctx: &Shared, id: i64) -> Result<Option<Value>> {
     let Some(r) = rres::by_id(ctx, id)? else { return Ok(None) };
     let pid = r.project_id;
-    let outs = comfy::Outputs::from_settings(&r.settings());
+    let settings = r.settings();
+    let outs = comfy::Outputs::from_settings(&settings);
     if r.running() {
         match r.prompt_id {
             // 云端行没有 prompt_id：推进它的只有队列 worker，这里只看它在不在飞
@@ -35,7 +36,11 @@ pub async fn settle(ctx: &Shared, id: i64) -> Result<Option<Value>> {
                 judge_cloud(ctx, id);
             }
             Some(prompt_id) => {
-                let c = comfy::check_comfy(ctx, &prompt_id, &outs).await;
+                let base = match comfy::task_base(&settings) {
+                    Ok(base) => base,
+                    Err(e) => { ctx.mark_error_of(id, &e); return Ok(rres::value_by_id(ctx, id)?.map(|v| dto::result_json(ctx, &v))); }
+                };
+                let c = comfy::check_comfy(ctx, &base, &prompt_id, &outs).await;
                 // 只要答上了，之前的"连不上"计数就该清零（守卫必须在 await 之前释放干净）
                 if !matches!(c, comfy::Check::Unreachable(_)) {
                     ctx.misses.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
@@ -159,6 +164,7 @@ pub fn spawn_advancer(ctx: &Shared) {
         // 这一行第一次被推进器看见的时刻：只用它算总时限，重启后重新起算
         let mut seen: HashMap<i64, u128> = HashMap::new();
         loop {
+            let _ = crate::service::deletion::retry(&ctx).await;
             let rows = match rres::list_running(&ctx) {
                 Ok(v) => v,
                 Err(_) => {
@@ -211,27 +217,7 @@ pub async fn reclaim_running(ctx: &Shared) -> Result<usize> {
     if local.is_empty() {
         return Ok(n);
     }
-    if !backend::probe(ctx, &backend::active_url(ctx)).await.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        for (id, _) in &local {
-            ctx.mark_error(*id, "srv.reclaim.restartNoComfy", serde_json::json!({ "url": backend::active_url(ctx) }));
-        }
-        return Ok(n + local.len());
-    }
-    let live = comfy::live_prompts(ctx).await.ok();
-    for (id, pid) in &local {
-        if let Some(live) = &live {
-            if !live.contains(pid) {
-                // 只是判"这条还在不在"，输出节点号取谁都行；行没了就按内置那三个
-                let outs = rres::by_id(ctx, *id)?.map(|r| comfy::Outputs::from_settings(&r.settings())).unwrap_or_default();
-                let c = comfy::check_comfy(ctx, pid, &outs).await;
-                // 队列和 history 都查不到 = 这条任务随 ComfyUI 重启或被"清空历史"没了；连不上时不轻下结论
-                if matches!(c, comfy::Check::Lost) {
-                    ctx.mark_error(*id, "srv.reclaim.lostTask", serde_json::Value::Null);
-                    n += 1;
-                    continue;
-                }
-            }
-        }
+    for (id, _) in &local {
         let _ = settle(ctx, *id).await;
     }
     Ok(n)

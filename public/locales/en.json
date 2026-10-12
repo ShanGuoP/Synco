@@ -1464,6 +1464,10 @@
     "shell": {
       "absNeeded": "Enter an absolute path starting with a drive letter, e.g. D:\\Retouch",
       "absDirNeeded": "The target folder needs an absolute path",
+      "targetNotEmpty": "The copy destination must be empty; choose a new directory",
+      "libraryBusy": "The library is busy; retry copying later",
+      "copyInsideSource": "The copy destination must be outside the current library directory",
+      "copyLink": "The library contains a link and cannot be safely copied: {path}",
       "sameDir": "Source and target are the same folder",
       "targetHasLibrary": "That folder already holds a library, so nothing was written over it: pick an empty folder, or clear it yourself first",
       "mkdirFail": "Could not create the target folder: {msg}",

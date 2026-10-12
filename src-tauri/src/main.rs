@@ -64,16 +64,19 @@ struct Shell {
     restart_required: bool,
 }
 
+/// 用户选择是启动目标，不以 app.db 存在与否区分有效性。
+fn remembered_data(memory: &serde_json::Value) -> Result<Option<PathBuf>, String> {
+    memory.get("data_dir").and_then(|x| x.as_str())
+        .map(|s| abs_path(s).ok_or_else(|| only("srv.shell.absNeeded"))).transpose()
+}
+
 /// 记过的目录 > 环境变量 > 就近能找到的老库 > LOCALAPPDATA 默认
-fn resolve_data() -> (PathBuf, bool, &'static str) {
+fn resolve_data() -> Result<(PathBuf, bool, &'static str), String> {
     if let Some(p) = env::var_os("SYNCO_DATA") {
-        return (PathBuf::from(p), true, "shell.src.env");
+        return Ok((PathBuf::from(p), true, "shell.src.env"));
     }
-    if let Some(s) = read_memory().get("data_dir").and_then(|x| x.as_str()) {
-        let p = PathBuf::from(s);
-        if p.join("app.db").is_file() {
-            return (p, true, "shell.src.remembered");
-        }
+    if let Some(p) = remembered_data(&read_memory())? {
+        return Ok((p, true, "shell.src.remembered"));
     }
     // 就近探测：从 exe 一层层往上找 data/app.db，跑在 target/release 或项目里都能命中老库
     if let Some(exe) = env::current_exe().ok() {
@@ -81,7 +84,7 @@ fn resolve_data() -> (PathBuf, bool, &'static str) {
         while let Some(d) = up {
             let cand = d.join("data");
             if cand.join("app.db").is_file() {
-                return (cand, false, "shell.src.nearby");
+                return Ok((cand, false, "shell.src.nearby"));
             }
             up = d.parent().map(|p| p.to_path_buf());
         }
@@ -89,23 +92,23 @@ fn resolve_data() -> (PathBuf, bool, &'static str) {
     if let Ok(cwd) = env::current_dir() {
         let cand = cwd.join("data");
         if cand.join("app.db").is_file() {
-            return (cand, false, "shell.src.cwd");
+            return Ok((cand, false, "shell.src.cwd"));
         }
     }
     // 改名之前的安装：LOCALAPPDATA\PixFish\data 里有库就接着用，别让人以为资料没了
     let old = legacy_base().join("data");
     if old.join("app.db").is_file() {
-        return (old, false, "shell.src.legacy");
+        return Ok((old, false, "shell.src.legacy"));
     }
     // 绿色模式：哪儿的老库都没有，就把 data/ 开在 exe 边上——把整个文件夹拷到哪，资料就跟到哪。
     // 装到 Program Files 时这里建不出来（没写权限），自然落到下面的 LOCALAPPDATA 默认值。
     if let Some(dir) = env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
         let cand = dir.join("data");
         if fs::create_dir_all(&cand).is_ok() {
-            return (cand, false, "shell.src.portable");
+            return Ok((cand, false, "shell.src.portable"));
         }
     }
-    (app_base().join("data"), false, "shell.src.default")
+    Ok((app_base().join("data"), false, "shell.src.default"))
 }
 
 /// desktop.json 现在有两样东西（目录 + 底色），读的时候按原样拿回来，
@@ -162,6 +165,7 @@ fn dir_bytes(dir: &Path) -> u64 {
     let Ok(rd) = fs::read_dir(dir) else { return 0 };
     for e in rd.flatten() {
         let p = e.path();
+        if fs::symlink_metadata(&p).map(|m| directory_link(&m)).unwrap_or(true) { continue; }
         if p.is_dir() {
             n += dir_bytes(&p);
         } else if let Ok(m) = e.metadata() {
@@ -173,10 +177,42 @@ fn dir_bytes(dir: &Path) -> u64 {
 
 fn abs_path(s: &str) -> Option<PathBuf> {
     let t = s.trim().trim_matches('"');
-    // 与导出目录同一判据：必须以盘符开头的绝对路径，免得把相对路径记进配置
-    let drive_ok = t.as_bytes().first().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) && t.as_bytes().get(1) == Some(&b':');
-    if drive_ok { Some(PathBuf::from(t)) } else { None }
+    let p = PathBuf::from(t);
+    p.is_absolute().then_some(p)
+
 }
+
+/// 对尚不存在的目标也解析现有祖先，避免链接别名绕过目录身份判定。
+fn path_identity(path: &Path) -> Result<PathBuf, String> {
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(only("srv.shell.absNeeded"));
+    }
+    if fs::symlink_metadata(path).is_ok() { return fs::canonicalize(path).map_err(|e| why("srv.shell.dirReadFail", serde_json::json!({"path":path.display().to_string(),"msg":e.to_string()}))); }
+    let parent = path.parent().ok_or_else(|| only("srv.shell.absNeeded"))?;
+    let name = path.file_name().ok_or_else(|| only("srv.shell.absNeeded"))?;
+    Ok(path_identity(parent)?.join(name))
+}
+
+fn copy_destination(source: &Path, destination: &Path) -> Result<PathBuf, String> {
+    let source = path_identity(source)?;
+    let destination = path_identity(destination)?;
+    // Windows 目录身份不区分大小写；组件分隔符防止把相邻名称误认作后代。
+    let src = source.to_string_lossy().to_lowercase();
+    let dst = destination.to_string_lossy().to_lowercase();
+    if src == dst || dst.starts_with(&format!("{}{}", src.trim_end_matches(['/', '\\']), std::path::MAIN_SEPARATOR)) {
+        return Err(only("srv.shell.copyInsideSource"));
+    }
+    Ok(destination)
+}
+
+fn directory_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)] {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))] { metadata.file_type().is_symlink() }
+}
+
 
 impl Shell {
     fn info(&self, ctx: &synco_server::state::Shared) -> DirInfo {
@@ -205,7 +241,14 @@ fn data_dir_info(state: State<'_, Shell>, ctx: State<'_, synco_server::state::Sh
 #[tauri::command]
 fn set_data_dir(path: String, state: State<'_, Shell>, ctx: State<'_, synco_server::state::Shared>) -> Result<serde_json::Value, String> {
     let p = abs_path(&path).ok_or_else(|| only("srv.shell.absNeeded"))?;
-    let same = p == state.data;
+    fs::create_dir_all(&p).map_err(|e| why("srv.shell.mkdirFail", serde_json::json!({"msg":e.to_string()})))?;
+    let p = path_identity(&p)?;
+    let probe = p.join(format!(".synco-write-{}-{}", std::process::id(), synco_server::util::now_ms()));
+    let file = fs::OpenOptions::new().write(true).create_new(true).open(&probe)
+        .map_err(|e| why("srv.shell.writeFail", serde_json::json!({"path":p.display().to_string(),"msg":e.to_string()})))?;
+    drop(file);
+    fs::remove_file(probe).map_err(|e| e.to_string())?;
+    let same = p == path_identity(&state.data)?;
     remember_data(&p)?;
     let next = Shell {
         data: p,
@@ -222,19 +265,40 @@ fn set_data_dir(path: String, state: State<'_, Shell>, ctx: State<'_, synco_serv
 #[tauri::command]
 fn copy_data_to(to: String, state: State<'_, Shell>, ctx: State<'_, synco_server::state::Shared>) -> Result<serde_json::Value, String> {
     let dst = abs_path(&to).ok_or_else(|| only("srv.shell.absDirNeeded"))?;
-    if dst == state.data {
-        return Err(only("srv.shell.sameDir"));
-    }
+    let dst = copy_destination(&state.data, &dst)?;
     if dst.join("app.db").is_file() {
         return Err(only("srv.shell.targetHasLibrary"));
     }
-    // 复制前把 WAL 合回主文件，否则拷过去的是半个库 + 一份没人认领的 -wal
-    synco_server::repo::db::checkpoint_truncate(ctx.inner());
-    fs::create_dir_all(&dst).map_err(|e| why("srv.shell.mkdirFail", serde_json::json!({ "msg": e.to_string() })))?;
-    let (files, bytes) = copy_tree(&state.data, &dst)?;
+    if dst.exists() && fs::read_dir(&dst).map_err(|e| e.to_string())?.next().is_some() {
+        return Err(only("srv.shell.targetNotEmpty"));
+    }
+    synco_server::repo::db::checkpoint_truncate(ctx.inner()).map_err(|e| e.text())?;
+    let (files, bytes) = copy_to_new_directory(&state.data, &dst)?;
     remember_data(&dst)?;
     let next = Shell { data: dst, remembered: true, source: "shell.src.copied", restart_required: true };
     Ok(serde_json::json!({ "dir": next.info(ctx.inner()), "copied": { "files": files, "bytes": bytes } }))
+}
+
+/// 只在自己新建的暂存目录写入，成功后整体发布，失败不污染用户目标。
+fn copy_to_new_directory(source: &Path, destination: &Path) -> Result<(usize, u64), String> {
+    let destination = copy_destination(source, destination)?;
+    if destination.exists() && fs::read_dir(&destination).map_err(|e| e.to_string())?.next().is_some() {
+        return Err(only("srv.shell.targetNotEmpty"));
+    }
+    let parent = destination.parent().ok_or_else(|| only("srv.shell.absDirNeeded"))?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let stage = parent.join(format!(".synco-copy-{}-{}", synco_server::util::now_ms(), synco_server::util::r4()));
+    // 暂存根同样确认位于源目录之外，且只清理本次成功创建的这个目录。
+    let stage = copy_destination(source, &stage)?;
+    fs::create_dir(&stage).map_err(|e| e.to_string())?;
+    let copied = (|| {
+        let counts = copy_tree(source, &stage)?;
+        if destination.exists() { fs::remove_dir(&destination).map_err(|e| e.to_string())?; }
+        fs::rename(&stage, &destination).map_err(|e| e.to_string())?;
+        Ok(counts)
+    })();
+    if copied.is_err() { let _ = fs::remove_dir_all(&stage); }
+    copied
 }
 
 /// 逐条复制：跳过 runtime/（锁、日志与可再生档那一层）这类进程私有的东西，任何一步失败把错误原文带出去。
@@ -248,6 +312,9 @@ fn copy_tree(from: &Path, to: &Path) -> std::result::Result<(usize, u64), String
             continue;
         }
         let src = e.path();
+        if directory_link(&fs::symlink_metadata(&src).map_err(|e| e.to_string())?) {
+            return Err(why("srv.shell.copyLink", serde_json::json!({"path":src.display().to_string()})));
+        }
         let dst = to.join(name);
         if src.is_dir() {
             fs::create_dir_all(&dst).map_err(|er| why("srv.shell.mkdirAt", serde_json::json!({ "path": dst.display().to_string(), "msg": er.to_string() })))?;
@@ -352,7 +419,7 @@ fn startup_fail(e: synco_server::error::AppError) -> String {
 fn main() {
     // 让 /api/version 说清这次是桌面版：「关于」分区和第一次的选址提示都看这个
     synco_server::DESKTOP.store(true, std::sync::atomic::Ordering::Relaxed);
-    let (data, remembered, source) = resolve_data();
+    let (data, remembered, source) = resolve_data().expect("data directory preference is invalid");
     let public = synco_server::public_dir();
     // 就近老库 / 绿色模式 / 默认位置这三条都是"我们替他选的"，选过一次就记下来——
     // 否则每次启动都算"没记过"，选址页会一遍遍地摊开（绿色模式那次尤其明显）。
@@ -458,5 +525,49 @@ mod url_guard_tests {
         }
         let long = format!("https://x.example/{}", "a".repeat(600));
         assert!(url_gate(&long).is_some(), "超长的那条没挡");
+    }
+}
+
+#[cfg(test)]
+mod data_path_tests {
+    use super::*;
+    #[test]
+    fn copy_rejects_source_descendant_and_alias_before_creating_target() {
+        let root = env::temp_dir().join(format!("synco-copy-test-{}", std::process::id()));
+        fs::create_dir_all(root.join("source")).unwrap();
+        let source = root.join("source");
+        assert!(copy_destination(&source, &source).is_err());
+        assert!(copy_destination(&source, &source.join("backup/nested")).is_err());
+        assert!(!source.join("backup").exists());
+        assert!(copy_destination(&source, &root.join("source-neighbor")).is_ok());
+        #[cfg(windows)] {
+            let alias = root.join("alias");
+            let output = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&alias).arg(&source).output().unwrap();
+            assert!(output.status.success(), "junction fixture failed");
+            assert!(copy_destination(&source, &alias.join("backup")).is_err());
+            assert!(directory_link(&fs::symlink_metadata(&alias).unwrap()));
+            // 链接只撤入口；清理范围始终属于本次临时根。
+            fs::remove_dir(&alias).unwrap();
+        }
+        fs::write(source.join("sample.txt"), "test").unwrap();
+        let dest = root.join("copied");
+        assert_eq!(copy_to_new_directory(&source, &dest).unwrap().0, 1);
+        assert_eq!(fs::read_to_string(dest.join("sample.txt")).unwrap(), "test");
+        assert!(copy_to_new_directory(&source, &dest).is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn drive_relative_selection_is_rejected_but_empty_absolute_directory_is_valid() {
+        #[cfg(windows)] {
+            assert!(abs_path("D:relative").is_none());
+            assert!(abs_path("D:/new-empty-library").is_some());
+            assert!(abs_path("D:/new-empty-library").unwrap().join("app.db").is_absolute());
+        }
+        let empty = env::temp_dir().join(format!("synco-picked-empty-{}", std::process::id()));
+        let selected = remembered_data(&serde_json::json!({"data_dir": empty})).unwrap().unwrap();
+        assert_eq!(selected, empty);
+        assert!(!selected.join("app.db").exists());
+        assert!(remembered_data(&serde_json::json!({"data_dir":"D:relative"})).is_err());
+        assert!(abs_path("relative/library").is_none());
     }
 }

@@ -306,8 +306,10 @@ pub fn library_counts(ctx: &crate::state::Ctx) -> (i64, i64) {
 }
 
 /// 把 WAL 合回主文件。复制资料目录前必须走一次，否则拷过去的是半个库 + 一份没人认领的 `-wal`。
-pub fn checkpoint_truncate(ctx: &crate::state::Ctx) {
-    let _ = ctx.db().execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
+pub fn checkpoint_truncate(ctx: &crate::state::Ctx) -> crate::error::Result<()> {
+    let busy: i64 = ctx.db().query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+    if busy != 0 { return Err(crate::error::AppError::fail("srv.shell.libraryBusy")); }
+    Ok(())
 }
 
 #[cfg(test)]

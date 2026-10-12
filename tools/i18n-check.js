@@ -139,7 +139,7 @@ const rsRows = [];
 for (const f of rsFiles) {
   if (isConsoleOnly(rel(f))) continue;
   const src = fs.readFileSync(f, 'utf8');
-  const cut = src.indexOf('#[cfg(test)]');
+  const cut = src.search(/#!?\[cfg\(test\)\]/);
   const before = new Set((cut < 0 ? src : src.slice(0, cut)).split(/\r?\n/).map((_, i) => i + 1));
   const hits = codeLines(f).filter(x => before.has(x.n) && uiCopy(x.line, x.raw) && /"[^"\n]*[\u4e00-\u9fff]/.test(x.line));
   if (hits.length) rsRows.push({ file: rel(f), n: hits.length, first: hits[0].n });

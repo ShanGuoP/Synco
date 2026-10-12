@@ -1,5 +1,13 @@
 //! 提交规格存于内部表；照片原件为不可变文件，蒙版和调整参数则必须复制。
-use super::*;
+use crate::error::{AppError, Result};
+use crate::models::entity::Image;
+use crate::repo::results as rres;
+use crate::service::cloud;
+use crate::state::Shared;
+use crate::util;
+use serde_json::Value;
+use stitch_core::StitchParams;
+use super::crop::{prepared_from_snapshot, stitch_snapshot, Prepared};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]

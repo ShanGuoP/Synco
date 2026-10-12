@@ -62,8 +62,8 @@ pub fn insert_local(
     settings_json: &str,
     rerun_of: Option<i64>,
 ) -> Result<i64> {
-    repo::insert_id(
-        ctx,
+    insert_for_image(
+        ctx, image_id, project_id,
         "INSERT INTO results(image_id,project_id,status,prompt_id,prompt,steps,cfg,seed,orig_path,settings_json,rerun_of)
          VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         &[
@@ -91,8 +91,8 @@ pub fn insert_cloud(
     model: &str,
     rerun_of: Option<i64>,
 ) -> Result<i64> {
-    repo::insert_id(
-        ctx,
+    insert_for_image(
+        ctx, image_id, project_id,
         "INSERT INTO results(image_id,project_id,status,prompt,steps,cfg,settings_json,backend,model,rerun_of)
          VALUES(?,?,?,?,?,?,?,?,?,?)",
         &[
@@ -108,6 +108,23 @@ pub fn insert_cloud(
             repo::sopt(rerun_of),
         ],
     )
+}
+
+/// 身份检查与结果登记必须共享事务，防止上传等待期间已删的图片被迟到登记复活。
+fn check_image(db: &rusqlite::Connection, image_id: i64, project_id: i64) -> Result<()> {
+    let alive: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM images WHERE id=? AND project_id=?)", (image_id, project_id), |r| r.get(0))?;
+    if !alive { return Err(crate::error::AppError::bad("srv.common.noImage")); }
+    Ok(())
+}
+
+fn insert_for_image(ctx: &Ctx, image_id: i64, project_id: i64, sql: &str, args: &[repo::SqlValue]) -> Result<i64> {
+    let mut db = ctx.db();
+    let tx = db.transaction()?;
+    check_image(&tx, image_id, project_id)?;
+    tx.execute(sql, rusqlite::params_from_iter(args.iter()))?;
+    let id = tx.last_insert_rowid();
+    tx.commit()?;
+    Ok(id)
 }
 
 /// 成图 + 这一行映射了的辅助输出一起落盘才算 done；断在半路的文件由调用方清掉。
@@ -140,6 +157,7 @@ pub fn complete(ctx: &Ctx, id: i64, final_rel: &str, thumb_rel: Option<&str>, ra
 pub fn insert_cloud_job(ctx: &Ctx, image_id: i64, project_id: i64, prompt: &str, settings: &str, model: &str, rerun: Option<i64>, spec: &str, mask: &[u8]) -> Result<i64> {
     let mut conn = ctx.db();
     let tx = conn.transaction()?;
+    check_image(&tx, image_id, project_id)?;
     tx.execute("INSERT INTO results(image_id,project_id,status,prompt,steps,cfg,settings_json,backend,model,rerun_of) VALUES(?,?,'queued',?,0,0,?,'cloud',?,?)",
         (image_id, project_id, prompt, settings, model, rerun))?;
     let id = tx.last_insert_rowid();
@@ -261,12 +279,21 @@ const FILE_COLS: [&str; 7] = ["final_path", "crop_path", "maskoverlay_path", "th
 /// 而这样最多多留几个没人认领的文件，盘上多一张照片不会骗人。
 /// 窗口原图与遮罩快照也在内：它们是无损重算的原料，但跟着这一行一起消失才对。
 fn rows_paths(ctx: &Ctx, where_sql: &str, args: &[repo::SqlValue]) -> Result<Vec<String>> {
+    rows_paths_on(&ctx.db(), where_sql, args)
+}
+
+pub(super) fn rows_paths_on(db: &rusqlite::Connection, where_sql: &str, args: &[repo::SqlValue]) -> Result<Vec<String>> {
     let select = FILE_COLS.join(", ");
     let mut out: Vec<String> = Vec::new();
-    for r in repo::all(ctx, &format!("SELECT {select} FROM results WHERE {where_sql}"), args)? {
+    for r in repo::all_on(db, &format!("SELECT {select}, orig_path, settings_json FROM results WHERE {where_sql}"), args)? {
         for k in FILE_COLS {
             if let Some(rel) = r.get(k).and_then(|v| v.as_str()).filter(|x| !x.is_empty()) {
                 out.push(rel.to_string());
+            }
+        }
+        if let Some(s) = r.get("settings_json").and_then(Value::as_str).and_then(|s| serde_json::from_str::<Value>(s).ok()) {
+            if let Some(refs) = s.get("refs").and_then(Value::as_array) {
+                out.extend(refs.iter().filter_map(Value::as_str).map(str::to_string));
             }
         }
     }
@@ -295,6 +322,7 @@ pub fn registered_paths(ctx: &Ctx) -> Result<Vec<String>> {
         for k in ["orig_path", "mask_path", "thumb_path", "proxy_path"] {
             if let Some(s) = row.get(k).and_then(Value::as_str) { paths.push(s.to_string()); }
         }
+
     }
     for row in repo::all(ctx, "SELECT settings_json FROM results", &[])? {
         if let Some(s) = row.get("settings_json").and_then(Value::as_str).and_then(|s| serde_json::from_str::<Value>(s).ok()) {
@@ -368,6 +396,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("synco-complete-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ctx = crate::state::Ctx::new(dir.clone(), dir.clone(), crate::repo::db::open(&dir).unwrap());
+        crate::repo::images::insert(&ctx, 1, "a", "projects/1/a.png", 1, 1).unwrap();
         let id = insert_cloud(&ctx, 1, 1, "p", "{}", "m", None).unwrap();
         ctx.db().execute_batch("CREATE TRIGGER reject_raw BEFORE UPDATE OF raw_path ON results BEGIN SELECT RAISE(ABORT,'reject raw'); END;").unwrap();
         assert!(complete(&ctx, id, "final.jpg", Some("thumb.jpg"), "raw.png", Some("mask.png"), "{}").is_err());
@@ -389,6 +418,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("synco-spec-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ctx = crate::state::Ctx::new(dir.clone(), dir.clone(), crate::repo::db::open(&dir).unwrap());
+        crate::repo::images::insert(&ctx, 1, "a", "projects/1/a.png", 1, 1).unwrap();
         ctx.db().execute_batch("CREATE TRIGGER reject_spec BEFORE INSERT ON job_specs BEGIN SELECT RAISE(ABORT,'reject spec'); END;").unwrap();
         assert!(insert_cloud_job(&ctx, 1, 1, "p", "{}", "m", None, "{}", &[1, 2]).is_err());
         assert!(list_queued(&ctx).unwrap().is_empty());
@@ -402,6 +432,21 @@ mod tests {
         mark_running(&ctx, id).unwrap();
         complete(&ctx, id, "final.jpg", None, "raw.png", None, "{}").unwrap();
         assert!(job_spec(&ctx, id).unwrap().is_none(), "终态不再保留执行凭据与输入副本");
+        drop(ctx);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deleted_image_cannot_be_revived_by_late_local_or_cloud_registration() {
+        let dir = std::env::temp_dir().join(format!("synco-late-register-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::state::Ctx::new(dir.clone(), dir.clone(), crate::repo::db::open(&dir).unwrap());
+        let iid = crate::repo::images::insert(&ctx, 1, "a", "projects/1/a.png", 1, 1).unwrap();
+        crate::repo::deletion::delete_image(&ctx, iid).unwrap();
+        assert!(insert_local(&ctx, iid, 1, "late", "p", 20.0, 4.0, 1, "projects/1/a.png", "{}", None).is_err());
+        assert!(insert_cloud_job(&ctx, iid, 1, "p", "{}", "m", None, "{}", &[]).is_err());
+        assert!(insert_cloud(&ctx, iid, 1, "p", "{}", "m", None).is_err());
+        assert_eq!(ctx.db().query_row("SELECT count(*) FROM results", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
         drop(ctx);
         std::fs::remove_dir_all(dir).unwrap();
     }

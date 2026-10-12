@@ -2,6 +2,7 @@
 // 只跟 mask canvas 打交道；视口缩放/平移由 viewport.js 负责
 // 光标定位走 transform + 帧同步、PNG 编码走 Worker：主线程在 ComfyUI 抢 GPU 时也不掉帧
 'use strict';
+import { t } from '../../core/i18n.js';
 import { encodeMask } from '../../core/maskEncode.js';
 
 const UNDO_MAX = 8;
@@ -235,6 +236,12 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
     return run;
   }
 
+  async function flush() {
+    do { if (await save() === false) throw new Error(t('ed.maskSaveFail')); }
+    while (dirtyAt !== savedAt);
+    return true;
+  }
+
   return {
     get tool() { return tool; },
     get brush() { return brush; },
@@ -253,7 +260,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
       /* 先把上一张还没存出去的笔迹落盘再动这块画布：直接 resize 会把没保存的墨抹掉，
          而防抖到点那次 save 见没有新笔迹直接 return，用户视角就是"涂完切图，回来遮罩空了" */
       clearTimeout(saveTimer);
-      if (dirtyAt !== savedAt || inflight) { try { await save(); } catch { /* 存不上也别挡住换图，钩子里已经报过 */ } }
+      if (dirtyAt !== savedAt || inflight) await flush();
       if (seq !== loadSeq || !current()) return false;   // 保存期间可能换图或关闭视图
       iw = w; ih = h;
       owner = id || 0;
@@ -311,7 +318,7 @@ export function createPainter({ mask, cursor, viewport, onSaved, onDirty, ink = 
 
     /** 视口缩放/平移后调用：光标尺寸与定位缓存全部失效，下次 move 重新量 */
     invalidate() { rect = null; hostRect = null; cursorSize = 0; },
-    flush: save,
+    flush,
     detach() {
       clearTimeout(saveTimer);
       if (rafId) cancelAnimationFrame(rafId);

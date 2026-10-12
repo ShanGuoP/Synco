@@ -13,5 +13,8 @@ pub mod refs;
 pub mod reclaim;
 pub mod releases;
 pub mod setup;
+pub mod deletion;
 pub mod workflow;
 pub mod workflow_graph;
+
+pub mod localgen;

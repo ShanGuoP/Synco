@@ -129,7 +129,7 @@ for (const rule of RULES) {
     let rows = codeLines(f);
     // 后端账本只看测试模块之前：测试里的中文是断言与中文函数名，不是界面文案
     if (rule.testCut) {
-      const cut = rows.findIndex(x => /^\s*#\[cfg\(test\)\]/.test(x.raw));
+      const cut = rows.findIndex(x => /^\s*#!?\[cfg\(test\)\]/.test(x.raw));
       if (cut >= 0) rows = rows.slice(0, cut);
     }
     for (const { n, raw, line: stripped } of rows) {

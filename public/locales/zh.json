@@ -1464,6 +1464,10 @@
     "shell": {
       "absNeeded": "要填以盘符开头的绝对路径，例如 D:\\修图资料",
       "absDirNeeded": "目标目录要填绝对路径",
+      "targetNotEmpty": "复制目标必须是空目录，请选择新的目录",
+      "libraryBusy": "资料库正在使用，稍后重试复制",
+      "copyInsideSource": "复制目标不能是当前资料目录或其内部目录",
+      "copyLink": "资料目录含链接，无法安全复制：{path}",
       "sameDir": "来源与目标是同一个目录",
       "targetHasLibrary": "那边已经有一个库了，不敢往里盖：换一个空目录，或自己先清干净",
       "mkdirFail": "建目标目录失败：{msg}",

@@ -11,16 +11,9 @@ use serde_json::{json, Map, Value};
 
 /// 一批 base64 的体积按 80MB 收：前端按 8 张一批上传，正常永远碰不到
 pub const BODY_LIMIT: usize = 80 * 1024 * 1024;
-/// 种子取 int32 正区间：面板滑杆与直输框夹在同一上限，回填历史参数才不会被截断成别的种子
-pub const SEED_MAX: i64 = 2_147_483_647;
-
-/// 提交时实际下发的种子：面板（或回填）的种子 + 这张图的序号，两端都先夹进 int32 正区间。
-///
-/// 夹在最前面而不是加完再取模：库里躺着的旧种子可能是 2^48 那种当年放开的随机值，
-/// 不夹就直接加会在 debug 构建溢出 panic、release 静默绕回，最后得到一个"合法但复现不了当时那张"的种子。
-pub(crate) fn seed_for(raw: i64, img_id: i64) -> i64 {
-    (raw.rem_euclid(SEED_MAX) + img_id.rem_euclid(SEED_MAX)).rem_euclid(SEED_MAX)
-}
+pub use crate::service::comfy::SEED_MAX;
+#[cfg(test)]
+use crate::service::comfy::seed_for;
 
 #[cfg(test)]
 mod seed_tests {

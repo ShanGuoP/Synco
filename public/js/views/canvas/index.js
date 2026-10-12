@@ -248,6 +248,11 @@ export async function openCanvas(projectId, imgId) {
   await load(+imgId);
 }
 
+export async function beforeLeaveCanvas() {
+  if (!isCanvasOpen()) return;
+  await c.painter.flush();
+}
+
 export function closeCanvas() {
   session.end();
   ++seq;
@@ -266,6 +271,9 @@ async function load(imgId) {
   if (!session.current()) return;
   const mine = ++seq;
   const stale = () => mine !== seq || !session.current();
+  try { await c.painter.flush(); }
+  catch (e) { if (!stale()) toastErr(t('cv.notFlushed'), e.message); return; }
+  if (stale()) return;
   const busy = toastBusy(t('cv.openBusy'));
   let d;
   try { d = await api.canvas(imgId); } catch (e) { busy.close(); if (!stale()) { toastErr(t('cv.openFail'), e.message); goBack(); } return; }

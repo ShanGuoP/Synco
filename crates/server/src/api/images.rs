@@ -5,7 +5,7 @@ use crate::error::{AppError, Result};
 use crate::models::dto;
 use crate::repo::{images as rimg, results as rres};
 use crate::state::Shared;
-use crate::{service::adjust, service::imagesvc, service::refs, util};
+use crate::{service::imagesvc, util};
 use axum::body::Bytes;
 use axum::extract::{Path as APath, State};
 use axum::response::Response;
@@ -68,40 +68,7 @@ pub async fn derived_get(State(ctx): State<Shared>, APath(id): APath<String>) ->
 
 pub async fn image_delete(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
-    if let Some(i) = rimg::by_id(&ctx, iid)? {
-        /* 先把要删的文件名收齐（行一删就没人知道盘上躺着什么了），删完行再动磁盘。
-           顺序反过来一旦断在中途，库里就挂着指向空气的记录：卡片在、点开是空的；
-           而现在这种顺序最多多留几个没人认领的文件，盘上多一张照片不会骗人。 */
-        let mut rels: Vec<String> = Vec::new();
-        if !i.orig_path.is_empty() {
-            rels.push(i.orig_path.clone());
-        }
-        if let Some(m) = i.mask_path.clone().filter(|s| !s.is_empty()) {
-            rels.push(m);
-        }
-        rels.extend(rres::paths_for_image(&ctx, iid)?);
-        rres::delete_for_image(&ctx, iid)?;
-        rimg::delete(&ctx, iid)?;
-        // 本地调整的三张附属表只存 image_id，行没了就再没人知道这些参数是谁的
-        crate::repo::adjust::clear(&ctx, iid)?;
-        // 子图不跟着删（它们是用户另存出去的独立成品），但来源引用要清掉，
-        // 否则「派生查看」的计数会指向一个已经不存在的 id
-        rimg::clear_derived_refs(&ctx, iid)?;
-        imagesvc::purge(&ctx, &i);
-        // 缓存层那三张按 image_id 归位，整目录请走；提交记录 `<名>_adjinput…` 在 projects/ 里，
-        // 库里只有指向它的结果行、没有文件清单，所以由 purge_all 按 stem 前缀扫一遍
-        adjust::purge_all(&ctx, &i);
-        // 画布的参考图槽位是存在设置里的一串 rel：行没了要连着清，不然键与文件都留在库里当孤儿
-        if i.is_sketch() {
-            refs::clear(&ctx, i.project_id, iid)?;
-        }
-        // 走 data_file：库里躺着绝对路径或 `..`（改过的库）时不该跟着它删到 data/ 外
-        for rel in &rels {
-            if let Some(p) = util::data_file(&ctx.data, rel) {
-                let _ = std::fs::remove_file(p);
-            }
-        }
-    }
+    crate::service::deletion::delete_image(&ctx, iid).await?;
     Ok(ok(serde_json::json!({ "ok": true })))
 }
 

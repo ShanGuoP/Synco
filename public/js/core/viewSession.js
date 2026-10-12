@@ -12,6 +12,7 @@ export function createViewSession() {
       controller.current = current;
       return { current, signal: controller.signal };
     },
+    capture() { const controller = active; return () => active === controller && !!controller?.current(); },
     end() { active?.abort(); active = null; },
     current() { return active?.current() || false; },
   };

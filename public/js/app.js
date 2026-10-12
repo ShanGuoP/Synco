@@ -7,8 +7,8 @@ import { store, setHome, loadProjects, loadPhrases } from './state.js';
 import { initShell, setActiveNav, setCrumb, renderRecent, refreshStats, setWorkflowChip } from './shell.js';
 import { renderHome, repaintHome } from './views/home.js';
 import { renderProject, watchJobs } from './views/project.js';
-import { openEditor, closeEditor } from './views/editor/index.js';
-import { openCanvas, closeCanvas } from './views/canvas/index.js';
+import { openEditor, closeEditor, beforeLeaveEditor } from './views/editor/index.js';
+import { openCanvas, closeCanvas, beforeLeaveCanvas } from './views/canvas/index.js';
 import { helpModal, shortcutsModal, flowModal } from './ui/dialogs.js';
 import { settingsModal } from './ui/settings.js';
 import { toastErr } from './ui/toast.js';
@@ -45,6 +45,10 @@ const show = which => {
 
 /* ---------- 路由 ---------- */
 const router = createRouter()
+  .beforeLeave(async () => {
+    try { await beforeLeaveEditor(); await beforeLeaveCanvas(); return true; }
+    catch (e) { toastErr(t('ed.saveFail'), e.message); return false; }
+  })
   .on('/', async () => {
     closeEditor();
     closeCanvas();

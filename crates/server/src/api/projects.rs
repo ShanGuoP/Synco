@@ -3,10 +3,8 @@
 use super::common::{bad, bad_args, batch_limit, body_of, err, ok, path_id, save_batch};
 use crate::error::Result;
 use crate::models::dto;
-use crate::repo;
-use crate::repo::{images as rimg, projects as rproj, results as rres};
+use crate::repo::{images as rimg, projects as rproj};
 use crate::state::Shared;
-use crate::service::refs;
 use crate::util;
 use axum::body::Bytes;
 use axum::extract::{Path as APath, State};
@@ -86,41 +84,7 @@ pub async fn project_get(State(ctx): State<Shared>, APath(id): APath<String>) ->
 
 pub async fn project_delete(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let pid = path_id(&id)?;
-    // 先把这一项目名下的文件名收齐（行一删就查不到盘上有谁了），删完行再动磁盘
-    let mut ids: Vec<i64> = Vec::new();
-    let mut rels: Vec<String> = Vec::new();
-    for i in rimg::list_for_project(&ctx, pid)? {
-        ids.push(i.id);
-        if !i.orig_path.is_empty() {
-            rels.push(i.orig_path.clone());
-        }
-        if let Some(m) = i.mask_path.clone().filter(|s| !s.is_empty()) {
-            rels.push(m);
-        }
-    }
-    rels.extend(rres::paths_for_project(&ctx, pid)?);
-    // 三张调整附属表靠子查询找归属，必须赶在 images 行没之前清
-    repo::adjust::clear_project(&ctx, pid)?;
-    rimg::delete_for_project(&ctx, pid)?;
-    rres::delete_for_project(&ctx, pid)?;
-    rproj::delete(&ctx, pid)?;
-    // 画布的参考图槽位是存在设置里的：项目没了，那些键与文件也要跟着没，不然只涨不落
-    for iid in ids {
-        refs::clear(&ctx, pid, iid)?;
-    }
-    // 中途断掉留下的是没人认领的文件，而不是指向空气的记录——后者会在界面上长成碎图。
-    // 一个项目的目录里能躺着几百张原片，递归删是秒级磁盘活，别按在 handler 的 worker 上
-    let data = ctx.data.clone();
-    let dir = data.join("projects").join(pid.to_string());
-    let _ = util::blocking(move || -> Result<()> {
-        for rel in &rels {
-            if let Some(p) = util::data_file(&data, rel) {
-                let _ = std::fs::remove_file(p);
-            }
-        }
-        Ok(std::fs::remove_dir_all(dir)?)
-    })
-    .await;
+    crate::service::deletion::delete_project(&ctx, pid).await?;
     Ok(ok(serde_json::json!({ "ok": true })))
 }
 

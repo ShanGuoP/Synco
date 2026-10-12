@@ -84,7 +84,7 @@ export const api = {
   /** 调整视图的真像素档：成图（原分辨率）切的一套瓦片。参数为空时服务端直接回源图那一套 */
   adjustTiles:  id => request(`/api/images/${id}/adjust/tiles`),
 
-  run:      (imageIds, settings, rerunOf) => request('/api/run', { method: 'POST', body: { image_ids: imageIds, settings, rerun_of: rerunOf || null } }),
+  run:      (imageIds, settings, rerunOf, comfyUrl) => request('/api/run', { method: 'POST', body: { image_ids: imageIds, settings, rerun_of: rerunOf || null, comfy_url: comfyUrl } }),
   result:   id => request(`/api/results/${id}`),
   /** 结果集合：{project_id} 或 {image_id}，项目页的派生查看用（不带判僵尸之类的副作用） */
   results:  q => request('/api/results?' + new URLSearchParams(q)),
@@ -126,7 +126,7 @@ export const api = {
   /** 一次请求：裁切、调云端、缝合、落盘全在服务端做完，进度看这条 results 行 */
   cloudEdit:   p => request('/api/cloud/edit', { method: 'POST', body: p }),
   /** 批量：建 N 行 queued，服务端按 concurrency 排着跑，关了页面也继续 */
-  cloudQueue:  (imageIds, settings, rerunOf) => request('/api/cloud/queue', { method: 'POST', body: { image_ids: imageIds, settings, rerun_of: rerunOf || null } }),
+  cloudQueue:  (imageIds, settings, rerunOf) => request('/api/cloud/queue', { method: 'POST', body: { image_ids: imageIds, settings, rerun_of: rerunOf || null, comfy_url: comfyUrl } }),
   queueState:  () => request('/api/cloud/queue'),
 
   setProxyEdge: edge => request('/api/settings/proxy-edge', { method: 'POST', body: { proxy_edge: edge } }),

@@ -31,6 +31,8 @@ const compile = pattern => {
 
 export function createRouter() {
   const routes = [];
+  const leave = [];
+  let attempt = 0;
   let notFound = null;
   let current = null;
   let first = true;     // 首屏那一次不演：应用刚打开就整页淡一遍是多余
@@ -59,6 +61,15 @@ export function createRouter() {
      canTransition() 是第三道闸：API 不在 / 减弱动效 / 画布覆盖层正挂在屏幕上，任一成立就瞬切。 */
   async function resolve(animate) {
     const path = parse();
+    const pending = ++attempt;
+    for (const guard of leave) {
+      const allowed = await guard();
+      if (pending !== attempt) return;
+      if (allowed === false) {
+        if (current) history.replaceState(null, '', '#' + current.path);
+        return;
+      }
+    }
     const generation = ++gen;
     if (!animate || first || NO_TRANSITION.test(path) || !canTransition()) {
       first = false;
@@ -76,6 +87,7 @@ export function createRouter() {
   window.addEventListener('hashchange', () => resolve(true));
 
   return {
+    beforeLeave(fn) { leave.push(fn); return this; },
     on(pattern, handler) { routes.push({ ...compile(pattern), handler }); return this; },
     fallback(fn) { notFound = fn; return this; },
     start() { return resolve(false); },

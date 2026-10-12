@@ -5,6 +5,15 @@ import { dx, t } from './core/i18n.js';
 import { store, setJob, touchImage, saveSettings } from './state.js';
 import { toast, toastErr, toastOk, toastBusy } from './ui/toast.js';
 
+// 图片受理占位由所有生成入口共用，令牌只释放自己认领的那批。
+const submissions = new Map();
+export function claimSubmission(ids) {
+  if (ids.some(id => submissions.has(id) || store.peek('jobs')?.[id]?.state === 'run')) return null;
+  const token = { ids, release() { for (const id of ids) if (submissions.get(id) === token) submissions.delete(id); } };
+  for (const id of ids) submissions.set(id, token);
+  return token;
+}
+
 /** resultId -> { imgId, t0, onDone } */
 const pending = new Map();
 const listeners = new Set();
@@ -102,42 +111,48 @@ function startPolling() {
  */
 export async function submit(ids, settings, opt = {}) {
   if (!ids.length) return { ok: 0, skipped: [] };
-  await saveSettings();
-  const done = [];
-  for (const id of ids) setJob(id, { state: 'run', error: null, resultId: null });
-
-  let r;
+  const comfyUrl = opt.comfyUrl || store.peek('comfy');
+  const frozenSettings = structuredClone(settings);
+  const claim = opt.claim || claimSubmission(ids);
+  if (!claim || ids.some(id => submissions.get(id) !== claim)) return { ok: 0, skipped: [] };
   try {
-    r = await api.run(ids, settings, opt.rerunOf);
-  } catch (e) {
-    for (const id of ids) setJob(id, { state: 'err', error: e.message });
-    toastErr(t('gen.submitFail'), e instanceof ApiError ? e.message : String(e));
-    return { ok: 0, skipped: [], error: e.message };
-  }
+    await saveSettings();
+    const done = [];
+    for (const id of ids) setJob(id, { state: 'run', error: null, resultId: null });
 
-  /* 后端在 ComfyUI 拒收时返回 200 + {error} */
-  if (r?.error) {
-    for (const id of ids) setJob(id, { state: 'err', error: dx(r.error, r.error_args) });
-    toastErr(t('gen.rejectTitle'), dx(r.error, r.error_args).slice(0, 160));
-    return { ok: 0, skipped: [], error: dx(r.error, r.error_args) };
-  }
-
-  let ok = 0;
-  const skipped = [];
-  for (const one of (r.results || [])) {
-    if (one.skipped) {
-      skipped.push(one);
-      setJob(one.image_id, { state: 'skip', error: dx(one.reason, one.reason_args) });
-      continue;
+    let r;
+    try {
+      r = await api.run(ids, frozenSettings, opt.rerunOf, comfyUrl);
+    } catch (e) {
+      for (const id of ids) setJob(id, { state: 'err', error: e.message });
+      toastErr(t('gen.submitFail'), e instanceof ApiError ? e.message : String(e));
+      return { ok: 0, skipped: [], error: e.message };
     }
-    ok++;
-    pending.set(one.result_id, { imgId: one.image_id, t0: Date.now(), fails: 0, onTick: opt.onTick, onDone: opt.onDone });
-    setJob(one.image_id, { state: 'run', error: null, resultId: one.result_id });   // 记下 id，界面上才有"中断这一张"的对象
-    done.push(one);
-  }
-  if (ok && !opt.quiet) toastBusy(t('gen.submittedTitle', { n: ok }), t('gen.submittedBody'));
-  startPolling();
-  return { ok, skipped, results: done, error: ok ? undefined : (dx(skipped[0]?.reason, skipped[0]?.reason_args) || t('gen.noneAccepted')) };
+
+    /* 后端在 ComfyUI 拒收时返回 200 + {error} */
+    if (r?.error) {
+      for (const id of ids) setJob(id, { state: 'err', error: dx(r.error, r.error_args) });
+      toastErr(t('gen.rejectTitle'), dx(r.error, r.error_args).slice(0, 160));
+      return { ok: 0, skipped: [], error: dx(r.error, r.error_args) };
+    }
+
+    let ok = 0;
+    const skipped = [];
+    for (const one of (r.results || [])) {
+      if (one.skipped) {
+        skipped.push(one);
+        setJob(one.image_id, { state: 'skip', error: dx(one.reason, one.reason_args) });
+        continue;
+      }
+      ok++;
+      pending.set(one.result_id, { imgId: one.image_id, t0: Date.now(), fails: 0, onTick: opt.onTick, onDone: opt.onDone });
+      setJob(one.image_id, { state: 'run', error: null, resultId: one.result_id });   // 记下 id，界面上才有"中断这一张"的对象
+      done.push(one);
+    }
+    if (ok && !opt.quiet) toastBusy(t('gen.submittedTitle', { n: ok }), t('gen.submittedBody'));
+    startPolling();
+    return { ok, skipped, results: done, error: ok ? undefined : (dx(skipped[0]?.reason, skipped[0]?.reason_args) || t('gen.noneAccepted')) };
+  } finally { if (!opt.claim) claim.release(); }
 }
 
 /** 用户中断：从轮询里摘掉，别让下一轮又把状态改回 running */
