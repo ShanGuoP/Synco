@@ -287,6 +287,24 @@ pub fn stem_of(p: &str) -> String {
 /// 桌面壳与服务同进程，一个 tokio worker 被占住的表现是整个窗口卡住，不是某个请求慢。
 ///
 /// 闭包里还能 `tokio::spawn`——阻塞池线程建起来时就 `rt.enter()` 过，runtime 上下文在。
+/// 资料读写与迁移互斥，许可必须被实际闭包持有以覆盖请求取消。
+pub async fn library_work<T: Send + 'static>(ctx: crate::state::Shared, f: impl FnOnce() -> crate::error::Result<T> + Send + 'static) -> crate::error::Result<T> {
+    let lease = ctx.work().enter().await;
+    blocking(move || { let _lease = lease; f() }).await
+}
+
+/// 所有解码/计算/编码入口共用 CPU 和按像素预约的内存预算；网络等待不持这些许可。
+pub async fn image_work<T: Send + 'static>(ctx: crate::state::Shared, pixels: u64, f: impl FnOnce() -> crate::error::Result<T> + Send + 'static) -> crate::error::Result<T> {
+    let work = ctx.work();
+    let library = work.enter().await;
+    let image = work.image(pixels).await?;
+    blocking(move || { let (_library, _image) = (library, image); f() }).await
+}
+
+pub fn image_pixels(img: &crate::models::entity::Image) -> u64 {
+    (img.w.max(1) as u64).saturating_mul(img.h.max(1) as u64)
+}
+
 pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> crate::error::Result<T> + Send + 'static) -> crate::error::Result<T> {
     tokio::task::spawn_blocking(f)
         .await

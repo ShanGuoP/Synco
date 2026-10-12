@@ -12,6 +12,7 @@ use std::time::Instant;
 pub struct LiveJob {
     pub started: Instant,
     pub cancelled: bool,
+    cancel_signal: Arc<tokio::sync::Notify>,
 }
 
 /// 回传成图的占位：Drop 时释放。拿不到占位说明同一行已经有人在下载了
@@ -46,15 +47,15 @@ pub struct Ctx {
     pub live: Arc<AtomicUsize>,
     /// 把「读在飞 → 读可得 → 补/削」三步串起来的那把小锁：这三步本身没有原子性
     pub gate_sync: Mutex<()>,
-    /// 同时最多两份派生档在加工：一次全分辨率解码就是 100MB 级，让阻塞池随便铺开会把内存压穿，
-    /// 比慢几秒严重得多
-    pub slots: Arc<tokio::sync::Semaphore>,
+    /// 资料操作与图像资源只有一个所有者，调用方不能绕过原始锁或许可。
+    work: Arc<crate::service::work::Work>,
     pub http: reqwest::Client,
 }
 
 pub type Shared = Arc<Ctx>;
 
 impl Ctx {
+    pub(crate) fn work(&self) -> Arc<crate::service::work::Work> { self.work.clone() }
     pub fn new(data: PathBuf, public: PathBuf, conn: Connection) -> Shared {
         Arc::new(Self {
             data,
@@ -71,7 +72,7 @@ impl Ctx {
             gate: Arc::new(tokio::sync::Semaphore::new(0)),
             live: Arc::new(AtomicUsize::new(0)),
             gate_sync: Mutex::new(()),
-            slots: Arc::new(tokio::sync::Semaphore::const_new(2)),
+            work: crate::service::work::Work::new(),
         })
     }
 
@@ -110,7 +111,7 @@ impl Ctx {
 
     /// worker 开工：记这一刻，读接口据此区分"还在飞"与"僵尸"
     pub fn job_begin(&self, id: i64) {
-        self.jobs().insert(id, LiveJob { started: Instant::now(), cancelled: false });
+        self.jobs().insert(id, LiveJob { started: Instant::now(), cancelled: false, cancel_signal: Arc::new(tokio::sync::Notify::new()) });
     }
     pub fn job_end(&self, id: i64) {
         self.jobs().remove(&id);
@@ -132,6 +133,7 @@ impl Ctx {
         match self.jobs().get_mut(&id) {
             Some(j) => {
                 j.cancelled = true;
+                j.cancel_signal.notify_one();
                 true
             }
             None => false,
@@ -139,6 +141,14 @@ impl Ctx {
     }
     pub fn job_cancelled(&self, id: i64) -> bool {
         self.jobs().get(&id).map(|j| j.cancelled).unwrap_or(false)
+    }
+    /// 每个 worker 只有一个取消等待者；notify_one 保存许可，避免检查与 await 之间丢通知。
+    pub(crate) async fn cancelled(&self, id: i64) {
+        let signal = { let jobs = self.jobs(); match jobs.get(&id) {
+            Some(job) if !job.cancelled => job.cancel_signal.clone(),
+            _ => return,
+        }};
+        signal.notified().await;
     }
     /// 起表之后超过宽限期还没落盘：对面的请求多半已经断了
     pub fn job_overdue(&self, id: i64, grace_ms: u128) -> bool {

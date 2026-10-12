@@ -33,6 +33,7 @@ const DONE_I18N = [
 //     读者是坐在机器前的人，不是界面。
 //   · `crates/*/examples/*.rs`——对拍用的开发工具，同上。
 const DONE_I18N_RS = [
+  'crates/server/src/service/work.rs', 'crates/server/src/service/library/mod.rs', 'crates/server/src/service/library/tests.rs', 'crates/server/src/service/queue/park.rs',
   'crates/server/src/service/localgen.rs', 'crates/server/src/service/deletion.rs', 'crates/server/src/repo/deletion.rs',
   'crates/server/src/service/workflow/tests.rs',
   'crates/server/src/service/workflow/parse.rs',

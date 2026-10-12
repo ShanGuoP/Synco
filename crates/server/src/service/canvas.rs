@@ -9,6 +9,7 @@ impl Drop for Preparing {
 }
 
 pub async fn generate(ctx: &Shared, img: &Image, prompt: &str, rerun: Option<i64>) -> Result<i64> {
+    let _library = ctx.work().enter().await;
     if !util::file_alive(&ctx.data, &Value::String(img.orig_path.clone())) { return Err(AppError::bad("srv.canvas.sketchGone")); }
     queue::sketch_fit(img.w.max(1) as usize, img.h.max(1) as usize)?;
     let config = cloud::settings(ctx);
@@ -24,7 +25,7 @@ pub async fn generate(ctx: &Shared, img: &Image, prompt: &str, rerun: Option<i64
     let _preparing = Preparing { ctx: ctx.clone(), id };
     let ctx2 = ctx.clone();
     let img2 = img.clone();
-    let outcome = util::blocking(move || -> Result<()> {
+    let outcome = util::image_work(ctx.clone(), 0,move || -> Result<()> {
         let rel = util::rel_path(&["projects".into(), img2.project_id.to_string(), format!("k{}_{id}_sketch.png", img2.id)]);
         let src = util::data_file(&ctx2.data, &img2.orig_path).ok_or_else(|| AppError::bad("srv.canvas.sketchGoneRaw"))?;
         let mut pending = queue::PendingFiles::new(ctx2.data.clone());

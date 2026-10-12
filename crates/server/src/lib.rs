@@ -152,6 +152,7 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
         // 一批 8 张 24MP 的 base64 有几十 MB，默认 2MB 上限会把导入直接挡掉；
         // 超限由 extractor 兜住（状态码 413），不让超大 body 把内存打爆
         .layer(DefaultBodyLimit::max(api::BODY_LIMIT))
+        .layer(axum::middleware::from_fn_with_state(ctx.clone(), guard::library))
         .layer(axum::middleware::from_fn(guard::loopback_only))
         .layer(axum::middleware::from_fn(web::csp::apply))
         .with_state(ctx.clone());
@@ -189,10 +190,10 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     {
         let c = ctx.clone();
         tokio::spawn(async move {
-            let job = tokio::task::spawn_blocking(move || {
+            let job = util::library_work(c.clone(), move || {
                 let legacy = imagesvc::sweep_legacy_view_files(&c);
                 let cap = imagesvc::cache_cap(&c);
-                (legacy, if cap == 0 { (0, 0) } else { imagesvc::cache_sweep(&c, cap) })
+                Ok((legacy, if cap == 0 { (0, 0) } else { imagesvc::cache_sweep(&c, cap) }))
             })
             .await;
             match job {

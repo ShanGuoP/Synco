@@ -182,37 +182,15 @@ fn abs_path(s: &str) -> Option<PathBuf> {
 
 }
 
-/// 对尚不存在的目标也解析现有祖先，避免链接别名绕过目录身份判定。
+fn shell_error(error: synco_server::error::AppError, path: &Path) -> String {
+    if let Some((code, args)) = error.keyed() { return why(code, serde_json::Value::Object(args)); }
+    why("srv.shell.copyFail", serde_json::json!({"path":path.display().to_string(),"msg":error.to_string()}))
+}
+
 fn path_identity(path: &Path) -> Result<PathBuf, String> {
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err(only("srv.shell.absNeeded"));
-    }
-    if fs::symlink_metadata(path).is_ok() { return fs::canonicalize(path).map_err(|e| why("srv.shell.dirReadFail", serde_json::json!({"path":path.display().to_string(),"msg":e.to_string()}))); }
-    let parent = path.parent().ok_or_else(|| only("srv.shell.absNeeded"))?;
-    let name = path.file_name().ok_or_else(|| only("srv.shell.absNeeded"))?;
-    Ok(path_identity(parent)?.join(name))
+    synco_server::service::library::path_identity(path).map_err(|e| shell_error(e, path))
 }
-
-fn copy_destination(source: &Path, destination: &Path) -> Result<PathBuf, String> {
-    let source = path_identity(source)?;
-    let destination = path_identity(destination)?;
-    // Windows 目录身份不区分大小写；组件分隔符防止把相邻名称误认作后代。
-    let src = source.to_string_lossy().to_lowercase();
-    let dst = destination.to_string_lossy().to_lowercase();
-    if src == dst || dst.starts_with(&format!("{}{}", src.trim_end_matches(['/', '\\']), std::path::MAIN_SEPARATOR)) {
-        return Err(only("srv.shell.copyInsideSource"));
-    }
-    Ok(destination)
-}
-
-fn directory_link(metadata: &fs::Metadata) -> bool {
-    #[cfg(windows)] {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))] { metadata.file_type().is_symlink() }
-}
-
+fn directory_link(metadata: &fs::Metadata) -> bool { synco_server::service::library::directory_link(metadata) }
 
 impl Shell {
     fn info(&self, ctx: &synco_server::state::Shared) -> DirInfo {
@@ -239,15 +217,9 @@ fn data_dir_info(state: State<'_, Shell>, ctx: State<'_, synco_server::state::Sh
 
 /// 换址只改记忆，不动文件：搬不搬由用户再点一次「把资料复制过去」
 #[tauri::command]
-fn set_data_dir(path: String, state: State<'_, Shell>, ctx: State<'_, synco_server::state::Shared>) -> Result<serde_json::Value, String> {
+async fn set_data_dir(path: String, state: State<'_, Shell>, ctx: State<'_, synco_server::state::Shared>) -> Result<serde_json::Value, String> {
     let p = abs_path(&path).ok_or_else(|| only("srv.shell.absNeeded"))?;
-    fs::create_dir_all(&p).map_err(|e| why("srv.shell.mkdirFail", serde_json::json!({"msg":e.to_string()})))?;
-    let p = path_identity(&p)?;
-    let probe = p.join(format!(".synco-write-{}-{}", std::process::id(), synco_server::util::now_ms()));
-    let file = fs::OpenOptions::new().write(true).create_new(true).open(&probe)
-        .map_err(|e| why("srv.shell.writeFail", serde_json::json!({"path":p.display().to_string(),"msg":e.to_string()})))?;
-    drop(file);
-    fs::remove_file(probe).map_err(|e| e.to_string())?;
+    let p = synco_server::service::library::selectable(ctx.inner(), &p).await.map_err(|e| shell_error(e, &p))?;
     let same = p == path_identity(&state.data)?;
     remember_data(&p)?;
     let next = Shell {
@@ -263,71 +235,14 @@ fn set_data_dir(path: String, state: State<'_, Shell>, ctx: State<'_, synco_serv
 /// 把当前数据目录整棵复制到新位置，然后记下新位置。
 /// 只在目标目录还没有库的时候动手——覆盖别人的资料库这种事不能默认发生。
 #[tauri::command]
-fn copy_data_to(to: String, state: State<'_, Shell>, ctx: State<'_, synco_server::state::Shared>) -> Result<serde_json::Value, String> {
+async fn copy_data_to(to: String, ctx: State<'_, synco_server::state::Shared>) -> Result<serde_json::Value, String> {
     let dst = abs_path(&to).ok_or_else(|| only("srv.shell.absDirNeeded"))?;
-    let dst = copy_destination(&state.data, &dst)?;
-    if dst.join("app.db").is_file() {
-        return Err(only("srv.shell.targetHasLibrary"));
-    }
-    if dst.exists() && fs::read_dir(&dst).map_err(|e| e.to_string())?.next().is_some() {
-        return Err(only("srv.shell.targetNotEmpty"));
-    }
-    synco_server::repo::db::checkpoint_truncate(ctx.inner()).map_err(|e| e.text())?;
-    let (files, bytes) = copy_to_new_directory(&state.data, &dst)?;
+    let copied = synco_server::service::library::copy(ctx.inner(), &dst).await.map_err(|e| shell_error(e, &dst))?;
+    let dst = copied.path;
+    let (files, bytes) = (copied.files, copied.bytes);
     remember_data(&dst)?;
     let next = Shell { data: dst, remembered: true, source: "shell.src.copied", restart_required: true };
     Ok(serde_json::json!({ "dir": next.info(ctx.inner()), "copied": { "files": files, "bytes": bytes } }))
-}
-
-/// 只在自己新建的暂存目录写入，成功后整体发布，失败不污染用户目标。
-fn copy_to_new_directory(source: &Path, destination: &Path) -> Result<(usize, u64), String> {
-    let destination = copy_destination(source, destination)?;
-    if destination.exists() && fs::read_dir(&destination).map_err(|e| e.to_string())?.next().is_some() {
-        return Err(only("srv.shell.targetNotEmpty"));
-    }
-    let parent = destination.parent().ok_or_else(|| only("srv.shell.absDirNeeded"))?;
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let stage = parent.join(format!(".synco-copy-{}-{}", synco_server::util::now_ms(), synco_server::util::r4()));
-    // 暂存根同样确认位于源目录之外，且只清理本次成功创建的这个目录。
-    let stage = copy_destination(source, &stage)?;
-    fs::create_dir(&stage).map_err(|e| e.to_string())?;
-    let copied = (|| {
-        let counts = copy_tree(source, &stage)?;
-        if destination.exists() { fs::remove_dir(&destination).map_err(|e| e.to_string())?; }
-        fs::rename(&stage, &destination).map_err(|e| e.to_string())?;
-        Ok(counts)
-    })();
-    if copied.is_err() { let _ = fs::remove_dir_all(&stage); }
-    copied
-}
-
-/// 逐条复制：跳过 runtime/（锁、日志与可再生档那一层）这类进程私有的东西，任何一步失败把错误原文带出去。
-/// 缓存不跟着走是对的：新目录里第一次看那张图会现切，而锁与旧日志跟着拷就是把别的实例的状态搬过去。
-fn copy_tree(from: &Path, to: &Path) -> std::result::Result<(usize, u64), String> {
-    let mut n = (0usize, 0u64);
-    for e in fs::read_dir(from).map_err(|e| why("srv.shell.dirReadFail", serde_json::json!({ "path": from.display().to_string(), "msg": e.to_string() })))? {
-        let e = e.map_err(|e| e.to_string())?;
-        let name = e.file_name();
-        if ["runtime", "port.txt", "desktop.json", "instance.lock", "server.log"].contains(&name.to_string_lossy().as_ref()) {
-            continue;
-        }
-        let src = e.path();
-        if directory_link(&fs::symlink_metadata(&src).map_err(|e| e.to_string())?) {
-            return Err(why("srv.shell.copyLink", serde_json::json!({"path":src.display().to_string()})));
-        }
-        let dst = to.join(name);
-        if src.is_dir() {
-            fs::create_dir_all(&dst).map_err(|er| why("srv.shell.mkdirAt", serde_json::json!({ "path": dst.display().to_string(), "msg": er.to_string() })))?;
-            let sub = copy_tree(&src, &dst)?;
-            n.0 += sub.0;
-            n.1 += sub.1;
-        } else {
-            fs::copy(&src, &dst).map_err(|er| why("srv.shell.copyFail", serde_json::json!({ "path": src.display().to_string(), "msg": er.to_string() })))?;
-            n.0 += 1;
-            n.1 += fs::metadata(&dst).map(|m| m.len()).unwrap_or(0);
-        }
-    }
-    Ok(n)
 }
 
 /// 页面切了主题就把生效档位记下来，顺手把当前窗口的底色也换掉：
@@ -531,31 +446,6 @@ mod url_guard_tests {
 #[cfg(test)]
 mod data_path_tests {
     use super::*;
-    #[test]
-    fn copy_rejects_source_descendant_and_alias_before_creating_target() {
-        let root = env::temp_dir().join(format!("synco-copy-test-{}", std::process::id()));
-        fs::create_dir_all(root.join("source")).unwrap();
-        let source = root.join("source");
-        assert!(copy_destination(&source, &source).is_err());
-        assert!(copy_destination(&source, &source.join("backup/nested")).is_err());
-        assert!(!source.join("backup").exists());
-        assert!(copy_destination(&source, &root.join("source-neighbor")).is_ok());
-        #[cfg(windows)] {
-            let alias = root.join("alias");
-            let output = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&alias).arg(&source).output().unwrap();
-            assert!(output.status.success(), "junction fixture failed");
-            assert!(copy_destination(&source, &alias.join("backup")).is_err());
-            assert!(directory_link(&fs::symlink_metadata(&alias).unwrap()));
-            // 链接只撤入口；清理范围始终属于本次临时根。
-            fs::remove_dir(&alias).unwrap();
-        }
-        fs::write(source.join("sample.txt"), "test").unwrap();
-        let dest = root.join("copied");
-        assert_eq!(copy_to_new_directory(&source, &dest).unwrap().0, 1);
-        assert_eq!(fs::read_to_string(dest.join("sample.txt")).unwrap(), "test");
-        assert!(copy_to_new_directory(&source, &dest).is_err());
-        fs::remove_dir_all(&root).unwrap();
-    }
     #[test]
     fn drive_relative_selection_is_rejected_but_empty_absolute_directory_is_valid() {
         #[cfg(windows)] {

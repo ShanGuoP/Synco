@@ -28,3 +28,9 @@ pub fn del(ctx: &Ctx, key: &str) -> Result<()> {
     repo::run(ctx, "DELETE FROM app_settings WHERE key=?", &[repo::s(key)])?;
     Ok(())
 }
+
+/// 只有工作流文件身份与按文件登记的映射需要在资料快照中重定位。
+pub fn workflow_locations(ctx: &Ctx) -> Result<Vec<(String, String)>> {
+    let rows = repo::all(ctx, "SELECT key,value FROM app_settings WHERE key='workflow_path' OR key LIKE 'workflow_roles:%' OR key LIKE 'workflow_profile:%'", &[])?;
+    Ok(rows.into_iter().filter_map(|row| Some((row["key"].as_str()?.to_string(), row["value"].as_str()?.to_string()))).collect())
+}

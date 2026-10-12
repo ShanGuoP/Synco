@@ -25,6 +25,7 @@ pub(crate) fn judge_cloud(ctx: &Shared, id: i64) -> bool {
 
 /// 问一次 ComfyUI，把库里这条结果推进到终态
 pub async fn settle(ctx: &Shared, id: i64) -> Result<Option<Value>> {
+    let _library = ctx.work().enter().await;
     let Some(r) = rres::by_id(ctx, id)? else { return Ok(None) };
     let pid = r.project_id;
     let settings = r.settings();
@@ -140,7 +141,7 @@ async fn download_mapped(ctx: &Shared, id: i64, pid: i64, images: &[comfy::Tagge
         let ctx = ctx.clone();
         let rel = final_rel.to_string();
         tokio::spawn(async move {
-            let _ = tokio::task::spawn_blocking(move || crate::service::imagesvc::result_thumb(&ctx, id, pid, &rel)).await;
+            let _ = util::image_work(ctx.clone(), 0, move || Ok(crate::service::imagesvc::result_thumb(&ctx, id, pid, &rel))).await;
         });
     }
     Ok(())
@@ -164,10 +165,12 @@ pub fn spawn_advancer(ctx: &Shared) {
         // 这一行第一次被推进器看见的时刻：只用它算总时限，重启后重新起算
         let mut seen: HashMap<i64, u128> = HashMap::new();
         loop {
+            let library = ctx.work().enter().await;
             let _ = crate::service::deletion::retry(&ctx).await;
             let rows = match rres::list_running(&ctx) {
                 Ok(v) => v,
                 Err(_) => {
+                    drop(library);
                     tokio::time::sleep(Duration::from_millis(ADVANCE_IDLE_MS)).await;
                     continue;
                 }
@@ -190,6 +193,7 @@ pub fn spawn_advancer(ctx: &Shared) {
                     }
                 }
             }
+            drop(library);
             tokio::time::sleep(Duration::from_millis(if idle { ADVANCE_IDLE_MS } else { ADVANCE_EVERY_MS })).await;
         }
     });
@@ -198,6 +202,7 @@ pub fn spawn_advancer(ctx: &Shared) {
 /// 服务重启后内存里的轮询队列就没了，库里挂着的 running 行得有人收：
 /// 云端行直接判失败，本机行照常推进
 pub async fn reclaim_running(ctx: &Shared) -> Result<usize> {
+    let _library = ctx.work().enter().await;
     let rows = rres::list_running(ctx)?;
     if rows.is_empty() {
         return Ok(0);

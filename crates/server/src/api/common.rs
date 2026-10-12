@@ -114,7 +114,7 @@ pub(crate) async fn save_batch(ctx: &Shared, pid: i64, files: &mut [Value]) -> R
     for f in files.iter_mut() {
         let one = std::mem::take(f);
         let ctx2 = ctx.clone();
-        ids.push(util::blocking(move || save_image_file(&ctx2, pid, &one)).await?);
+        ids.push(util::image_work(ctx.clone(), 0, move || save_image_file(&ctx2, pid, &one)).await?);
     }
     Ok(ids)
 }
@@ -140,17 +140,15 @@ pub(crate) fn save_image_file(ctx: &Shared, pid: i64, f: &Value) -> Result<i64> 
     if bytes.is_empty() {
         return Err(AppError::bad("srv.common.dataEmpty"));
     }
+    // 客户端尺寸只用于请求校验，实际几何与资源预算使用头部/方向得到的真实尺寸。
+    let reported_w = util::num_or(f.get("w"), 0.0);
+    let reported_h = util::num_or(f.get("h"), 0.0);
+    if !(1.0..=30000.0).contains(&reported_w) || !(1.0..=30000.0).contains(&reported_h) {
+        return Err(AppError::bad_args("srv.common.badDims", json!({ "w": reported_w.to_string(), "h": reported_h.to_string() })));
+    }
+    let (w, h) = crate::img::codec::dimensions(&bytes)?;
     std::fs::write(ctx.data.join(&rel), &bytes)
         .map_err(|e| AppError::fail_args("srv.common.writeFail", json!({ "msg": e.to_string() })))?;
-    // 宽高是客户端报的，不能照单全收：0 会让后面任何一次编码直接 panic（release 是 abort，
-    // 整个应用连带在飞的任务一起没），负数转 usize 还会变成巨值。真实尺寸由后台派生档那一步
-    // 校正回库里（imagesvc::derive），这里只保证进来的值至少能算。
-    let w = util::num_or(f.get("w"), 0.0);
-    let h = util::num_or(f.get("h"), 0.0);
-    if !(1.0..=30000.0).contains(&w) || !(1.0..=30000.0).contains(&h) {
-        let _ = std::fs::remove_file(ctx.data.join(&rel));
-        return Err(AppError::bad_args("srv.common.badDims", json!({ "w": w.to_string(), "h": h.to_string() })));
-    }
     let id = rimg::insert(ctx, pid, &safe, &rel, w as i64, h as i64)?;
     // 导入这一刻原图就在盘上，顺手把 320/3072 两档切出来：列表与编辑器之后都只读小档
     if let Some(img) = rimg::by_id(ctx, id)? {

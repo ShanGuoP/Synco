@@ -2,7 +2,7 @@
 //!
 //! 落盘约定见方案 §4：派生档与原图同目录，档位写进文件名，所以重生成即换名，
 //! 换名之后旧 URL 自然失效，新 URL 可以放心 immutable。
-//! 这里的函数全是同步重活：调用方一律过 `util::blocking`，不要在 handler 里直接调（`*_async` 两个入口已经自带了）。
+//! 这里的函数全是同步重活：异步调用方一律过 `util::image_work`，不要在 handler 里直接调（`*_async` 两个入口已经自带了）。
 
 use crate::error::{AppError, Result};
 use crate::models::entity::Image;
@@ -126,7 +126,7 @@ mod cache;
 mod derive;
 mod pyramid;
 pub use cache::{cache_bytes, cache_cap, cache_clear, cache_dir, cache_sweep, sweep_legacy_view_files, tiles_dir};
-pub use derive::{backfill, derive, result_thumb, spawn_backfill, spawn_derive, write_result_thumb};
+pub use derive::{derive, result_thumb, spawn_backfill, spawn_derive, write_result_thumb};
 pub use pyramid::{pyramid, pyramid_async, tiles, tiles_async, tiles_rel_root};
 #[cfg(test)]
 use pyramid::level_sizes;

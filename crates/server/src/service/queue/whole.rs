@@ -21,33 +21,27 @@ pub(super) async fn run_sketch(ctx: &Shared, row: &entity::ResultRow, img: Image
     let (png, size, inked) = {
         let ctx2 = ctx.clone();
         let src2 = src.clone();
-        tokio::task::spawn_blocking(move || prepare_sketch(&ctx2, &src2))
-            .await
-            .map_err(|e| AppError::fail_detail("srv.queue.canvasPanic", e))??
+        util::image_work(ctx.clone(), util::image_pixels(&img), move || prepare_sketch(&ctx2, &src2)).await?
     };
     // 参考图读的是**这一行**的快照（不是此刻的槽位），与画稿快照同一条纪律。
     // 一次最多四张全分辨率 PNG，读盘这段也不该按在 worker 上
     let refs_bytes = {
         let ctx2 = ctx.clone();
         let row2 = row.clone();
-        tokio::task::spawn_blocking(move || refs::row_payloads(&ctx2, &row2))
-            .await
-            .map_err(|e| AppError::fail_detail("srv.queue.refReadPanic", e))??
+        util::library_work(ctx.clone(), move || refs::row_payloads(&ctx2, &row2)).await?
     };
     // 一笔没涂又挂了参考图：那张全白的纸不必发出去，这一枪就是"按参考图与提示词生成"。
     // 没参考图时维持老行为（发空白画稿），免得动了既有语义。
     let image = if inked || refs_bytes.is_empty() { Some(png) } else { None };
-    let bytes = cloud::edit_with(
-        ctx,
+    let bytes = super::edit_job(
+        ctx, row.id,
         &config,
         cloud::Edit { image, mask: None, refs: refs_bytes, prompt: &prompt, size: Some(&size) },
     )
     .await?;
     let id = row.id;
     let ctx2 = ctx.clone();
-    tokio::task::spawn_blocking(move || compose_sketch(&ctx2, id, &img, &bytes))
-        .await
-        .map_err(|e| AppError::fail_detail("srv.queue.diskPanic", e))?
+    util::image_work(ctx.clone(), util::image_pixels(&img), move || compose_sketch(&ctx2, id, &img, &bytes)).await
 }
 
 /// 返回 `(发出去的 PNG, 尺寸串, 有没有笔迹)`。第三项决定"空白画稿 + 参考图"那一枪要不要带主图。
@@ -87,21 +81,17 @@ pub(super) async fn run_full(ctx: &Shared, row: &entity::ResultRow, img: Image, 
     let (buf, size) = {
         let ctx2 = ctx.clone();
         let img2 = img.clone();
-        tokio::task::spawn_blocking(move || prepare_full(&ctx2, &img2, &spec, &mask))
-            .await
-            .map_err(|e| AppError::fail_detail("srv.queue.wholePanic", e))??
+        util::image_work(ctx.clone(), util::image_pixels(&img), move || prepare_full(&ctx2, &img2, &spec, &mask)).await?
     };
-    let bytes = cloud::edit_with(
-        ctx,
+    let bytes = super::edit_job(
+        ctx, row.id,
         &config,
         cloud::Edit { image: Some(buf), mask: None, refs: Vec::new(), prompt: &prompt, size: Some(&size) },
     )
     .await?;
     let id = row.id;
     let ctx2 = ctx.clone();
-    tokio::task::spawn_blocking(move || compose_whole(&ctx2, id, &img, &bytes, "f"))
-        .await
-        .map_err(|e| AppError::fail_detail("srv.queue.diskPanic", e))?
+    util::image_work(ctx.clone(), util::image_pixels(&img), move || compose_whole(&ctx2, id, &img, &bytes, "f")).await
 }
 
 /// 整图重绘的目标尺寸判定：`(宽, 高, 是否原样发)`。

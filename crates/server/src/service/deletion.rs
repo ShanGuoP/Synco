@@ -2,23 +2,28 @@
 use crate::{error::Result, repo, state::Shared, util};
 
 pub async fn delete_project(ctx: &Shared, id: i64) -> Result<()> {
-    repo::deletion::delete_project(ctx, id)?;
+    let _library = ctx.work().enter().await;
+    let jobs = repo::deletion::delete_project(ctx, id)?;
+    for job in jobs { ctx.job_cancel(job); }
     let _ = retry(ctx).await;
     Ok(())
 }
 
 pub async fn delete_image(ctx: &Shared, id: i64) -> Result<()> {
-    repo::deletion::delete_image(ctx, id)?;
+    let _library = ctx.work().enter().await;
+    let jobs = repo::deletion::delete_image(ctx, id)?;
+    for job in jobs { ctx.job_cancel(job); }
     let _ = retry(ctx).await;
     Ok(())
 }
 
 pub async fn retry(ctx: &Shared) -> Result<()> {
+    let _library = ctx.work().enter().await;
     for row in repo::deletion::pending(ctx)? {
         let plan: serde_json::Value = serde_json::from_str(row["value"].as_str().unwrap_or("")).map_err(|e| crate::error::AppError::Fail(e.to_string()))?;
         let data = ctx.data.clone();
         let registered: std::collections::HashSet<String> = repo::results::registered_paths(ctx)?.into_iter().collect();
-        let cleaned = util::blocking(move || {
+        let cleaned = util::library_work(ctx.clone(), move || {
             let mut clean = true;
             for row in plan["images"].as_array().into_iter().flatten() {
                 let img = crate::models::entity::Image::from_value(row);

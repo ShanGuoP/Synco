@@ -53,7 +53,7 @@ pub async fn canvas_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Resp
     {
         let data = ctx.data.clone();
         let rel2 = rel.clone();
-        util::blocking(move || -> Result<()> {
+        util::image_work(ctx.clone(), 0, move || -> Result<()> {
             std::fs::create_dir_all(data.join("projects").join(pid.to_string()))
                 .map_err(|e| AppError::fail_args("srv.canvas.mkdirFail", json!({ "msg": e.to_string() })))?;
             let blank = Rgba::new(w, h);
@@ -104,7 +104,7 @@ pub async fn sketch_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
     // 解码与覆写都是同步重活（涂抹层能到 3072 一档），整段过阻塞池。
     // 解不出来就不覆盖：画稿是用户唯一的手感来源，写坏一次等于抹掉他的草稿
     let dest = ctx.data.join(&img.orig_path);
-    let (dw, dh) = util::blocking(move || -> Result<(usize, usize)> {
+    let (dw, dh) = util::image_work(ctx.clone(), 0, move || -> Result<(usize, usize)> {
         let decoded = crate::img::codec::decode(&bytes)
             .map_err(|_| AppError::bad("srv.canvas.pngBadNoOverwrite"))?;
         if decoded.w == 0 || decoded.h == 0 {
@@ -175,7 +175,7 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
     }
     let (added, from_empty) = {
         let (ctx2, im) = (ctx.clone(), img.clone());
-        util::blocking(move || -> Result<(Vec<String>, bool)> {
+        util::image_work(ctx.clone(), 0, move || -> Result<(Vec<String>, bool)> {
             let mut added: Vec<String> = Vec::new();
             let mut from_empty = false;
             if let Some(row) = &row_opt {
@@ -279,7 +279,7 @@ pub async fn canvas_use_sketch(State(ctx): State<Shared>, APath(id): APath<Strin
     // 读快照、解码、覆写都是同步重活，整段过阻塞池
     let snap_abs = util::data_file(&ctx.data, &snap).ok_or_else(|| AppError::bad("srv.canvas.snapGone"))?;
     let dest = ctx.data.join(&img.orig_path);
-    let (dw, dh) = util::blocking(move || -> Result<(usize, usize)> {
+    let (dw, dh) = util::image_work(ctx.clone(), 0, move || -> Result<(usize, usize)> {
         let bytes = std::fs::read(&snap_abs).map_err(|_| AppError::bad("srv.canvas.snapGone"))?;
         let decoded = crate::img::codec::decode(&bytes).map_err(|_| AppError::bad("srv.canvas.snapBadPng"))?;
         if decoded.w == 0 || decoded.h == 0 {

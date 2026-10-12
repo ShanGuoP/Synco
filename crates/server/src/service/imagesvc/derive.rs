@@ -52,13 +52,14 @@ const BACKFILL_BATCH: i64 = 400;
 
 /// 后台补一张图的派生档：导入和"首次读到这张图"都走这条，接口不等着它
 pub fn spawn_derive(ctx: &Shared, img: Image) {
+    if img.is_sketch() { return; }
+    let Some(claim) = ctx.work().claim_derive(img.id) else { return };
     let ctx = ctx.clone();
     let rel = img.orig_path.clone();
     tokio::spawn(async move {
-        let Ok(_slot) = ctx.slots.clone().acquire_owned().await else { return };
         // derive 里是一次全分辨率解码加两档重编码，秒级 CPU：留在当前 worker 上等于
         // 把一整条连接按住（桌面壳与服务同进程，窗口会跟着卡），所以要过一道阻塞池
-        let ran = util::blocking(move || derive(&ctx, &img)).await;
+        let ran = util::image_work(ctx.clone(), util::image_pixels(&img), move || { let _claim = claim; derive(&ctx, &img) }).await;
         // 补不出来只记一行：原图被手动删过是常态，前端回退 orig_url 就行
         if let Err(e) = ran {
             tracing_lite(&rel, &e.text());
@@ -74,40 +75,14 @@ fn tracing_lite(rel: &str, e: &str) {
 pub fn spawn_backfill(ctx: &Shared) {
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || backfill(&ctx)).await;
-    });
-}
-
-/// 启动后在阻塞线程池里逐张补齐派生档。单张失败只记一行——原图被手动删过是常态，
-/// 补不出档就继续用 orig_url，不该因此中断后面几百张。
-pub fn backfill(ctx: &std::sync::Arc<Ctx>) {
-    let edge = proxy_edge(ctx);
-    let rows = match repo::images::list_missing_thumb(ctx, BACKFILL_BATCH) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("  派生档补空当没跑成：{e}");
-            return;
-        }
-    };
-    if rows.is_empty() {
-        return;
-    }
-    println!("  正在为 {n} 张存量图补派生档（长边 ≤{edge} 的不切 proxy）…", n = rows.len());
-    let mut ok = 0usize;
-    let mut bad = 0usize;
-    for img in &rows {
-        match derive(ctx, img) {
-            Ok(true) => ok += 1,
-            Ok(false) => {}
-            Err(e) => {
-                bad += 1;
-                if bad <= 3 {
-                    println!("  跳过 {}：{}", img.orig_path, e.text());
-                }
+        if let Ok(rows) = repo::images::list_missing_thumb(&ctx, BACKFILL_BATCH) {
+            for img in rows {
+                let Some(claim) = ctx.work().claim_derive(img.id) else { continue };
+                let c = ctx.clone();
+                let _ = util::image_work(ctx.clone(), util::image_pixels(&img), move || { let _claim = claim; derive(&c, &img) }).await;
             }
         }
-    }
-    println!("  派生档补齐 {ok} 张{t}", t = if bad > 0 { format!("，{bad} 张补不出（原图不在盘上或格式不认识）") } else { String::new() });
+    });
 }
 
 /// 成图的 320 缩略图：历史列靠它，不再回落到 20–33MB 的成图

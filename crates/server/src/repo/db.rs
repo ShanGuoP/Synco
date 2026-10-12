@@ -305,10 +305,40 @@ pub fn library_counts(ctx: &crate::state::Ctx) -> (i64, i64) {
     (count("SELECT count(*) FROM projects"), count("SELECT count(*) FROM images"))
 }
 
-/// 把 WAL 合回主文件。复制资料目录前必须走一次，否则拷过去的是半个库 + 一份没人认领的 `-wal`。
-pub fn checkpoint_truncate(ctx: &crate::state::Ctx) -> crate::error::Result<()> {
-    let busy: i64 = ctx.db().query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
-    if busy != 0 { return Err(crate::error::AppError::fail("srv.shell.libraryBusy")); }
+/// 外部连接的提交世代；资料快照在前后核对，发现其他进程改库便拒绝发布。
+pub fn data_version(ctx: &crate::state::Ctx) -> crate::error::Result<i64> {
+    Ok(ctx.db().query_row("PRAGMA data_version", [], |r| r.get(0))?)
+}
+
+/// SQLite 原生备份会包含 WAL 已提交页，不复制正在变化的数据库/sidecar 字节。
+pub fn snapshot_into(ctx: &crate::state::Ctx, destination: &Path, settings: &[(String, String, String)]) -> crate::error::Result<()> {
+    use rusqlite::backup::{Backup, StepResult};
+    let source = ctx.db();
+    let mut target = Connection::open(destination)?;
+    {
+        let backup = Backup::new(&source, &mut target)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match backup.step(256)? {
+                StepResult::Done => break,
+                StepResult::More => {},
+                StepResult::Busy | StepResult::Locked => std::thread::sleep(std::time::Duration::from_millis(10)),
+                _ => {},
+            }
+            if std::time::Instant::now() > deadline { return Err(crate::error::AppError::fail("srv.shell.libraryBusy")); }
+        }
+    }
+    drop(source);
+    // 可再生缓存不跟着迁移；清掉快照里的引用，让新目录按正常路径重建。
+    target.execute_batch("UPDATE images SET thumb_path=NULL WHERE thumb_path LIKE 'runtime/%';
+        UPDATE images SET proxy_path=NULL WHERE proxy_path LIKE 'runtime/%';
+        UPDATE results SET thumb_path=NULL WHERE thumb_path LIKE 'runtime/%';")?;
+    for (old, new, value) in settings {
+        target.execute("DELETE FROM app_settings WHERE key=?", [old])?;
+        target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)", (new, value))?;
+    }
+    let check: String = target.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    if check != "ok" { return Err(crate::error::AppError::fail_detail("srv.shell.snapshotInvalid", check)); }
     Ok(())
 }
 

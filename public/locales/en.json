@@ -1464,8 +1464,10 @@
     "shell": {
       "absNeeded": "Enter an absolute path starting with a drive letter, e.g. D:\\Retouch",
       "absDirNeeded": "The target folder needs an absolute path",
+      "snapshotInvalid": "The snapshot database failed validation: {msg}",
+      "sourceChanged": "The library changed during copying; the destination was not published. Retry copying",
       "targetNotEmpty": "The copy destination must be empty; choose a new directory",
-      "libraryBusy": "The library is busy; retry copying later",
+      "libraryBusy": "The library is processing requests or jobs. Wait for completion and retry copying",
       "copyInsideSource": "The copy destination must be outside the current library directory",
       "copyLink": "The library contains a link and cannot be safely copied: {path}",
       "sameDir": "Source and target are the same folder",

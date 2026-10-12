@@ -13,26 +13,41 @@ use std::io::Cursor;
 /// 解码前先按**头部声明的**尺寸判一次：`DynamicImage::from_decoder` 按那个尺寸一次性分配 RGBA，
 /// 一张几十 KB 的 PNG 声明 30000×30000 就能要 3.6GB——高压缩比炸弹用字节数挡不住（80MB 的
 /// 请求体上限只管得到传输，管不到解码），只能在分配之前挡。
-/// 口径：60MP 的单张缓冲 60e6×4 = 240MB，派生档同一时刻最多两份在加工 = 峰值 480MB；
-/// 你 data 里那张 24MP（4000×6000）离上限还有 2.5 倍。
+/// 60MP 单份 RGBA 已是 240MB；几何与编码还会分配中间缓冲。异步入口必须经过共同
+/// 图像预算，不能把单张像素上限或 CPU 槽位数当作进程内存峰值。
 const MAX_DECODE_EDGE: u32 = 30000;
-const MAX_DECODE_PX: u64 = 60_000_000;
+pub(crate) const MAX_DECODE_PX: u64 = 60_000_000;
 
 /// 解码成 RGBA，并把 EXIF 方向烘焙进像素。
 /// 浏览器渲染 `<img>` 时自己按 EXIF 转，我们的缩略图不转就会出现"原图正着看、缩略图横着躺"，
 /// 所以这一步必须在服务端做，而不是指望前端。
-pub fn decode(bytes: &[u8]) -> Result<Rgba> {
-    let reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|e| AppError::detail("srv.image.badFormat", e))?;
-    let mut decoder = reader.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
-    let (dw, dh) = decoder.dimensions();
+fn validate_dimensions(dw: u32, dh: u32) -> Result<()> {
     if dw == 0 || dh == 0 || dw.max(dh) > MAX_DECODE_EDGE || dw as u64 * dh as u64 > MAX_DECODE_PX {
         return Err(AppError::bad_args(
             "srv.image.dimsOut",
             json!({ "w": dw, "h": dh, "edge": MAX_DECODE_EDGE, "px": MAX_DECODE_PX }),
         ));
     }
+    Ok(())
+}
+
+/// 只读真实尺寸与方向，不分配像素，导入时就建立可信的尺寸元数据。
+pub(crate) fn dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|e| AppError::detail("srv.image.badFormat", e))?;
+    let mut decoder = reader.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
+    let (w, h) = decoder.dimensions();
+    validate_dimensions(w, h)?;
+    let swap = matches!(decoder.orientation().unwrap_or(Orientation::NoTransforms), Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH);
+    Ok(if swap { (h, w) } else { (w, h) })
+}
+
+pub fn decode(bytes: &[u8]) -> Result<Rgba> {
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| AppError::detail("srv.image.badFormat", e))?;
+    let mut decoder = reader.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
+    let (dw, dh) = decoder.dimensions();
+    validate_dimensions(dw, dh)?;
     // PNG/WEBP 的解码器没有 orientation()，默认就是 Unspecified；JPEG/TIFF 会真读
     let orient = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| AppError::detail("srv.image.decodeFail", e))?;

@@ -1,6 +1,6 @@
 //! 本地调整的路由薄层：解包、状态码、响应形状。链路的编排在 `service::adjust`。
 //!
-//! 所有解码/算链/编码/落盘都过 `util::blocking`——一次 proxy 档预览是几十毫秒到几百毫秒的
+//! 图像解码/算链/编码统一过 `util::image_work`，普通资料操作过 `util::library_work`——一次 proxy 档预览是几十毫秒到几百毫秒的
 //! 纯 CPU，压在当前 worker 上整个桌面窗口会跟着僵（这是 0.2.1 那轮 P0 定下的契约）。
 
 use super::common::{body_of, err, ok, path_id};
@@ -42,7 +42,7 @@ pub async fn adjust_get(State(ctx): State<Shared>, APath(id): APath<String>) -> 
     let iid = path_id(&id)?;
     let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let data = adjust::panel(&ctx, img.id)?;
-    let analysis = util::blocking({
+    let analysis = util::image_work(ctx.clone(), util::image_pixels(&img), {
         let ctx = ctx.clone();
         move || crate::service::face::cached_analysis(&ctx,&img)
     }).await?;
@@ -55,8 +55,7 @@ pub async fn adjust_get(State(ctx): State<Shared>, APath(id): APath<String>) -> 
 pub async fn face_post(State(ctx): State<Shared>, APath(id): APath<String>) -> Result<Response> {
     let iid = path_id(&id)?;
     let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404,"srv.common.noImage")) };
-    let _permit = ctx.slots.clone().acquire_owned().await.map_err(|_| AppError::bad("srv.face.inference"))?;
-    let out = util::blocking(move || crate::service::face::analyze(&ctx,&img)).await?;
+    let out = util::image_work(ctx.clone(), util::image_pixels(&img), move || crate::service::face::analyze(&ctx,&img)).await?;
     Ok(ok(out))
 }
 
@@ -77,7 +76,7 @@ pub async fn adjust_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
     let payload = ops_of_body(&body).to_string();
     let long_edge = img.w.max(img.h).max(1) as usize;
     let ctx2 = ctx.clone();
-    let saved = util::blocking(move || -> Result<Value> {
+    let saved = util::library_work(ctx.clone(), move || -> Result<Value> {
         let (mut ops, mut rep) = EditOps::parse(&payload).map_err(|e| AppError::detail("srv.adjust.badOpsJson", e))?;
         // LUT 名字要拿去拼路径：这里先给个准信，服务侧读文件时还有一道白名单
         if let Some(l) = ops.lut.as_ref() {
@@ -101,7 +100,7 @@ pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, r
     // 带 ops 就按这一次的参数渲（滑杆还没落库也能先看），不带就读库里那份
     let inline = body.get("ops").filter(|v| v.is_object()).map(|v| v.to_string());
     let ctx2 = ctx.clone();
-    let out = util::blocking(move || -> Result<Value> {
+    let out = util::image_work(ctx.clone(), util::image_pixels(&img), move || -> Result<Value> {
         let ops = match inline.as_deref().map(EditOps::parse) {
             Some(Ok((mut o, _))) => {
                 o.clamp();
@@ -129,7 +128,7 @@ pub async fn render_post(State(ctx): State<Shared>, APath(id): APath<String>) ->
     let iid = path_id(&id)?;
     let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let ctx2 = ctx.clone();
-    let out = util::blocking(move || -> Result<Value> {
+    let out = util::image_work(ctx.clone(), util::image_pixels(&img), move || -> Result<Value> {
         let ops = adjust::load_ops(&ctx2, img.id);
         if ops.is_identity() {
             return Err(AppError::bad("srv.adjust.untouchedRender"));
@@ -155,7 +154,7 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
     let iid = path_id(&id)?;
     let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     let ctx2 = ctx.clone();
-    let out = util::blocking(move || -> Result<Value> {
+    let out = util::image_work(ctx.clone(), util::image_pixels(&img), move || -> Result<Value> {
         let ops = adjust::load_ops(&ctx2, img.id);
         if ops.is_identity() {
             return Err(AppError::bad("srv.adjust.untouchedFork"));
@@ -189,7 +188,7 @@ pub async fn tiles_get(State(ctx): State<Shared>, APath(id): APath<String>) -> R
     let Some(img) = photo_of(&ctx, iid).await? else { return Ok(err(404, "srv.common.noImage")) };
     // 与源图瓦片同一对限流槽、同一条阻塞池：一次请求是一整幅解码 + 每层重采样 + 上百张编码
     let slot = ctx.clone();
-    let out = imagesvc::pyramid_async(&slot, move || {
+    let out = imagesvc::pyramid_async(&slot, util::image_pixels(&img), move || {
         let ops = adjust::load_ops(&ctx, img.id);
         if ops.is_identity() {
             return imagesvc::tiles(&ctx, &img);

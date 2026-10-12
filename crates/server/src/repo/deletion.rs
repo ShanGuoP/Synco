@@ -2,13 +2,14 @@
 use crate::{error::Result, repo, state::Ctx};
 use serde_json::{json, Value};
 
-pub fn delete_project(ctx: &Ctx, id: i64) -> Result<()> { remove(ctx, id, true) }
-pub fn delete_image(ctx: &Ctx, id: i64) -> Result<()> { remove(ctx, id, false) }
+pub fn delete_project(ctx: &Ctx, id: i64) -> Result<Vec<i64>> { remove(ctx, id, true) }
+pub fn delete_image(ctx: &Ctx, id: i64) -> Result<Vec<i64>> { remove(ctx, id, false) }
 
-fn remove(ctx: &Ctx, id: i64, project: bool) -> Result<()> {
+fn remove(ctx: &Ctx, id: i64, project: bool) -> Result<Vec<i64>> {
     let mut db = ctx.db();
     let tx = db.transaction()?;
     let images = repo::all_on(&tx, if project { "SELECT * FROM images WHERE project_id=?" } else { "SELECT * FROM images WHERE id=?" }, &[repo::i(id)])?;
+    let jobs: Vec<i64> = repo::all_on(&tx, if project { "SELECT id FROM results WHERE project_id=?" } else { "SELECT id FROM results WHERE image_id=?" }, &[repo::i(id)])?.into_iter().filter_map(|r| r["id"].as_i64()).collect();
     let mut files = repo::results::rows_paths_on(&tx, if project { "project_id=?" } else { "image_id=?" }, &[repo::i(id)])?;
     for row in repo::all_on(&tx, if project { "SELECT orig_path FROM results WHERE project_id=?" } else { "SELECT orig_path FROM results WHERE image_id=?" }, &[repo::i(id)])? {
         if let Some(p) = row["orig_path"].as_str().filter(|p| p.contains("_adjinput")) { files.push(p.to_string()); }
@@ -45,7 +46,7 @@ fn remove(ctx: &Ctx, id: i64, project: bool) -> Result<()> {
     let key = format!("delete_cleanup:{}-{}", crate::util::now_ms(), crate::util::r4());
     tx.execute("INSERT INTO app_settings(key,value) VALUES(?,?)", (&key, json!({"files":files,"dirs":dirs,"images":images}).to_string()))?;
     tx.commit()?;
-    Ok(())
+    Ok(jobs)
 }
 
 pub fn pending(ctx: &Ctx) -> Result<Vec<Value>> {

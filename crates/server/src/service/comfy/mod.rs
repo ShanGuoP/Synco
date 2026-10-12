@@ -112,7 +112,9 @@ pub async fn download_to(ctx: &Ctx, url: &str, dest: &std::path::Path) -> crate:
     let bytes = r.bytes().await.map_err(|e| send_err(url, e))?;
     // 一张 20–33MB 的成图落盘是几百毫秒的同步写，按在 worker 上整个窗口会跟着一顿
     let dest = dest.to_path_buf();
+    let lease = ctx.work().enter().await;
     crate::util::blocking(move || {
+        let _lease = lease;
         std::fs::write(&dest, &bytes).map_err(|e| {
             AppError::detailed_args(500, "srv.image.slotWrite", json!({ "path": dest.display().to_string() }), e)
         })

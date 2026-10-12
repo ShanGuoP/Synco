@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use comfy::SEED_MAX;
 
 pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Option<i64>, comfy_base: &str) -> Result<Value> {
+    let _library = ctx.work().enter().await;
     let Some(i) = rimg::by_id(ctx, img_id)? else {
         return Ok(serde_json::json!({ "image_id": img_id, "skipped": true, "reason": "srv.submit.imageGone" }));
     };
@@ -46,7 +47,7 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     // 是你的图却认不出角色时**明确拒绝**，不回退内置图（D14）：回退就是"静默谎报"搬到了结构层。
     // 判在上传之前，免得为一张注定不提交的图先传两张 24MP 的 PNG。
     let plan_ctx = ctx.clone();
-    let (plan, graph_cfg) = util::blocking(move || Ok((cfg::plan(&plan_ctx), cfg::get_cfg(&plan_ctx)))).await?;
+    let (plan, graph_cfg) = util::library_work(ctx.clone(), move || Ok((cfg::plan(&plan_ctx), cfg::get_cfg(&plan_ctx)))).await?;
     if let cfg::Plan::Refused { errors } = &plan {
         return Ok(skipped_with("srv.submit.wfCannotTakeover", json!({ "errors": errors })));
     }
@@ -59,7 +60,7 @@ pub async fn run_one(ctx: &Shared, img_id: i64, settings: &Value, rerun_of: Opti
     let (photo_bytes, mask_bytes, sent_rel) = {
         let ctx2 = ctx.clone();
         let img = i.clone();
-        util::blocking(move || -> Result<(Vec<u8>, Vec<u8>, String)> {
+        util::image_work(ctx.clone(), util::image_pixels(&i), move || -> Result<(Vec<u8>, Vec<u8>, String)> {
             let (mut p, rel) = crate::service::adjust::submit_artifact(&ctx2, &img)?;
             let m = crate::service::adjust::submit_mask(&ctx2, &img)?;
             if use_alpha_mask { p = crate::service::workflow_graph::alpha_image(&p, &m)?; }

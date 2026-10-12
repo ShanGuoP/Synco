@@ -122,7 +122,7 @@ pub async fn lossless_get(State(ctx): State<Shared>, APath(id): APath<String>) -
     let ctx2 = ctx.clone();
     let row = r.clone();
     // 24MP 解码 + 缝合 + PNG 编码是秒级同步重活，一次都该待在阻塞池里
-    let got = util::blocking(move || queue::lossless_bytes(&ctx2, &row)).await?;
+    let got = util::image_work(ctx.clone(), 0, move || queue::lossless_bytes(&ctx2, &row)).await?;
     let (name, _, _) = rimg::name_and_size(&ctx, r.image_id)?.unwrap_or(("photo".into(), 0, 0));
     // safe_name 去过 # 与控制字符：它们会把 URL 或 Content-Disposition 直接截断
     let stem = util::safe_name(&util::stem_of(&name));
@@ -155,7 +155,7 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
        按快照重算得出来就是 PNG，重算不成才退回成图那一档，并把原因一起带回给界面说清 */
     let ctx2 = ctx.clone();
     let row = r.clone();
-    let got = util::blocking(move || queue::lossless_bytes(&ctx2, &row)).await?;
+    let got = util::image_work(ctx.clone(), 0, move || queue::lossless_bytes(&ctx2, &row)).await?;
     let lossless = got.lossless;
     let why = got.why;
     // 文件名里不能出现 # —— 它会直接把 /file/ 的 URL 截断
@@ -164,7 +164,7 @@ pub async fn fork_post(State(ctx): State<Shared>, APath(id): APath<String>) -> R
     // 重算与写盘都是同步重活（24MP 解码 + 缝合 + PNG 编码），一次都别按在 worker 上
     let dst = ctx.data.join(&rel);
     let bytes = got.bytes;
-    util::blocking(move || -> Result<()> {
+    util::library_work(ctx.clone(), move || -> Result<()> {
         std::fs::write(&dst, &bytes).map_err(|e| AppError::fail_args("srv.common.writeFail", json!({ "msg": e.to_string() })))?;
         Ok(())
     })

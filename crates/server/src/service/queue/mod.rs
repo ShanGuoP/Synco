@@ -18,7 +18,7 @@ use spec::JobKind;
 /// 并发上限就是云端设置里那个 concurrency 的刻度，钳在 1–6
 pub const CONCURRENCY_MAX: usize = 6;
 
-pub(crate) fn recover_files(ctx: &Shared) -> Result<usize> { files::recover(ctx) }
+pub(crate) fn recover_files(ctx: &Shared) -> Result<usize> { Ok(files::recover(ctx)? + park::recover(ctx)?) }
 
 /// 画稿和参考图已经复制完才发布 queued；配置取提交入口那一刻的值。
 pub fn queue_canvas(ctx: &Shared, img: &Image, id: i64, config: cloud::CloudSettings) -> Result<()> {
@@ -139,6 +139,7 @@ pub async fn snapshot(ctx: &Shared) -> Result<Value> {
     Ok(serde_json::json!({
         "items": items, "queued": queued, "running": running,
         "concurrency": cloud::settings(ctx).concurrency,
+        "image_work": ctx.work().stats(),
     }))
 }
 
@@ -153,6 +154,7 @@ pub(crate) fn job_grace_ms(ctx: &Shared, id: i64) -> u128 {
 /// 编译器连 `pump` 自己的 future 类型都定不下来（更谈不上 Send）。
 pub fn pump(ctx: &Shared) -> std::pin::Pin<Box<dyn std::future::Future<Output = usize> + Send + '_>> {
     Box::pin(async move {
+        let _pump_library = ctx.work().enter().await;
         let want = cloud::settings(ctx).concurrency.clamp(1, CONCURRENCY_MAX as i64) as usize;
         sync_gate(ctx, want);
         let ids = match rres::list_queued(ctx) {
@@ -165,6 +167,7 @@ pub fn pump(ctx: &Shared) -> std::pin::Pin<Box<dyn std::future::Future<Output = 
             let Ok(permit) = ctx.gate.clone().try_acquire_owned() else { break };
             // 登记与改状态都同步做在这一步：任务真正开跑前前端就可能来轮询，
             // 那时它看到的必须已经是"本进程在飞"，否则会被 judge_cloud 判成僵尸
+            let library = ctx.work().enter().await;
             ctx.job_begin(id);
             match rres::mark_running(ctx, id) {
                 // 抢不到 = 另一个泵已经把这一行叫走了，放坑位走人，别去云端跑第二遍
@@ -185,6 +188,7 @@ pub fn pump(ctx: &Shared) -> std::pin::Pin<Box<dyn std::future::Future<Output = 
                    排在前面的 queued 行就此没人叫——整批停在第二张，直到下次入队或重启才动。 */
                 {
                     let _live = InFlight(ctx.live.clone());
+                    let _library = library;
                     run_job(&ctx, id).await;
                 }
                 drop(permit);
@@ -197,7 +201,17 @@ pub fn pump(ctx: &Shared) -> std::pin::Pin<Box<dyn std::future::Future<Output = 
     })
 }
 
+struct JobGuard { ctx: Shared, id: i64 }
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        self.ctx.job_end(self.id);
+        // 正常终态不受影响；未来或阻塞工作被中途丢弃时，迟到材料不能再发布。
+        self.ctx.mark_error(self.id, "srv.reclaim.cloudStalled", Value::Null);
+    }
+}
+
 async fn run_job(ctx: &Shared, id: i64) {
+    let _job = JobGuard { ctx: ctx.clone(), id };
     let outcome: Result<()> = match rres::by_id(ctx, id) {
         Ok(Some(row)) if row.running() && row.is_cloud() => run_inner(ctx, &row).await,
         // 行已经被删掉或落定了：这一格要还给登记表，否则 ctx.jobs 只涨不落
@@ -205,6 +219,14 @@ async fn run_job(ctx: &Shared, id: i64) {
         Err(e) => Err(e),
     };
     finish(ctx, id, outcome);
+}
+
+pub(super) async fn edit_job(ctx: &Shared, id: i64, config: &cloud::CloudSettings, edit: cloud::Edit<'_>) -> Result<Vec<u8>> {
+    if ctx.job_cancelled(id) { return Err(AppError::fail("srv.queue.byHand")); }
+    tokio::select! {
+        result = cloud::edit_with(ctx, config, edit) => result,
+        _ = ctx.cancelled(id) => Err(AppError::fail("srv.queue.byHand")),
+    }
 }
 
 async fn run_inner(ctx: &Shared, row: &entity::ResultRow) -> Result<()> {
@@ -222,30 +244,24 @@ async fn run_inner(ctx: &Shared, row: &entity::ResultRow) -> Result<()> {
     }
     let prompt = row.prompt.clone();
     let config = spec.cloud.clone();
-    let pre = {
-        let ctx = ctx.clone();
-        let img = img.clone();
-        tokio::task::spawn_blocking(move || spec::prepare_job(&ctx, &img, &spec, mask)).await
-    }
-    .map_err(|e| AppError::fail_detail("srv.queue.cropPanic", e))??;
-    let bytes = cloud::edit_with(
-        ctx,
-        &config,
-        cloud::Edit {
-            image: Some(pre.crop.clone()),
-            mask: if pre.no_mask { None } else { Some(pre.mask.clone()) },
-            // 裁切重绘那一路的"参考"就是这一枪自己的裁切区与遮罩，不再外挂参考图
-            refs: Vec::new(),
-            prompt: &prompt,
-            size: Some(&pre.size),
-        },
-    )
-    .await?;
-    let ctx2 = ctx.clone();
+    let mut parked = {
+        let c = ctx.clone();
+        let image = img.clone();
+        let id = row.id;
+        util::image_work(ctx.clone(), util::image_pixels(&img), move || {
+            let pre = spec::prepare_job(&c, &image, &spec, mask)?;
+            park::Parked::new(&c, id, pre)
+        }).await?
+    };
+    let (image, mask, size) = parked.payload();
+    let bytes = edit_job(ctx, row.id, &config, cloud::Edit { image: Some(image), mask, refs: Vec::new(), prompt: &prompt, size: Some(&size) }).await?;
+    let c = ctx.clone();
     let id = row.id;
-    tokio::task::spawn_blocking(move || compose(&ctx2, id, &img, &pre, &bytes))
-        .await
-        .map_err(|e| AppError::fail_detail("srv.queue.stitchPanic", e))?
+    util::image_work(ctx.clone(), util::image_pixels(&img), move || {
+        let pre = parked.reload()?;
+        compose(&c, id, &img, pre, &bytes)
+    }).await
+
 }
 
 fn finish(ctx: &Shared, id: i64, r: Result<()>) {
@@ -273,3 +289,5 @@ use crate::img::codec;
 use stitch_core::stitch_crop;
 #[cfg(test)]
 mod tests;
+
+mod park;

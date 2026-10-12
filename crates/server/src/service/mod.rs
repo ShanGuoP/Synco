@@ -18,3 +18,7 @@ pub mod workflow;
 pub mod workflow_graph;
 
 pub mod localgen;
+
+pub mod work;
+
+pub mod library;

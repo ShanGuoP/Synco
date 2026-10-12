@@ -58,6 +58,11 @@ function coreDirs() {
 // 每条规则：files() 收集待扫文件，bans = [标签, 正则]，命中即违规；allow() 豁免个别文件。
 const RULES = [
   {
+    id: 'R9', title: 'api 阻塞任务统一过资料/图像准入',
+    files: () => walk(path.join(ROOT, 'crates', 'server', 'src', 'api')).filter(f => f.endsWith('.rs')),
+    bans: [['直接进入阻塞池', /\bspawn_blocking\s*\(/], ['未认领资料许可', /\butil::blocking\s*\(/]],
+  },
+  {
     id: 'R1', title: 'api 不摸库（api/*.rs 禁 rusqlite）',
     files: () => walk(path.join(ROOT, 'crates', 'server', 'src', 'api')).filter(f => f.endsWith('.rs')),
     bans: [['rusqlite', /\brusqlite\b/]],

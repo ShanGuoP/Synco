@@ -144,3 +144,33 @@ mod tests {
         );
     }
 }
+
+/// 请求整个生命周期与资料快照互斥；阻塞子工作还会持有自己的许可。
+pub async fn library(axum::extract::State(ctx): axum::extract::State<crate::state::Shared>, request: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    let _lease = ctx.work().enter().await;
+    next.run(request).await
+}
+
+#[cfg(test)]
+mod library_tests {
+#[tokio::test]
+async fn http_requests_wait_for_snapshot_lease_and_resume_after_it_is_released() {
+    let root = std::env::temp_dir().join(format!("synco-http-freeze-{}-{}", crate::util::now_ms(), crate::util::r4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = crate::state::Ctx::new(root.clone(), root.clone(), crate::repo::db::open(&root).unwrap());
+    let app = axum::Router::new().route("/probe", axum::routing::get(|| async { "ok" }))
+        .layer(axum::middleware::from_fn_with_state(ctx.clone(), crate::web::guard::library));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    let frozen = ctx.work().try_snapshot().unwrap();
+    let request = tokio::spawn(async move { reqwest::get(format!("http://127.0.0.1:{port}/probe")).await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert!(!request.is_finished());
+    drop(frozen);
+    assert_eq!(request.await.unwrap().status(), 200);
+    server.abort(); let _ = server.await;
+    drop(ctx); std::fs::remove_dir_all(root).unwrap();
+}
+
+}

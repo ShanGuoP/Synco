@@ -54,7 +54,7 @@ pub async fn proxy_edge_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Res
 /// 数目录是磁盘活（一次可能上百个子目录、上千个文件），过阻塞池，别按住 worker
 pub async fn cache_get(State(ctx): State<Shared>) -> Result<Response> {
     let c = ctx.clone();
-    let (bytes, cap) = util::blocking(move || {
+    let (bytes, cap) = util::library_work(ctx.clone(), move || {
         Ok((crate::service::imagesvc::cache_bytes(&c), crate::service::imagesvc::cache_cap(&c)))
     })
     .await?;
@@ -64,7 +64,7 @@ pub async fn cache_get(State(ctx): State<Shared>) -> Result<Response> {
 /// 手动清一次。丢掉的随时能重算回来，所以这一颗按钮不需要"确认后再删"之外的犹豫
 pub async fn cache_clear(State(ctx): State<Shared>) -> Result<Response> {
     let c = ctx.clone();
-    let (gone, freed) = util::blocking(move || Ok(crate::service::imagesvc::cache_clear(&c))).await?;
+    let (gone, freed) = util::library_work(ctx.clone(), move || Ok(crate::service::imagesvc::cache_clear(&c))).await?;
     Ok(ok(json!({ "removed": gone, "bytes": freed })))
 }
 
@@ -74,7 +74,7 @@ pub async fn cache_cap_set(State(ctx): State<Shared>, raw: Bytes) -> Result<Resp
     let mb = util::clamp_round(body.get("mb"), 0, 65536, 4096);
     rset::put(&ctx, "cache_cap_mb", &mb.to_string())?;
     let c = ctx.clone();
-    let (gone, freed) = util::blocking(move || Ok(crate::service::imagesvc::cache_sweep(&c, mb as u64 * 1048576))).await?;
+    let (gone, freed) = util::library_work(ctx.clone(), move || Ok(crate::service::imagesvc::cache_sweep(&c, mb as u64 * 1048576))).await?;
     Ok(ok(json!({ "cap_mb": mb, "removed": gone, "bytes": freed })))
 }
 
@@ -106,17 +106,17 @@ pub async fn workflow_roles_get(State(ctx): State<Shared>) -> Result<Response> {
 }
 
 pub async fn workflow_graph_get(State(ctx): State<Shared>) -> Result<Response> {
-    Ok(ok(util::blocking(move || crate::service::workflow_graph::view(&ctx)).await?))
+    Ok(ok(util::library_work(ctx.clone(), move || crate::service::workflow_graph::view(&ctx)).await?))
 }
 
 pub async fn workflow_import(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
-    Ok(ok(util::blocking(move || crate::service::workflow_graph::import(&ctx, &body)).await?))
+    Ok(ok(util::library_work(ctx.clone(), move || crate::service::workflow_graph::import(&ctx, &body)).await?))
 }
 
 pub async fn workflow_profile_post(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
-    Ok(ok(util::blocking(move || crate::service::workflow_graph::save(&ctx, body)).await?))
+    Ok(ok(util::library_work(ctx.clone(), move || crate::service::workflow_graph::save(&ctx, body)).await?))
 }
 
 /// 存手指覆盖。类名对不上的一律不入库并逐条给理由——存进去一个错类名的节点，
@@ -248,7 +248,7 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
            但也不能不给个说法：用户会以为手里那张 PNG 与屏幕上是同一回事 */
         let row = crate::models::entity::ResultRow::from_value(&r);
         let ctx2 = ctx.clone();
-        let got = match util::blocking(move || queue::lossless_bytes(&ctx2, &row)).await {
+        let got = match util::image_work(ctx.clone(), 0, move || queue::lossless_bytes(&ctx2, &row)).await {
             Ok(g) => g,
             Err(e) => {
                 out.push(serde_json::json!({ "id": id, "skipped": true, "reason": e.text().chars().take(120).collect::<String>() }));
@@ -264,7 +264,7 @@ pub async fn export_run(State(ctx): State<Shared>, raw: Bytes) -> Result<Respons
            挑名与写盘都是同步磁盘活（一次最多 500 张），整段过阻塞池 */
         let copied = {
             let p = p.clone();
-            util::blocking(move || -> Result<String> {
+            util::library_work(ctx.clone(), move || -> Result<String> {
                 let mut file = format!("{stem}_#{id}.{ext}");
                 let mut n = 2;
                 loop {

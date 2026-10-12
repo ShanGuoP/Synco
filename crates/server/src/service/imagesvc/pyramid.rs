@@ -65,17 +65,15 @@ pub fn pyramid(
 /// 已经被别人切完的那次就直接读清单回来。
 pub async fn tiles_async(ctx: &Shared, img: Image) -> Result<serde_json::Value> {
     let ctx2 = ctx.clone();
-    pyramid_async(ctx, move || tiles(&ctx2, &img)).await
+    pyramid_async(ctx, crate::util::image_pixels(&img), move || tiles(&ctx2, &img)).await
 }
 
 /// 切一套瓦片的公共入口：源图与「本地调整」的成图共用这一对限流槽，
 /// 因为两者的开销是同一件事——一整幅解码 + 每层重采样 + 上百张编码。
 /// `work` 由调用方决定切哪张图（调整那条要先读库里的参数）。
-/// 槽位在 `Ctx::slots` 上而不是模块级 static：单测各造各的 Ctx，量出来的耗时才不被别人抢槽污染。
-pub async fn pyramid_async(ctx: &Shared, work: impl FnOnce() -> Result<serde_json::Value> + Send + 'static) -> Result<serde_json::Value> {
-    let Ok(_slot) = ctx.slots.clone().acquire_owned().await else { return Err(AppError::fail("srv.tile.slotClosed")) };
-    // 崩了的那次拿不到返回值，只能报"线程没了"，细节是 JoinError 那句原文
-    tokio::task::spawn_blocking(work).await.map_err(|e| AppError::fail_detail("srv.tile.threadPanic", e))?
+/// 准入归各自 Ctx 的共同资源所有者，单测实例之间不会争抢槽位。
+pub async fn pyramid_async(ctx: &Shared, pixels: u64, work: impl FnOnce() -> Result<serde_json::Value> + Send + 'static) -> Result<serde_json::Value> {
+    crate::util::image_work(ctx.clone(), pixels, work).await
 }
 
 fn build_tiles_at(dir: &Path, root: &str, full: &Rgba) -> Result<()> {

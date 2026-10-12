@@ -87,7 +87,7 @@ pub async fn mask_post(State(ctx): State<Shared>, APath(id): APath<String>, raw:
         // 是三字节垃圾，直接写就会把用户已有的笔迹盖掉且不可恢复。解不出图就拒。
         // 解码与覆写都是同步重活，整段过阻塞池；原地覆写会让并发读者拿到半张 PNG，
         // 所以仍走 write_bytes 那套 .part→rename 纪律
-        let rel = util::blocking(move || -> Result<String> {
+        let rel = util::image_work(ctx.clone(), 0, move || -> Result<String> {
             if crate::img::codec::decode(&bytes).is_err() {
                 return Err(AppError::bad("srv.image.maskBadPng"));
             }

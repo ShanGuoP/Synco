@@ -65,7 +65,7 @@ pub async fn setup_verify(State(ctx): State<Shared>, raw: Bytes) -> Result<Respo
     };
     // 逐个算 22GB 的指纹要十几秒，放去阻塞线程池，别把 tokio 的工作线程占死
     let ctx2 = ctx.clone();
-    let rows = tokio::task::spawn_blocking(move || setup::verify(&ctx2, &root)).await.unwrap_or_default();
+    let rows = crate::util::library_work(ctx.clone(), move || Ok(setup::verify(&ctx2, &root))).await.unwrap_or_default();
     Ok(ok(serde_json::json!({ "rows": rows })))
 }
 
