@@ -95,7 +95,9 @@ export function createResultActions({ context, submitted, setRerun, backToCanvas
       const next = {
         ...s,
         prompt: s.prompt || '',
-        negative: cur.negative || d.negative,
+        // The stored cloud instruction already includes its negative prompt.
+        // Restoring the current/default negative would append it again on rerun.
+        negative: '',
         steps: legal(cur.steps, 4, 60) ?? d.steps,
         cfg: legal(cur.cfg, 0.5, 14) ?? d.cfg,
         loras: (cur.loras || []).length ? cur.loras : d.loras,
