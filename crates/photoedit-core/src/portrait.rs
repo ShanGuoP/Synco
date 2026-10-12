@@ -50,6 +50,27 @@ fn oval_mask(w: usize, h: usize, mesh: &Mesh) -> Alpha {
     for y in y0..y1 { for x in x0..x1 { m.set(x,y,(weight([x as f32,y as f32],&poly,feather)*255.0).round() as u8); }}
     m
 }
+// FaceSlim's expanded-support approach: the original silhouette must retain
+// full displacement. Skin coverage and geometry protection are different masks.
+fn shape_mask(w:usize,h:usize,mesh:&Mesh)->Alpha {
+    if w.max(h)>1600 {
+        let scale=1600.0/w.max(h) as f32;
+        let small=shape_mask((w as f32*scale).round().max(1.0) as usize,(h as f32*scale).round().max(1.0) as usize,mesh);
+        return px_core::resize_alpha(&small,w,h);
+    }
+    let poly=polygon(&mesh.points,face::OVAL,w,h);
+    let shape=face::shape_from_mesh(&mesh.points).unwrap();
+    let grow=(shape.box_norm[2]*w as f32*0.12).max(1.0);
+    let mut m=Alpha::new(w,h);
+    let expanded:Vec<_>=poly.iter().flat_map(|p| [[p[0]-grow,p[1]-grow],[p[0]+grow,p[1]+grow]]).collect();
+    let (x0,y0,x1,y1)=bounds(&expanded,w,h);
+    for y in y0..y1 {for x in x0..x1 {
+        let p=[x as f32,y as f32];
+        let t=if inside(p,&poly) {1.0} else {(1.0-distance(p,&poly)/grow).clamp(0.0,1.0)};
+        m.set(x,y,(t*t*(3.0-2.0*t)*255.0).round() as u8);
+    }}
+    m
+}
 fn skin_mask(w: usize,h: usize,mesh:&Mesh,protect:bool)->Alpha {
     if !protect {return oval_mask(w,h,mesh);}
     if w.max(h)>1600 {
@@ -95,8 +116,8 @@ pub fn apply(img: &Rgba, ops: &Portrait, meshes: &[Mesh], painted: Option<&Alpha
         if !edit.retouch.is_empty() || !edit.makeup.is_empty() { retouch(&mut cur, edit, mesh, &skin); }
         if !edit.auto.is_empty() || !edit.shape.is_empty() {
             let (p,q)=shape_pairs(edit,mesh,img.w,img.h);
-            let protection = edit.protect_background.then(|| oval_mask(img.w,img.h,mesh));
-            cur = warp::mls_pairs(&cur,&shape,&p,&q,protection.as_ref());
+            let protection = edit.protect_background.then(|| shape_mask(img.w,img.h,mesh));
+            cur = warp::mls_pairs(&cur,&shape,&p,&q,edit.auto.eye_big.norm(),protection.as_ref());
         }
     }
     if !ops.body.strength.is_empty() { cur = body(&cur,&ops.body); }
@@ -112,8 +133,8 @@ pub(crate) fn deform_mask(mask: &Alpha, ops: &Portrait, meshes: &[Mesh]) -> Alph
         let Some(mesh)=meshes.iter().find(|m| m.idx==edit.idx && face::shape_from_mesh(&m.points).is_some()) else {continue;};
         let shape=face::shape_from_mesh(&mesh.points).unwrap();
         let (p,q)=shape_pairs(edit,mesh,img.w,img.h);
-        let protection=edit.protect_background.then(|| oval_mask(img.w,img.h,mesh));
-        img=warp::mls_pairs(&img,&shape,&p,&q,protection.as_ref());
+        let protection=edit.protect_background.then(|| shape_mask(img.w,img.h,mesh));
+        img=warp::mls_pairs(&img,&shape,&p,&q,edit.auto.eye_big.norm(),protection.as_ref());
     }
     if !ops.body.strength.is_empty() {img=body(&img,&ops.body);}
     img.alpha()
@@ -196,35 +217,67 @@ fn shape_pairs(edit: &FaceEdit, mesh: &Mesh, w: usize, h: usize) -> (Vec<(f32,f3
         if let Some(j)=p.iter().position(|z| (z.0-a.0).abs()<0.1&&(z.1-a.1).abs()<0.1) { q[j].0+=b.0-a.0; q[j].1+=b.1-a.1; }
         else { p.push(a); q.push(b); }
     };
-    for (i,sign) in [(234,1.0),(93,1.0),(454,-1.0),(323,-1.0)] { add(i,sign*s.cheekbone.norm()*fw*0.055,0.0); }
-    for (i,sign) in [(172,1.0),(136,1.0),(397,-1.0),(365,-1.0)] { add(i,sign*s.jaw_width.norm()*fw*0.065,0.0); }
+    let strength=|v:crate::ops::Slider| warp::shape_strength(v.norm());
+    for (i,sign) in [(234,1.0),(93,1.0),(454,-1.0),(323,-1.0)] { add(i,sign*strength(s.cheekbone)*fw*0.055,0.0); }
+    for (i,sign) in [(172,1.0),(136,1.0),(397,-1.0),(365,-1.0)] { add(i,sign*strength(s.jaw_width)*fw*0.07,0.0); }
     for &i in face::OVAL {
         let a=px(i); let cx=(px(234).0+px(454).0)*0.5; let cy=(px(234).1+px(454).1)*0.5;
         let horiz=(a.0-cx)*u.0+(a.1-cy)*u.1;
         let vert=(a.0-nose.0)*v.0+(a.1-nose.1)*v.1;
-        add(i,-horiz*s.face_width.norm()*0.12,vert*s.face_length.norm()*0.10);
+        add(i,-horiz*strength(s.face_width)*0.15,vert*strength(s.face_length)*0.12);
     }
-    for i in [152,148,377] { add(i,0.0,s.chin_length.norm()*fw*0.08); }
+    for i in [152,148,377] { add(i,0.0,strength(s.chin_length)*fw*0.07); }
     for (ring,center,sign) in [(&shape.eye_l,shape.iris_l,-1.0),(&shape.eye_r,shape.iris_r,1.0)] {
         for &pt in ring {
             let Some(i)=mesh.points.iter().position(|p| *p==pt) else { continue; };
             let a=px(i); let cx=center[0]*w as f32; let cy=center[1]*h as f32;
-            let rx=a.0-cx; let ry=a.1-cy; let angle=s.eye_tilt.norm()*0.12*sign;
+            let rx=a.0-cx; let ry=a.1-cy; let angle=strength(s.eye_tilt)*0.16*sign;
             let (sn,cs)=angle.sin_cos(); let dx=rx*cs-ry*sn-rx; let dy=rx*sn+ry*cs-ry;
-            add(i,sign*s.eye_distance.norm()*fw*0.035+dx*u.0+dy*u.1,-s.eye_height.norm()*fw*0.03+dx*v.0+dy*v.1);
+            add(i,sign*strength(s.eye_distance)*fw*0.05+dx*u.0+dy*u.1,-strength(s.eye_height)*fw*0.04+dx*v.0+dy*v.1);
         }
     }
-    for i in [1,2,4,5] { let a=px(i); let d=(nose.0-a.0,nose.1-a.1); add(i,(d.0*u.0+d.1*u.1)*s.nose_tip.norm()*0.20,(d.0*v.0+d.1*v.1)*s.nose_tip.norm()*0.20+s.nose_length.norm()*fw*0.045); }
+    for i in [1,2,4,5] { let a=px(i); let d=(nose.0-a.0,nose.1-a.1); add(i,(d.0*u.0+d.1*u.1)*strength(s.nose_tip)*0.30,(d.0*v.0+d.1*v.1)*strength(s.nose_tip)*0.30+strength(s.nose_length)*fw*0.06); }
     let mouth=px(13);
     for &i in LIPS {
         let a=px(i); let dx=(a.0-mouth.0)*u.0+(a.1-mouth.1)*u.1;
         let dy=(a.0-mouth.0)*v.0+(a.1-mouth.1)*v.1;
-        add(i,dx*s.mouth_width.norm()*0.20,dy*if dy<0.0 { s.upper_lip.norm()*0.35 } else { s.lower_lip.norm()*0.35 });
+        add(i,dx*strength(s.mouth_width)*0.30,dy*if dy<0.0 { strength(s.upper_lip)*0.45 } else { strength(s.lower_lip)*0.45 });
+    }
+    // Eye position moves its center with the contour, including when automatic
+    // cheek shaping has already inserted a stationary center anchor.
+    if s.eye_distance.0!=0 || s.eye_height.0!=0 {
+        for (center,sign) in [(shape.iris_l,-1.0),(shape.iris_r,1.0)] {
+            let a=(center[0]*w as f32,center[1]*h as f32);
+            let dx=sign*strength(s.eye_distance)*fw*0.05;
+            let dy=-strength(s.eye_height)*fw*0.04;
+            let b=(a.0+u.0*dx+v.0*dy,a.1+u.1*dx+v.1*dy);
+            if let Some(j)=p.iter().position(|z| (z.0-a.0).abs()<0.1&&(z.1-a.1).abs()<0.1) {q[j]=b;}
+            else {p.push(a);q.push(b);}
+        }
     }
     if !p.is_empty() {
+        // Each feature gets a limit in its own anatomical scale (CainCamera's
+        // per-operation approach), instead of one small global ceiling.
+        let span=|a:usize,b:usize| {let (a,b)=(px(a),px(b));((a.0-b.0).powi(2)+(a.1-b.1).powi(2)).sqrt()};
+        for (a,b) in p.iter().zip(&mut q) {
+            let (dx,dy)=(b.0-a.0,b.1-a.1);
+            let len=(dx*dx+dy*dy).sqrt();
+            let same=|i:usize| {let z=px(i);(z.0-a.0).abs()<0.1&&(z.1-a.1).abs()<0.1};
+            let limit=if shape.eye_l.iter().chain(&shape.eye_r).any(|z| (z[0]*w as f32-a.0).abs()<0.1&&(z[1]*h as f32-a.1).abs()<0.1) {
+                span(33,133).min(span(263,362))*0.6
+            } else if [1,2,4,5,98,327].into_iter().any(same) {span(98,327)*0.65}
+            else if LIPS.iter().copied().any(same) {span(61,291)*0.4}
+            else {fw*0.12};
+            if len>limit && len>1e-6 {let k=limit/len; *b=(a.0+dx*k,a.1+dy*k);}
+        }
+        if s.mouth_width.0==0 && s.upper_lip.0==0 && s.lower_lip.0==0 {
+            for &i in LIPS {let a=px(i); if !p.iter().any(|z| (z.0-a.0).abs()<0.1 && (z.1-a.1).abs()<0.1) {p.push(a);q.push(a);}}
+        }
         let [x,y,bw,bh]=shape.box_norm;
-        for a in [[x-bw*0.1,y-bh*0.1],[x+bw*1.1,y-bh*0.1],[x-bw*0.1,y+bh*1.1],[x+bw*1.1,y+bh*1.1]] {
-            let a=(a[0]*w as f32,a[1]*h as f32); p.push(a); q.push(a);
+        let pad=(warp::MLS_SCOPE-1.0)*0.5;
+        for a in [[x-bw*pad,y-bh*pad],[x+bw*(1.0+pad),y-bh*pad],[x-bw*pad,y+bh*(1.0+pad)],[x+bw*(1.0+pad),y+bh*(1.0+pad)]] {
+            let a=(a[0]*w as f32,a[1]*h as f32);
+            if !p.iter().any(|z| (z.0-a.0).abs()<0.1&&(z.1-a.1).abs()<0.1) {p.push(a);q.push(a);}
         }
     }
     (p,q)
@@ -280,6 +333,57 @@ mod tests {
     fn image() -> Rgba {
         let mut img=Rgba::new(160,140);
         for y in 0..img.h { for x in 0..img.w { img.set(x,y,[140+(x%70) as u8,115+(y%70) as u8,100+(x%50) as u8,197]); }} img
+    }
+    #[test]
+    fn overlapping_shape_sliders_have_a_combined_displacement_limit() {
+        let mesh=fixture(0,0.5);
+        let edit:FaceEdit=serde_json::from_value(serde_json::json!({
+            "auto":{"face_slim":100,"eye_big":100,"nose_slim":100,"chin":100},
+            "shape":{"cheekbone":100,"jaw_width":100,"face_width":100,"face_length":100,"chin_length":100}
+        })).unwrap();
+        let (w,h)=(1000,800);
+        let (p,q)=shape_pairs(&edit,&mesh,w,h);
+        let a=mesh.points[234];let b=mesh.points[454];
+        let width=(((a[0]-b[0])*w as f32).powi(2)+((a[1]-b[1])*h as f32).powi(2)).sqrt();
+        for (a,b) in p.iter().zip(&q) {
+            let d=((a.0-b.0).powi(2)+(a.1-b.1).powi(2)).sqrt();
+            assert!(d<=width*0.12+1e-3,"combined displacement {d}");
+        }
+        for &i in LIPS {
+            let a=(mesh.points[i][0]*w as f32,mesh.points[i][1]*h as f32);
+            let j=p.iter().position(|v| *v==a).unwrap();assert_eq!(q[j],a);
+        }
+    }
+    #[test]
+    fn shape_protection_keeps_contour_active_and_fades_outside_face() {
+        let mesh=fixture(0,0.5);
+        let (w,h)=(1000,800);
+        let mask=shape_mask(w,h,&mesh);
+        let skin=oval_mask(w,h,&mesh);
+        for &i in face::OVAL {
+            let p=mesh.points[i];let (x,y)=((p[0]*w as f32).round() as usize,(p[1]*h as f32).round() as usize);
+            assert!(mask.get(x,y)>=250,"contour point {i} was pinned");
+            assert!(skin.get(x,y)<40,"skin boundary remains feathered");
+        }
+        assert_eq!(mask.get(500,384),255);
+        assert_eq!(mask.get(0,0),0);
+        // Just outside the right silhouette: positive support, then zero.
+        assert!(mask.get(695,384)>0 && mask.get(695,384)<255);
+        assert_eq!(mask.get(740,384),0);
+    }
+    #[test]
+    fn eye_position_controls_move_the_center_with_automatic_shaping() {
+        let mesh=fixture(0,0.5);
+        let edit:FaceEdit=serde_json::from_value(serde_json::json!({
+            "auto":{"face_slim":60,"eye_big":80},"shape":{"eye_distance":50,"eye_height":40}
+        })).unwrap();
+        let shape=face::shape_from_mesh(&mesh.points).unwrap();
+        let (p,q)=shape_pairs(&edit,&mesh,1000,800);
+        for center in [shape.iris_l,shape.iris_r] {
+            let a=(center[0]*1000.0,center[1]*800.0);
+            let i=p.iter().position(|v| (v.0-a.0).abs()<0.1&&(v.1-a.1).abs()<0.1).unwrap();
+            assert!((q[i].0-a.0).abs()>1.0 && (q[i].1-a.1).abs()>1.0);
+        }
     }
     #[test]
     fn every_shape_slider_moves_controls_and_supports_both_directions() {

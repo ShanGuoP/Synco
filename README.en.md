@@ -392,8 +392,8 @@ the interface doesn't depend on any CDN.
 
 ## Thanks
 
-Synco stands on these open-source projects. The ones below are **actually in the shipped build**, grouped by the work
-they did; versions and per-item licences are in [NOTICE](NOTICE.md).
+Thanks to these open-source projects for Synco's dependencies, models and algorithm references. Each entry describes
+its actual role; versions, licences and reference scopes are in [NOTICE](NOTICE.md).
 
 **Desktop shell and interface**
 
@@ -429,6 +429,21 @@ they did; versions and per-item licences are in [NOTICE](NOTICE.md).
 - [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) — face boxes and five-point detection
 - [MediaPipe FaceMesh ONNX](https://github.com/yakhyo/mediapipe-face-mesh-onnx) — 468 landmarks; model and topology from Google MediaPipe,
   exported by Yakhyo with weights sourced through PINTO0309's conversion. See [model licenses and pinned hashes](assets/face/README.md)
+
+**Portrait shaping algorithm references**
+
+- [GPUPixel](https://github.com/pixpark/gpupixel) — informed local radial eye scaling, support radii and distance falloff;
+  Rust maps the eye interior and surrounding texture through one continuous inverse field.
+  [Reference source](https://github.com/pixpark/gpupixel/blob/ef552bf8ce2d0d41fa9b979bfb5c7cf79374ca88/src/filter/face_reshape_filter.cc)
+- [FaceSlim](https://github.com/SysAdminDoc/FaceSlim) — informed feature-specific control points and expanded, feathered background protection.
+  Shape protection uses a separate mask from skin retouching so the face silhouette can move.
+  [Reference source](https://github.com/SysAdminDoc/FaceSlim/blob/6521f8d118d3c7062d4dfa2279e0160e05ccc8f5/faceslim/pipeline.py)
+- [CainCamera](https://github.com/CainKernel/CainCamera) — informed separate anatomical scales for cheeks, jaw, chin and eyes,
+  using pixel-space feature distances. Synco bounds combined movement per feature.
+  [Reference source](https://github.com/CainKernel/CainCamera/blob/8d1270e2a4d1e0e69940cf806c5c4ae39615eb66/filterlibrary/src/main/assets/shader/face/fragment_face_reshape.glsl)
+
+These are algorithm design references, not bundled SDKs or runtime dependencies. Synco implements its preview and output
+calculations in Rust in `crates/photoedit-core/src/warp/face.rs` and `crates/photoedit-core/src/portrait.rs`.
 
 **Transport and odds and ends**
 

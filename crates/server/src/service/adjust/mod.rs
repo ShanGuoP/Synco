@@ -65,7 +65,7 @@ pub fn ops_hash(json: &str) -> String {
 fn render_hash(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<String> {
     if ops.warp.auto.is_empty() && !ops.beauty.auto_face && !ops.portrait.needs_faces() { return Ok(ops_hash(&ops.to_json())); }
     let points=radj::landmarks(ctx,img.id)?;
-    Ok(ops_hash(&json!({"ops":ops,"face_pipeline":2,"points":points}).to_string()))
+    Ok(ops_hash(&json!({"ops":ops,"face_pipeline":4,"points":points}).to_string()))
 }
 
 fn stem(img: &Image) -> String {

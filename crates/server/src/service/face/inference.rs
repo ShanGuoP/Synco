@@ -52,6 +52,26 @@ impl Engine {
         let (sn, cs) = angle.sin_cos();
         let side = f.w.max(f.h) * 1.5;
         let center = f.center();
+        let initial = self.mesh_roi(img, center, side, angle)?;
+        if !matches_detection(&initial, f, img.w, img.h) { return Ok(Vec::new()); }
+        // Recenter the second crop on the actual oval in the eye-aligned frame.
+        // Detector boxes include variable amounts of hair and background.
+        let (mut lo, mut hi) = ([f32::MAX;2], [f32::MIN;2]);
+        for &i in face::OVAL {
+            let dx=initial[i][0]*img.w as f32-center[0];
+            let dy=initial[i][1]*img.h as f32-center[1];
+            let p=[cs*dx+sn*dy,-sn*dx+cs*dy];
+            for a in 0..2 {lo[a]=lo[a].min(p[a]); hi[a]=hi[a].max(p[a]);}
+        }
+        let mid=[(lo[0]+hi[0])*0.5,(lo[1]+hi[1])*0.5];
+        let refined_center=[center[0]+cs*mid[0]-sn*mid[1],center[1]+sn*mid[0]+cs*mid[1]];
+        let refined_side=(hi[0]-lo[0]).max(hi[1]-lo[1])*1.25;
+        let refined=self.mesh_roi(img,refined_center,refined_side,angle)?;
+        if matches_detection(&refined,f,img.w,img.h) { Ok(refined) } else { Ok(initial) }
+    }
+    fn mesh_roi(&self, img: &Rgba, center: [f32;2], side: f32, angle: f32) -> Result<Vec<[f32;2]>> {
+        if !side.is_finite() || side<1.0 {return Ok(Vec::new());}
+        let (sn,cs)=angle.sin_cos();
         let remap = |x: f32, y: f32| {
             let (dx, dy) = ((x / MESH as f32 - 0.5) * side, (y / MESH as f32 - 0.5) * side);
             [center[0] + cs * dx - sn * dy, center[1] + sn * dx + cs * dy]
@@ -68,14 +88,28 @@ impl Engine {
         let points = out[0].to_plain_array_view::<f32>().map_err(inference_error)?.iter().copied().collect::<Vec<_>>();
         let score = out[1].to_plain_array_view::<f32>().map_err(inference_error)?.iter().copied().collect::<Vec<_>>();
         if points.len() != 468 * 3 || score.len() != 1 { return Err(inference_error("Unexpected FaceMesh output shape")); }
-        // sigmoid(logit) >= 0.5 iff logit >= 0.
-        if !score[0].is_finite() || score[0] < 0.0 { return Ok(Vec::new()); }
+        // sigmoid(logit) >= 0.9; uncertain ROIs must not drive reshaping.
+        if !score[0].is_finite() || score[0] < 9.0f32.ln() { return Ok(Vec::new()); }
         let points: Vec<_> = points.chunks_exact(3).map(|p| {
             let q = remap(p[0], p[1]); [q[0] / img.w as f32, q[1] / img.h as f32]
         }).collect();
         if !points.iter().flatten().all(|x| x.is_finite()) { return Err(inference_error("Non-finite landmarks")); }
         Ok(points)
     }
+}
+// Independent detector hints catch shifted meshes even when presence is high.
+fn matches_detection(points: &[[f32;2]], f: &face::FaceBox, w: usize, h: usize) -> bool {
+    let Some(shape)=face::shape_from_mesh(points) else {return false;};
+    let px=|p:[f32;2]| [p[0]*w as f32,p[1]*h as f32];
+    let distance=|a:[f32;2],b:[f32;2]| ((a[0]-b[0]).powi(2)+(a[1]-b[1]).powi(2)).sqrt();
+    let eye_distance=distance(f.points[1],f.points[2]);
+    if eye_distance<2.0 {return false;}
+    let mut eyes=[px(shape.iris_l),px(shape.iris_r)];
+    eyes.sort_by(|a,b| a[0].total_cmp(&b[0]));
+    distance(eyes[0],f.points[1])<=eye_distance*0.35
+        && distance(eyes[1],f.points[2])<=eye_distance*0.35
+        && distance(px(points[1]),f.points[3])<=eye_distance*0.5
+        && distance(px(points[13]),f.points[4])<=eye_distance*0.5
 }
 // Bilinear RGB sampling with zero padding, matching the model's ROI contract.
 fn sample(img: &Rgba, x: f32, y: f32) -> [f32; 3] {
@@ -113,6 +147,29 @@ pub fn analyze(ctx: &Ctx, img: &Image) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detector_agreement_rejects_shifted_and_collapsed_meshes() {
+        let mut points=vec![[0.5,0.5];468];
+        for (j,&i) in face::OVAL.iter().enumerate() {
+            let a=j as f32/face::OVAL.len() as f32*std::f32::consts::TAU;
+            points[i]=[0.5+a.cos()*0.2,0.5+a.sin()*0.3];
+        }
+        for i in [33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246] {points[i]=[0.4,0.4];}
+        for i in [263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466] {points[i]=[0.6,0.4];}
+        points[1]=[0.5,0.52];points[13]=[0.5,0.64];
+        let f=face::FaceBox {x:30.0,y:20.0,w:40.0,h:60.0,score:0.95,points:[[50.0,40.0],[40.0,40.0],[60.0,40.0],[50.0,52.0],[50.0,64.0]]};
+        assert!(matches_detection(&points,&f,100,100));
+        let mut shifted=points.clone();for p in &mut shifted {p[0]+=0.15;}
+        assert!(!matches_detection(&shifted,&f,100,100));
+        assert!(!matches_detection(&vec![[0.5,0.5];468],&f,100,100));
+        // Probe both sides of the eye tolerance (seven pixels here).
+        let mut edge=f;edge.points[1][0]-=6.99;
+        // Keep the detector eye distance unchanged when shifting both hints.
+        edge.points[2][0]-=6.99;
+        assert!(matches_detection(&points,&edge,100,100));
+        edge.points[1][0]-=0.02;edge.points[2][0]-=0.02;
+        assert!(!matches_detection(&points,&edge,100,100));
+    }
     #[test]
     fn bundled_models_load_and_reject_blank_image() {
         let engine = Engine::new().unwrap();

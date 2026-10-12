@@ -40,6 +40,17 @@ Synco 的发行二进制里包含下列第三方组件的**编译产物**。这�
 许可全文位于 `assets/face/LICENSE-YuNet` 与 `assets/face/LICENSE-FaceMesh`，同时在
 `public/licenses/` 内嵌随程序分发。
 
+## 人像塑形算法参考
+
+以下项目的公开实现用于设计对照；未打包其 SDK、模型或运行时。
+Synco 在 Rust 图像内核中实现径向眼睛缩放、按五官限制位移，以及轮廓外的渐变塑形保护区域。
+
+| 项目 | 本次查阅的提交 | 上游许可证 | 参考范围 |
+| --- | --- | --- | --- |
+| [GPUPixel](https://github.com/pixpark/gpupixel) | `ef552bf8ce2d0d41fa9b979bfb5c7cf79374ca88` | Apache-2.0 | `src/filter/face_reshape_filter.cc`：局部径向缩放、半径与距离衰减 |
+| [FaceSlim](https://github.com/SysAdminDoc/FaceSlim) | `6521f8d118d3c7062d4dfa2279e0160e05ccc8f5` | MIT | `faceslim/pipeline.py`：五官控制点与外扩、羽化背景保护 |
+| [CainCamera](https://github.com/CainKernel/CainCamera) | `8d1270e2a4d1e0e69940cf806c5c4ae39615eb66` | Apache-2.0（上游 README） | `fragment_face_reshape.glsl`：各塑形操作独立的五官尺度 |
+
 ## 桌面壳
 
 [Tauri 2](https://tauri.app)（`tauri` 2.12.1 及其 build/codegen/macros/plugin 系列）— Apache-2.0 OR MIT。

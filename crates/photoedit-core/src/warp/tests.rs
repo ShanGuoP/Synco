@@ -197,6 +197,63 @@ fn 零滑杆不生成控制点() {
 }
 
 #[test]
+fn eye_only_shaping_is_local_and_does_not_require_mls_controls() {
+    let s=shape();
+    let img=striped(300,300);
+    for value in [-100,100] {
+        let a=Auto {eye_big:crate::Slider(value),..Default::default()};
+        let (p,q)=control_pairs(&a,&s,300,300);
+        assert!(p.is_empty()&&q.is_empty());
+        let out=mls(&img,&a,&s);
+        assert_ne!(out,img);
+        assert_eq!(out.get(150,145),img.get(150,145),"nose stays outside eye support");
+        assert_eq!(out.get(0,0),img.get(0,0));
+        assert_eq!(out,mls(&img,&a,&s));
+    }
+}
+
+#[test]
+fn eye_slider_resizes_pupil_pixels_in_both_directions() {
+    let s=shape();let mut img=Rgba::new(400,400);
+    for y in 0..400 {for x in 0..400 {
+        let pupil=[(170i32,140i32),(230,140)].into_iter().any(|(cx,cy)| (x as i32-cx).pow(2)+(y as i32-cy).pow(2)<=64);
+        img.set(x,y,[if pupil {255} else {0},0,0,255]);
+    }}
+    let size=|img:&Rgba| (170..195).filter(|&x| img.get(x,140)[0]>=128).count();
+    let small=mls(&img,&Auto{eye_big:crate::Slider(-100),..Default::default()},&s);
+    let large=mls(&img,&Auto{eye_big:crate::Slider(100),..Default::default()},&s);
+    assert!(size(&small)<size(&img),"negative slider must shrink eye interior");
+    assert!(size(&large)>=size(&img)+2,"full slider must visibly enlarge eye interior");
+    assert_eq!(large.get(170,140),img.get(170,140));
+    assert_eq!(large.get(200,140),img.get(200,140),"eyes must not join across the nose");
+}
+
+#[test]
+fn full_slimming_stays_bounded_and_preserves_unedited_eyes() {
+    let s=shape();
+    let (p,q)=control_pairs(&Auto {face_slim:crate::Slider(100),..Default::default()},&s,1000,1000);
+    let width=(s.jaw.last().unwrap()[0]-s.jaw[0][0])*1000.0;
+    for (a,b) in p.iter().zip(&q) {
+        assert!(((b.0-a.0).powi(2)+(b.1-a.1).powi(2)).sqrt()<=width*0.075+1e-3);
+    }
+    for pt in s.eye_l.iter().chain(&s.eye_r) {
+        let a=(pt[0]*1000.0,pt[1]*1000.0);
+        let i=p.iter().position(|v| *v==a).unwrap(); assert_eq!(q[i],a);
+    }
+}
+
+#[test]
+fn inverse_mls_samples_source_at_displaced_control() {
+    let img=striped(120,120);
+    // A scale has an exact similarity inverse: q=1.25*p, so q=60 samples p=48.
+    let s=FaceShape {box_norm:[0.0,0.0,1.0,1.0],..Default::default()};
+    let p=[(24.0,24.0),(48.0,48.0),(72.0,24.0),(24.0,72.0)];
+    let q=p.map(|v| (v.0*1.25,v.1*1.25));
+    let out=super::face::mls_pairs(&img,&s,&p,&q,0.0,None);
+    assert_eq!(out.get(60,60),img.get(48,48));
+}
+
+#[test]
 fn 瘦脸的控制点朝脸内收() {
     let s = shape();
     let mut a = Auto::default();

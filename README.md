@@ -371,10 +371,10 @@ Noto is a trademark of Google Inc.
 
 ---
 
-## 感谢
+## 致谢
 
-Synco 站在这些开源项目的肩膀上。下面这些是**这一版真正打进了成品**的，按它们各自出的力分一下；
-版本号与逐条许可证见 [NOTICE](NOTICE.md)。
+感谢以下开源项目为 Synco 提供的程序依赖、模型与算法参考。各条目说明实际用途；
+版本号、许可证与算法参考范围见 [NOTICE](NOTICE.md)。
 
 **桌面壳与界面**
 
@@ -407,6 +407,18 @@ Synco 站在这些开源项目的肩膀上。下面这些是**这一版真正打
 - [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) —— 人脸框与五点检测
 - [MediaPipe FaceMesh ONNX](https://github.com/yakhyo/mediapipe-face-mesh-onnx) —— 468 点关键点；模型与拓扑来自 Google MediaPipe，
   由 Yakhyo 导出，权重来源经 PINTO0309 的转换。模型许可与固定校验值见 [模型说明](assets/face/README.md)
+
+**人像塑形算法参考**
+
+- [GPUPixel](https://github.com/pixpark/gpupixel) —— 参考 `FaceReshapeFilter` 的局部径向大眼、作用半径与距离衰减思路，
+  在 Rust 中实现眼睛内部和周边纹理的连续反向映射。[参考源码](https://github.com/pixpark/gpupixel/blob/ef552bf8ce2d0d41fa9b979bfb5c7cf79374ca88/src/filter/face_reshape_filter.cc)
+- [FaceSlim](https://github.com/SysAdminDoc/FaceSlim) —— 参考按五官组织控制点，以及向脸部轮廓外扩展、羽化背景保护区域的设计；
+  塑形保护与皮肤美颜使用不同蒙版，让瘦脸可以移动轮廓。[参考源码](https://github.com/SysAdminDoc/FaceSlim/blob/6521f8d118d3c7062d4dfa2279e0160e05ccc8f5/faceslim/pipeline.py)
+- [CainCamera](https://github.com/CainKernel/CainCamera) —— 参考瘦脸、削脸、下巴、大眼各自独立的控制尺度，以及像素坐标中的五官距离；
+  Synco 分别限制各五官的叠加位移。[参考源码](https://github.com/CainKernel/CainCamera/blob/8d1270e2a4d1e0e69940cf806c5c4ae39615eb66/filterlibrary/src/main/assets/shader/face/fragment_face_reshape.glsl)
+
+这些项目用于算法设计参考，未作为 SDK 或运行时依赖打包。Synco 的实现位于
+`crates/photoedit-core/src/warp/face.rs` 与 `crates/photoedit-core/src/portrait.rs`，由 Rust 完成预览与成图计算。
 
 **收发与杂项**
 
