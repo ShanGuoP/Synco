@@ -1,5 +1,6 @@
 // 调整参数默认形状与面板字段清单，字段名与服务端 EditOps 一致。
 import { blankPortrait } from '../portrait.js';
+import { blankDevelop } from './developModel.js';
 /** 与后端 photoedit-core 的 EditOps 同形：缺的字段服务端按默认补，多余字段会被拒 */
 export const blankOps = () => ({
   v: 1,
@@ -9,6 +10,7 @@ export const blankOps = () => ({
   beauty: { smooth: 0, texture: 0, blemish: 0, even_tone: 0, brighten: 0, de_shine: 0, sharpen: 0, by_mask: false, auto_face: false },
   portrait: blankPortrait(),
   lut: null,
+  develop: blankDevelop(),
 });
 
 export const RATIOS = [['free', 'ad.ratioFree', 0], ['1:1', 'ad.ratio11', 1], ['4:3', 'ad.ratio43', 4 / 3], ['3:4', 'ad.ratio34', 3 / 4], ['16:9', 'ad.ratio169', 16 / 9], ['3:2', 'ad.ratio32', 1.5], ['9:16', 'ad.ratio916', 9 / 16]];

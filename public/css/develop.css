@@ -1,0 +1,51 @@
+/* Photo development controls follow the neutral reference design. */
+html:root .develop-panel { gap: 0; --bg-field: #fff; --txt: #343b45; --txt-2: #666e78; --line: #edf0f3; --line-hi: #e1e5ea; background: #fff; color: var(--txt); font-family: system-ui, sans-serif; }
+html:root .develop-panel > .grp { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 14px 4px; gap: 0; }
+.develop-heading { display: flex; align-items: center; gap: 8px; }
+.develop-heading > .grp__hd { flex: 1; min-width: 0; text-align: left; font-weight: 650; font-size: 13px; }
+.develop-reset { border: 0; background: transparent; color: #87909a; font: 21px/1 system-ui; width: 27px; height: 28px; cursor: pointer; border-radius: 5px; }
+.develop-reset:hover { background: #f1f3f5; color: #343b45; }
+.develop-reset:focus-visible { outline: 2px solid #9ba8b7; }
+.develop-stack { display: grid; gap: 10px; min-width: 0; }
+html:root .develop-panel .develop-local-tools { display: grid; grid-template-columns: minmax(0,1fr) 34px 34px; gap: 8px; align-items: center; }
+html:root .develop-panel .develop-local-tools select { width: 100%; }
+html:root .develop-panel .develop-local-tools .btn { height: 34px; padding: 0; }
+html:root .develop-panel .grp__bd { padding-top: 18px; }
+html:root .develop-panel .grp .grp { border: 0; padding-top: 12px; }
+html:root .develop-panel .prow { display: grid; grid-template-columns: 76px minmax(40px,1fr) 50px; gap: 12px; align-items: center; min-height: 28px; padding-block: 0; }
+html:root .develop-panel .prow__top { display: contents; }
+html:root .develop-panel .prow__name { grid-column: 1; grid-row: 1; font-size: 12px; font-weight: 400; white-space: nowrap; }
+html:root .develop-panel .prow__ctl { grid-column: 3; grid-row: 1; }
+html:root .develop-panel .prow > .slider { grid-column: 2; grid-row: 1; min-width: 0; }
+html:root .develop-panel .input--num { width: 50px; height: 28px; border: 1px solid #e7eaee; background: #fff; color: #5a6370; border-radius: 5px; box-shadow: 0 1px 2px #1b253908; font: 12px/1 system-ui; text-align: center; padding: 2px; }
+html:root .develop-panel .slider__track { height: 3px; background: linear-gradient(90deg,#b8bcc1,#e7e9ec); border-radius: 3px; }
+html:root .develop-panel .slider__fill { background: transparent; }
+html:root .develop-panel .slider__thumb { width: 9px; height: 9px; background: #fff; border: 1.5px solid #8d949d; box-shadow: none; }
+html:root .develop-panel .develop-track--temp .slider__track { background: linear-gradient(90deg,#557cfa,#d7d5cf,#eac063); }
+html:root .develop-panel .develop-track--tint .slider__track { background: linear-gradient(90deg,#4fce8b,#d8d7de,#d963e5); }
+html:root .develop-panel .develop-track--saturation .slider__track, html:root .develop-panel .develop-track--vibrance .slider__track { background: linear-gradient(90deg,#6fa4cb,#d3d3d5,#d78f93); }
+html:root .develop-panel .develop-track--hue .slider__track { background: linear-gradient(90deg,#d77676,#d6bb70,#7aaa86,#7ba6c6,#af88ba,#d77676); }
+html:root .develop-panel .btn { border-color: #e5e8ec; background: #fff; color: #59636f; font-family: inherit; }
+.develop-auto { white-space: nowrap; font-size: 11px; }
+html:root .develop-panel .chip-s { font-family: inherit; border-color: #e5e8ec; background: #fff; color: #6a7480; }
+html:root .develop-panel .chip-s.is-on { background: #eef1f4; color: #333d49; border-color: #aab3bf; }
+html:root .develop-panel .muted { color: #8a929c; font-size: 11px; }
+.develop-tabs { display: flex; flex-wrap: wrap; gap: 5px; }
+.develop-curve { display: block; width: 100%; height: auto; aspect-ratio: 3/2; border: 1px solid #e6e9ed; border-radius: 6px; cursor: crosshair; touch-action: none; }
+.develop-curve:focus-visible { outline: 2px solid #a5b1bf; }
+.develop-hint { margin: 0; }
+.develop-swatches { display: flex; justify-content: space-between; gap: 6px; padding: 6px 0; }
+.develop-swatch { height: 20px; width: 20px; border-radius: 50%; background: var(--swatch); border: 2px solid #fff; outline: 1px solid transparent; cursor: pointer; }
+.develop-swatch.is-on { outline-color: #7d8793; }
+.develop-color-wheel { width: 100%; height: 42px; border: 1px solid #e5e8ec; border-radius: 6px; background: #fff; cursor: pointer; }
+.develop-mask-overlay { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 8; touch-action: none; cursor: crosshair; }
+.develop-mask-hover { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 8; pointer-events: none; }
+.develop-mask-hover[hidden] { display: none; }
+.pan-through > .develop-mask-hover { visibility: hidden; }
+.local-mask-confirm { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 15; }
+.local-mask-confirm[hidden] { display: none; }
+.ed-stage:has(.is-moving-local-mask) .brush-cur { visibility: hidden; }
+.develop-gpu { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+.develop-gpu-badge { position: absolute; left: calc(8px * var(--iz, 1)); bottom: calc(8px * var(--iz, 1)); color: #fff; background: #343b45b8; padding: calc(4px * var(--iz, 1)) calc(7px * var(--iz, 1)); border-radius: calc(4px * var(--iz, 1)); font: calc(11px * var(--iz, 1)) system-ui; pointer-events: none; z-index: 3; }
+html:root .develop-panel [hidden] { display: none !important; }
+html:root .develop-panel[aria-busy="true"] { opacity: .65; cursor: progress; }

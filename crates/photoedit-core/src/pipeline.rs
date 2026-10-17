@@ -73,15 +73,37 @@ pub fn apply_chain(img: &Rgba, ops: &EditOps, chain: &Chain) -> Rgba {
     if let (Some(l), Some(table)) = (ops.lut.as_ref(), chain.lut) {
         let strength = l.strength.pos().min(1.0);
         if strength > 0.0 {
-            cur = Cow::Owned(lut::apply(&cur, table, strength));
+            cur = Cow::Owned(lut::apply_with(&cur, table, strength, ops.develop.lut_tetra));
         }
     }
     if !ops.color.is_empty() {
         cur = Cow::Owned(color::apply(&cur, &ops.color));
     }
+    if !ops.develop.is_empty() {
+        let d=&ops.develop;
+        if d.detail != Default::default() {cur=Cow::Owned(crate::develop::spatial::denoise(&cur,&d.detail));}
+        if !d.look.is_empty() {cur=Cow::Owned(crate::develop::tone::apply(&cur,&d.look));}
+        for local in d.locals.iter().filter(|l|l.enabled&&(!l.color.is_empty()||!l.look.is_empty())) {
+            let mut alpha=crate::develop::mask::raster(img.w,img.h,&local.mask);
+            if !ops.portrait.is_empty() {alpha=crate::portrait::deform_mask(&alpha,&ops.portrait,chain.meshes);}
+            if geometric {alpha=geometry::apply_alpha(&alpha,&ops.geometry);}
+            if !ops.warp.strokes.is_empty()||(!ops.warp.auto.is_empty()&&shape.is_some()) {
+                let mut rgba=Rgba::new(alpha.w,alpha.h);
+                for (i,a) in alpha.v.iter().enumerate(){rgba.px[i*4+3]=*a;}
+                alpha=warp::apply(&rgba,&ops.warp,shape).alpha();
+            }
+            let adjusted=color::apply(&cur,&local.color);
+            let adjusted=crate::develop::tone::apply(&adjusted,&local.look);
+            let mut mixed=cur.into_owned();
+            for(i,p) in mixed.px.chunks_exact_mut(4).enumerate(){let a=alpha.v[i] as u32;for(k,v)in p.iter_mut().take(3).enumerate(){*v=(((*v as u32)*(255-a)+(adjusted.px[i*4+k] as u32)*a+127)/255) as u8;}}
+            cur=Cow::Owned(mixed);
+        }
+    }
     if !ops.beauty.is_empty() {
         cur = Cow::Owned(beauty::apply(&cur, &ops.beauty, mask.as_deref()));
     }
+    if ops.develop.lens != Default::default() {cur=Cow::Owned(crate::develop::spatial::lens(&cur,&ops.develop.lens));}
+    if !ops.develop.effects.vignette.is_zero()||!ops.develop.effects.grain.is_zero()||!ops.develop.effects.film.is_zero() {cur=Cow::Owned(crate::develop::spatial::effects(&cur,&ops.develop.effects));}
     cur.into_owned()
 }
 

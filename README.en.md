@@ -186,8 +186,12 @@ smaller is smoother, larger lets you paint finer.
 | `Esc` | Leave compare / close the dialog |
 | `?` | Shortcut list |
 
-**Local adjustments** (the "Local edit" page in the right rail): five groups of parameters — crop, face shaping, liquify,
-colour, beauty — and the original is never rewritten end to end. The crop entry point is the row of aspect ratios:
+**Local adjustments** (the "Local edit" page in the right rail): Basic, Color, Curves, HSL, Color grading, Detail, Lens corrections, Effects, Local adjustments and Beauty.
+Basic and Color start expanded, with a reset for each section. Beauty, portrait retouching, body shaping and liquify all live in the last Beauty section; crop and rotation are under Lens corrections.
+Development includes eight hue bands, RGB/channel/hue curves, three-way grading, independent luma/chroma denoising, manual lens correction, seeded grain and vignette. Import `.cube` LUTs directly and choose trilinear or tetrahedral interpolation.
+Independent local layers support radial/linear gradients and brushes, feathering, inversion and erasing. Edit masks in source coordinates; they follow crop, rotation and shaping when applied.
+WebGL2 provides an approximate interaction preview for point color operations. Rust CPU confirmation replaces it after editing; spatial operations and original-resolution export use the CPU.
+The original is never rewritten. The crop entry point is the row of aspect ratios:
 tap one and the frame appears on the canvas ("Free" places the frame without locking the ratio; tapping the current
 one collapses it). Drag the handles or the whole frame, and **nothing commits until you press "✔ Crop this"** —
 skip it and it's as if you never cropped. Rotation and flips apply immediately; the 90° step isn't resampled.
@@ -198,7 +202,7 @@ another image in the project carrying those parameters, while the source keeps i
 ### Face awareness & one-click shaping
 
 Opening a photo analyzes faces automatically and reuses cached results. The first model load may take a moment;
-photos and landmark inference stay on your machine. Open the right rail's "Local edit" tab and expand "Face awareness & shaping":
+photos and landmark inference stay on your machine. Open "Local edit", then expand "Face awareness & shaping" inside the last Beauty section:
 
 1. **Shape**: press "Natural shape" for gentle defaults, or adjust face slimming, eye enlargement, nose slimming and chin.
    Each slider ranges from `-100` to `100`; `0` preserves the original. "Reset shaping" resets only these four values,
@@ -315,8 +319,11 @@ Needs Rust 1.99 or newer (`rust-version` is declared in `Cargo.toml`).
 git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # gives you synco.exe / synco-tools.exe / synco-desktop.exe
-npx @tauri-apps/cli build    # gives you the NSIS installer target/release/bundle/nsis/Synco_<version>-setup.exe (the version comes from Cargo.toml)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
+# Produces target/release/bundle/nsis/Synco_<version>_x64-setup.exe; version comes from Cargo.toml.
 ```
+
+Before packaging, the build hook checks absolute paths in Tauri permission caches. After moving a checkout or copying an old target directory, it clears only the affected Tauri package artifacts. Existing installers and photo data are preserved. Direct Tauri CLI builds run the same check.
 
 Just want a look, no packaging:
 

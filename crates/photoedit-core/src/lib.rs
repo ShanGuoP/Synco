@@ -6,8 +6,10 @@
 
 pub mod beauty;
 pub mod color;
+pub mod develop;
 pub mod face;
 pub mod geometry;
+pub mod histogram;
 pub mod lut;
 pub mod ops;
 pub mod pipeline;

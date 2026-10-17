@@ -57,7 +57,7 @@ export function makeSlider({ min = 0, max = 100, step = 1, value = min, onChange
   node.addEventListener('pointercancel', end);
   node.addEventListener('keydown', e => {
     if (disabled) return;               // 原来只切 class 与 tabIndex，方向键照样改值并写进 settings
-    const big = step * (max - min) / 10;
+    const big = Math.max(step, (max - min) / 10);
     const map = { ArrowRight: step, ArrowUp: step, ArrowLeft: -step, ArrowDown: -step, PageUp: big, PageDown: -big };
     if (e.key in map) { commit(snap(v + map[e.key], min, max, step)); e.preventDefault(); }
     else if (e.key === 'Home') { commit(min); e.preventDefault(); }
@@ -88,12 +88,13 @@ export function makeSlider({ min = 0, max = 100, step = 1, value = min, onChange
  * 参数行：上行「标签 ←→ 数值直输」，下行整宽滑杆
  * 滑杆与直输框双向同步，直输只在 change/Enter 时提交，避免边打字边触发
  */
-export function makeProw({ label, tip = '', min = 0, max = 100, step = 1, value, onChange, format, flag = '' }) {
+export function makeProw({ label, tip = '', min = 0, max = 100, step = 1, value, onChange, format, formatInput, flag = '' }) {
   let v = snap(value ?? min, min, max, step);
-  const num = el('input.input.input--num', { type: 'number', min, max, step, value: fmtNum(v, step), 'aria-label': label });
+  const inputText = n => formatInput ? formatInput(n) : fmtNum(n, step);
+  const num = el('input.input.input--num', { type: 'number', min, max, step, value: inputText(v), 'aria-label': label });
   const sl = makeSlider({
     min, max, step, value: v, format, ariaLabel: label,
-    onChange: nv => { v = nv; num.value = fmtNum(nv, step); onChange?.(nv); },
+    onChange: nv => { v = nv; num.value = inputText(nv); onChange?.(nv); },
   });
   const row = el('div.prow', {},
     el('div.prow__top', {},
@@ -104,7 +105,7 @@ export function makeProw({ label, tip = '', min = 0, max = 100, step = 1, value,
   );
   const commit = () => {
     const raw = parseFloat(num.value);
-    if (!Number.isFinite(raw)) { num.value = fmtNum(v, step); return; }
+    if (!Number.isFinite(raw)) { num.value = inputText(v); return; }
     sl.set(raw);
   };
   num.addEventListener('change', commit);
@@ -113,7 +114,7 @@ export function makeProw({ label, tip = '', min = 0, max = 100, step = 1, value,
   return {
     node: row,
     get value() { return v; },
-    set(nv, silent) { sl.set(nv, silent); v = sl.value; num.value = fmtNum(v, step); },
+    set(nv, silent) { sl.set(nv, silent); v = sl.value; num.value = inputText(v); },
     setDisabled(b) { sl.setDisabled(b); num.disabled = !!b; row.classList.toggle('is-off', !!b); },
   };
 }

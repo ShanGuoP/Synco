@@ -77,6 +77,8 @@
   box-shadow: inset 0 -2px 0 var(--spot);
 }
 .textarea { resize: vertical; min-height: 84px; line-height: 1.75; }
+/* Native selects need a complete text line after theme padding is applied. */
+html:root select.input, html:root select.select { box-sizing: border-box; height: 34px; min-height: 34px; padding: 4px 28px 4px 10px; line-height: 24px; min-width: 0; max-width: 100%; }
 .input--num { width: 66px; padding: 4px 2px; text-align: right; font-variant-numeric: tabular-nums; font-family: var(--f-mono); font-size: var(--f-sm); }
 /* 原生步进箭头在浅色稿纸上更吵，数值改由滑杆/直输承担 */
 .input--num::-webkit-outer-spin-button, .input--num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -375,5 +377,3 @@
 .tab:active:not(:disabled) { color: var(--spot-txt); }
 .promo:active { background: var(--line-hi); }
 .rail__link:active, .rail__recent:active { background: var(--line-hi); }
-
-

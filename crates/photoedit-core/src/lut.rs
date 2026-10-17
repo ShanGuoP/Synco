@@ -152,7 +152,7 @@ impl Lut {
         let n = |v: f32, k: usize| {
             let lo = self.min[k];
             let hi = self.max[k];
-            (v / 255.0 - lo).clamp(0.0, 1.0) / (hi - lo)
+            ((v / 255.0 - lo) / (hi - lo)).clamp(0.0, 1.0)
         };
         match self.dim {
             Dim::One => {
@@ -194,10 +194,25 @@ impl Lut {
             }
         }
     }
+    /// Tetrahedral interpolation for 3D tables; 1D tables retain linear interpolation.
+    pub fn map_tetra(&self,r:f32,g:f32,b:f32)->[f32;3] {
+        if self.dim==Dim::One {return self.map(r,g,b);}
+        let f=[r,g,b].map(|v|v/255.0);
+        let f=std::array::from_fn::<_,3,_>(|k|((f[k]-self.min[k])/(self.max[k]-self.min[k])).clamp(0.0,1.0)*(self.size-1) as f32);
+        let base=f.map(|v|(v.floor() as usize).min(self.size-2));
+        let d=std::array::from_fn::<_,3,_>(|k|f[k]-base[k] as f32);
+        let mut axes=[0,1,2];axes.sort_by(|a,b|d[*b].total_cmp(&d[*a]));
+        let at=|c:[usize;3]|self.at((c[2]*self.size+c[1])*self.size+c[0]);
+        let a=at(base);let mut p=base;p[axes[0]]+=1;let b=at(p);p[axes[1]]+=1;let c=at(p);p[axes[2]]+=1;let e=at(p);
+        std::array::from_fn(|k|(a[k]+d[axes[0]]*(b[k]-a[k])+d[axes[1]]*(c[k]-b[k])+d[axes[2]]*(e[k]-c[k]))*255.0)
+    }
 }
 
 /// 应用 LUT，`strength` 0..1 是与原图的混合比。1.0 = 完全过表。
 pub fn apply(img: &Rgba, lut: &Lut, strength: f32) -> Rgba {
+    apply_with(img,lut,strength,false)
+}
+pub fn apply_with(img: &Rgba, lut: &Lut, strength: f32,tetra:bool) -> Rgba {
     if strength <= 0.0 {
         return img.clone();
     }
@@ -209,7 +224,7 @@ pub fn apply(img: &Rgba, lut: &Lut, strength: f32) -> Rgba {
         let y0 = band * rows;
         for (i, px) in blk.chunks_exact_mut(4).enumerate() {
             let g = (y0 * w + i) * 4;
-            let [r, gc, b] = lut.map(src[g] as f32, src[g + 1] as f32, src[g + 2] as f32);
+            let [r, gc, b] = if tetra {lut.map_tetra(src[g] as f32, src[g + 1] as f32, src[g + 2] as f32)} else {lut.map(src[g] as f32, src[g + 1] as f32, src[g + 2] as f32)};
             let mix = |a: u8, v: f32| (a as f32 * (1.0 - strength) + v.clamp(0.0, 255.0) * strength).round().clamp(0.0, 255.0) as u8;
             px[0] = mix(src[g], r);
             px[1] = mix(src[g + 1], gc);

@@ -6,6 +6,12 @@
 
 // R6 的账本：前端搬完一个文件就加一行，只增不减。
 const DONE_I18N = [
+  'public/js/views/editor/histogram.js',
+  'public/js/views/editor/adjust/developModel.js',
+  'public/js/views/editor/adjust/developPanel.js',
+  'public/js/views/editor/adjust/curveEditor.js',
+  'public/js/views/editor/adjust/localOverlay.js',
+  'public/js/views/editor/adjust/gpuPreview.js',
   'public/js/views/editor/adjust/cropOverlay.js',
   'public/js/views/editor/workspace/shell.js',
   'public/js/views/editor/workspace/results.js',
@@ -33,6 +39,9 @@ const DONE_I18N = [
 //     读者是坐在机器前的人，不是界面。
 //   · `crates/*/examples/*.rs`——对拍用的开发工具，同上。
 const DONE_I18N_RS = [
+  'crates/server/src/service/adjust/histogram.rs',
+  'crates/server/src/service/adjust/gpu.rs',
+  'crates/server/src/service/adjust/lut_import.rs',
   'crates/server/src/service/work.rs', 'crates/server/src/service/library/mod.rs', 'crates/server/src/service/library/tests.rs', 'crates/server/src/service/queue/park.rs',
   'crates/server/src/service/localgen.rs', 'crates/server/src/service/deletion.rs', 'crates/server/src/repo/deletion.rs',
   'crates/server/src/service/workflow/tests.rs',

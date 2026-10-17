@@ -16,6 +16,7 @@ import { createAdjust } from '../adjust.js';
 import { createHistory } from '../history.js';
 import { createFilmstrip } from '../filmstrip.js';
 import { createCompare } from '../compare.js';
+import { createHistogram } from '../histogram.js';
 import { t } from '../../../core/i18n.js';
 const TOOLS = [
   { key: 'pan',   ico: 'hand',   label: 'ed.tPan', tip: 'ed.tPanTip' },
@@ -62,6 +63,7 @@ export function buildEditorShell({
     el('div.ed-hud.ed-hud--bl', {}, hudSize),
     el('div.ed-hud.ed-hud--br', {}, hudFit, hudOne, hudZoom));
 
+  const histogram = createHistogram({ stage, layer });
   const viewport = createViewport({ stage, layer, onView: v => tiles.sync(v.s, v.tx, v.ty, v.stageW, v.stageH), onScale: s => {
     const pct = `${Math.round(s * 100)}%`;
     zoomPct.textContent = pct;
@@ -146,7 +148,7 @@ export function buildEditorShell({
   /* 「本地调整」：参数在这一层，像素永远交给服务端算。它要用 params 那条状态行，
      所以必须排在 params 之后；面板那一页再反向挂回 params 的标签条上 */
   const adjust = createAdjust({
-    layer, poster, stage, viewport, tiles,
+    layer, poster, stage, viewport, tiles, histogram,
     line: (txt, isErr) => params.line(txt, isErr),
     idOf: () => context()?.imgId || 0,
     infoOf: () => context()?.info,

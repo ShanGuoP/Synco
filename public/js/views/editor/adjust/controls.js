@@ -16,7 +16,7 @@ export function switchRow(label, tip, onChange) {
   let on = false;
   const sw = el('button.toggle', { type: 'button', role: 'switch', 'aria-checked': 'false', 'aria-label': label });
   sw.addEventListener('click', () => { on = !on; sw.setAttribute('aria-checked', String(on)); onChange?.(on); });
-  const node = el('div.prow', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '28px' } },
+  const node = el('div.prow', { style: { display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: '28px' } },
     el('span.prow__name', { text: label, 'data-tip': tip }), sw);
   return { node, set(v) { on = !!v; sw.setAttribute('aria-checked', String(on)); } };
 }

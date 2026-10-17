@@ -216,12 +216,14 @@ pub struct EditOps {
     pub beauty: Beauty,
     pub portrait: crate::portrait_ops::Portrait,
     pub lut: Option<Lut>,
+    #[serde(skip_serializing_if = "crate::develop::params::Develop::is_default")]
+    pub develop: crate::develop::params::Develop,
 }
 
 /// `v` 的默认值就是当前版本号：新起的参数对象序列化出去要能被后续版本认出来
 impl Default for EditOps {
     fn default() -> Self {
-        Self { v: 1, geometry: Geometry::default(), warp: Warp::default(), color: Color::default(), beauty: Beauty::default(), portrait: Default::default(), lut: None }
+        Self { v: 1, geometry: Geometry::default(), warp: Warp::default(), color: Color::default(), beauty: Beauty::default(), portrait: Default::default(), lut: None, develop: Default::default() }
     }
 }
 
@@ -244,6 +246,10 @@ impl EditOps {
         let mut rep = Vec::new();
         let mut ops = read_ops(&v, &mut rep);
         if let Some(mut p) = portrait { p.clamp(&mut rep); ops.portrait=p; }
+        if let Some(d) = v.get("develop").filter(|v| !v.is_null()) {
+            ops.develop = serde_json::from_value(d.clone()).map_err(|e|e.to_string())?;
+            ops.develop.clamp(&mut rep);
+        }
         Ok((ops, rep))
     }
 
@@ -268,6 +274,7 @@ impl EditOps {
             && self.beauty.is_empty()
             && self.portrait.is_empty()
             && self.lut.is_none()
+            && self.develop.is_empty()
     }
 
     /// 越界项夹回量程，同时把裁切框收进画面。**就地修改**，返回被改过的字段名。
@@ -279,6 +286,7 @@ impl EditOps {
 }
 
 fn clamp_ops(o: &mut EditOps, rep: &mut Vec<String>) {
+    o.develop.clamp(rep);
     o.portrait.clamp(rep);
     if !o.geometry.rotate_deg.is_finite() {
         rep.push("geometry.rotate_deg".to_string());

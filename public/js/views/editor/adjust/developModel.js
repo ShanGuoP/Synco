@@ -1,0 +1,13 @@
+// Defaults and identity predicates for photo development, shared by panel and session.
+export const blankCurves = () => Object.fromEntries(['rgb', 'red', 'green', 'blue', 'hue_hue', 'hue_sat', 'hue_lum'].map(k => [k, []]));
+export const blankLook = () => ({ basic: { brightness: 0, whites: 0, blacks: 0 }, curves: blankCurves(), hsl: Array.from({ length: 8 }, () => ({ hue: 0, saturation: 0, luminance: 0 })), grading: { shadows: { hue: 0, saturation: 0, luminance: 0 }, midtones: { hue: 0, saturation: 0, luminance: 0 }, highlights: { hue: 0, saturation: 0, luminance: 0 }, balance: 0, blending: 0 } });
+export const blankDevelop = () => ({ look: blankLook(), detail: { luma: 0, chroma: 0 }, lens: { distortion: 0, chromatic: 0 }, effects: { vignette: 0, midpoint: 50, feather: 70, grain: 0, size: 25, roughness: 50, film: 0, seed: 1 }, locals: [], lut_tetra: false });
+export const blankLocal = () => ({ enabled: true, mask: { kind: 'radial', center: [0.5, 0.5], end: [0.75, 0.5], radius: [0.3, 0.3], feather: 70, invert: false, strokes: [] }, color: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, temp: 0, tint: 0, saturation: 0, vibrance: 0, clarity: 0, sharpen: 0, preset: null }, look: blankLook() });
+export const lookEmpty = l => Object.values(l.basic).every(v => !v) && l.hsl.every(b => Object.values(b).every(v => !v)) && Object.entries(l.curves).every(([k, p]) => p.every(([x, y]) => Math.abs(y - (k.startsWith('hue_') ? 0.5 : x)) < 1e-6)) && ['shadows', 'midtones', 'highlights'].every(k => !l.grading[k].saturation && !l.grading[k].luminance);
+export const developEmpty = d => lookEmpty(d.look) && !d.detail.luma && !d.detail.chroma && !d.lens.distortion && !d.lens.chromatic && !d.effects.vignette && !d.effects.grain && !d.effects.film && d.locals.every(l => !l.enabled || (Object.entries(l.color).every(([k, v]) => k === 'preset' || !v) && lookEmpty(l.look)));
+export function restoreDevelop(saved) {
+  const d = blankDevelop();
+  if (!saved) return d;
+  const look = l => { const base = blankLook(); return { ...base, ...l, basic: { ...base.basic, ...l?.basic }, curves: { ...base.curves, ...l?.curves }, hsl: base.hsl.map((b, i) => ({ ...b, ...l?.hsl?.[i] })), grading: { ...base.grading, ...l?.grading, ...Object.fromEntries(['shadows', 'midtones', 'highlights'].map(k => [k, { ...base.grading[k], ...l?.grading?.[k] }])) } }; };
+  return { ...d, ...saved, look: look(saved.look), detail: { ...d.detail, ...saved.detail }, lens: { ...d.lens, ...saved.lens }, effects: { ...d.effects, ...saved.effects }, locals: (saved.locals || []).map(l => ({ ...blankLocal(), ...l, color: { ...blankLocal().color, ...l.color }, look: look(l.look), mask: { ...blankLocal().mask, ...l.mask } })) };
+}

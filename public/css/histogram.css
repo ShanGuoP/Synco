@@ -1,0 +1,24 @@
+/* Fixed viewport HUD; histogram pixels do not scale when the photograph is zoomed. */
+.histogram { position: absolute; top: 14px; right: 14px; z-index: 12; width: 252px; max-width: calc(100% - 28px); border: 1px solid #ffffff1c; border-radius: 9px; background: #292b30f2; color: #d5d8df; box-shadow: 0 3px 14px #0002; font: 11px/1.4 system-ui,sans-serif; user-select: none; }
+.histogram__head { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; }
+.histogram__head > span:first-child { font-weight: 600; }
+.histogram__basis { margin-left: auto; color: #8e949f; font-size: 10px; }
+.histogram button { border: 0; background: transparent; color: #a9b0bc; font: inherit; padding: 2px 6px; border-radius: 4px; cursor: pointer; }
+.histogram button:hover { background: #ffffff12; color: #f3f4f6; }
+.histogram button:focus-visible { outline: 1px solid #a5b7d2; outline-offset: 1px; }
+.histogram__collapse { min-width: 20px; font-size: 17px !important; }
+.histogram__body { padding: 0 10px 8px; }
+.histogram__modes { display: flex; gap: 4px; margin-bottom: 6px; }
+.histogram__modes button[aria-pressed="true"] { background: #ffffff14; color: #f2f3f7; }
+.histogram__plot { display: block; width: 100%; height: 76px; }
+.histogram__footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-top: 6px; }
+.histogram__status { font-size: 9px; color: #9198a5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.histogram__clip[aria-pressed="true"] { background: #ffffff18; }
+.histogram__clip--shadow[aria-pressed="true"] { color: #8ab1ff; }
+.histogram__clip--high[aria-pressed="true"] { color: #ff9993; }
+.histogram button:disabled { opacity: .4; cursor: default; }
+.histogram.is-pending .histogram__plot { opacity: .55; }
+.histogram__clipping { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none; z-index: 7; }
+.histogram [hidden], .histogram[hidden], .histogram__clipping[hidden] { display: none !important; }
+.ed-stage:has(.cmp.is-on) > .histogram { display: none; }
+@media (max-width: 620px) { .histogram { width: 210px; top: 8px; right: 8px; } .histogram__plot { height: 60px; } }

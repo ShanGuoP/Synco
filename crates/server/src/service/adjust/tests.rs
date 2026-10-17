@@ -32,6 +32,17 @@ fn cleanup(ctx: std::sync::Arc<Ctx>, dir: &std::path::PathBuf) {
 }
 
 #[test]
+fn development_snapshot_replays_curves_local_masks_and_seeded_effects() {
+    let (dir,ctx,img)=fixture("development-snapshot");
+    let (ops,_)=EditOps::parse(r#"{"geometry":{"rotate_deg":90,"flip_h":true},"develop":{"look":{"hsl":[{},{"hue":15,"saturation":20},{},{},{},{},{},{}],"curves":{"red":[[0,0],[0.5,0.6],[1,1]]},"grading":{"shadows":{"hue":220,"saturation":20}}},"detail":{"chroma":35},"effects":{"grain":45,"seed":142,"vignette":-20},"locals":[{"mask":{"kind":"brush","strokes":[{"points":[[0.2,0.3],[0.6,0.5]],"radius":0.12}]},"color":{"exposure":35}}]}}"#).unwrap();
+    let expected=photo_with(&ctx,&img,&ops).unwrap();let snap=snapshot_inputs(&ctx,&img,&ops).unwrap();
+    radj::put(&ctx,img.id,&EditOps::default().to_json()).unwrap();
+    let restored=photo_from_snapshot(&ctx,&img,&ops,&snap,None).unwrap();assert_eq!(expected,restored);
+    assert_ne!(restored,photoedit_core::apply_geometry(&orig_rgba(&ctx,&img).unwrap(),&ops.geometry));
+    cleanup(ctx,&dir);
+}
+
+#[test]
 fn portrait_snapshot_preserves_each_face_and_painted_mask_after_refresh() {
     let (dir,ctx,mut img)=fixture("portrait-snapshot");
     let mut source=Rgba::new(160,140);
@@ -137,6 +148,20 @@ fn 轨迹入库前抽稀() {
     assert_eq!(ops.warp.strokes[0].points.len(), 2, "抽稀没生效：{:?}", ops.warp.strokes[0].points);
     assert!(rep.iter().any(|x| x.starts_with("warp.strokes.points")), "{rep:?}");
     cleanup(ctx, &dir);
+}
+
+#[test]
+fn histogram_sidecars_follow_preview_revisions_and_recover_missing_cache() {
+    let(dir,ctx,img)=fixture("histogram-cache");let mut ops=EditOps::default();ops.color.exposure.0=35;
+    let a=build_preview(&ctx,&img,&ops).unwrap();let h=histogram::preview(&ctx,&img,&ops,&a).unwrap();
+    assert_eq!(h.pixels,800);assert_eq!(h,photoedit_core::histogram::compute(&pixels(&ctx,&img,&ops,Grade::Proxy).unwrap()));
+    assert!(a.abs.with_extension("hist.json").is_file());
+    std::fs::write(a.abs.with_extension("hist.json"),b"broken json").unwrap();
+    assert_eq!(histogram::preview(&ctx,&img,&ops,&a).unwrap(),h);
+    ops.color.exposure.0=-40;let b=build_preview(&ctx,&img,&ops).unwrap();assert!(!a.abs.with_extension("hist.json").exists());
+    assert_ne!(histogram::preview(&ctx,&img,&ops,&b).unwrap().red,h.red);
+    let source=histogram::source(&ctx,&img).unwrap();assert_eq!(source,photoedit_core::histogram::compute(&orig_rgba(&ctx,&img).unwrap()));
+    cleanup(ctx,&dir);
 }
 
 #[test]

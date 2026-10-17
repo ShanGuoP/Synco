@@ -2,6 +2,10 @@ import { createCropOverlay } from './cropOverlay.js';
 import { blankOps, RATIOS, COLOR_KEYS, BEAUTY_KEYS, BRUSHES } from './model.js';
 import { grp, switchRow } from './controls.js';
 import { relock, wrapDeg } from './cropMath.js';
+import { makeDevelopPanel } from './developPanel.js';
+import { developEmpty, restoreDevelop } from './developModel.js';
+import { makeLocalOverlay } from './localOverlay.js';
+import { makeGpuPreview } from './gpuPreview.js';
 // 本地调整（0.3）：右栏「本地调整」页 + 视口上的裁切 overlay + 液化笔刷。
 //
 // 铁律还是那一条：像素不在浏览器里落盘。这里发的是**参数**，收的是服务端渲染好的预览。
@@ -20,7 +24,7 @@ import { portraitEmpty, makePortraitPanel } from '../portrait.js';
 const PREVIEW_MS = 150;
 
 export function createAdjust(deps) {
-  const { layer, poster, stage, viewport, tiles, line, idOf, infoOf, onForked, brushLocked, onFrame } = deps;
+  const { layer, poster, stage, viewport, tiles, histogram, line, idOf, infoOf, onForked, brushLocked, onFrame } = deps;
 
   let ops = blankOps();
   let faceAnalysis = null;
@@ -28,6 +32,9 @@ export function createAdjust(deps) {
   let imageEpoch = 0;
   let frame = { w: 1, h: 1 };      // 当前底图那张的宽高（= 几何段之后的那个域，成图那一档的尺寸）
   let mode = 'off';               // off | crop | warp
+  let sourceReady = false;
+  let resultReady = false;
+  let modeEpoch = 0;
   let seq = 0;                    // 预览序号守卫：晚到的旧响应必须认出自己过期
   let dirty = false;
   let lastCrop = null;            // 「回到上次裁切」
@@ -133,7 +140,7 @@ export function createAdjust(deps) {
       if (epoch !== imageEpoch || id !== idOf()) return;
       faceAnalysis = result;
       // Refresh pixels if analysis changed an active skin mask or shape.
-      if (!isIdentity()) touch();
+      if (!autoQuiet() || ops.beauty.auto_face || ops.portrait.faces.length) touch();
     } catch (e) {
       if (epoch === imageEpoch && id === idOf()) line(t('ad.faceFail', { msg: short(e) }), true);
     } finally {
@@ -160,11 +167,10 @@ export function createAdjust(deps) {
 
   /* ==================== 调色 + 美颜 ==================== */
   const COLOR = {};
-  const colorBox = el('div', { style: { display: 'grid', gap: '10px' } }, ...COLOR_KEYS.map(([k, label, tip]) => {
-    const ctl = makeProw({ label: t(label), min: -100, max: 100, step: 1, value: 0, tip: t(tip), onChange: v => { ops.color[k] = v; if (ops.color.preset) { ops.color.preset = null; paintPreset(); } touch(); } });
+  for (const [k, label, tip] of COLOR_KEYS) {
+    const ctl = makeProw({ label: t(label), min: k === 'exposure' ? -1.5 : -100, max: k === 'exposure' ? 1.5 : 100, step: k === 'exposure' ? 0.015 : 1, formatInput: k === 'exposure' ? v => String(Number(v.toFixed(3))) : undefined, value: 0, tip: t(tip), onChange: v => { ops.color[k] = k === 'exposure' ? Math.round(v / 1.5 * 100) : v; if (ops.color.preset) { ops.color.preset = null; paintPreset(); } touch(); } });
     COLOR[k] = ctl;
-    return ctl.node;
-  }));
+  }
   const presetChips = el('div.chips');
   const lutSel = el('select.input', { 'aria-label': t('ad.lutAria') });
   const lutCtl = makeProw({ label: t('ad.lutStrength'), min: 0, max: 100, step: 1, value: 100, tip: t('ad.lutStrengthTip'), onChange: v => { if (ops.lut) { ops.lut.strength = v; touch(); } } });
@@ -175,6 +181,18 @@ export function createAdjust(deps) {
     if (v) lutCtl.set(ops.lut.strength, true);
     touch();
   });
+  const lutFile = el('input', { type: 'file', accept: '.cube', hidden: true, onchange: async () => {
+    const file = lutFile.files?.[0], id = idOf(), epoch = imageEpoch, at = rev;
+    lutFile.value = ''; if (!file || !id) return;
+    try {
+      if (file.size > 4 * 1024 * 1024) throw new Error(t('dev.lutTooLarge'));
+      const result = await api.importLut(id, file.name, await file.text());
+      if (id !== idOf() || epoch !== imageEpoch || at !== rev) return;
+      const names = [...lutSel.options].map(o => o.value).filter(Boolean); if (!names.includes(result.name)) names.push(result.name);
+      ops.lut = { name: result.name, strength: 100 }; buildLuts(names); paintPaints(); touch();
+    } catch (e) { if (id === idOf() && epoch === imageEpoch) toastErr(t('dev.importLut'), short(e)); }
+  } });
+  const lutImport = el('button.btn.btn--ghost.btn--sm', { type: 'button', text: t('dev.importLut'), onclick: () => lutFile.click() });
   const BEAUTY = {};
   const maskSw = switchRow(t('ad.byMask'), t('ad.byMaskTip'), v => { ops.beauty.by_mask = v; touch(); });
   const autoSkinSw = switchRow(t('ad.autoSkin'), t('ad.autoSkinTip'), v => { ops.beauty.auto_face = v; touch(); });
@@ -193,15 +211,14 @@ export function createAdjust(deps) {
     el('p.muted', { text: t('ad.maskNote') }));
   BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
 
-  const node = el('div.adj-panel', {},
-    el('p.muted', { text: t('ad.footNote') }),
-    grp(t('ad.grpGeo'), true, geoBox),
-    grp(t('ad.grpFace'), false, faceBox),
-    grp(t('portrait.bodyGroup'), true, portraitPanel.bodyNode),
-    grp(t('ad.grpWarp'), true, warpBox),
-    grp(t('ad.grpColor'), true, el('div', { style: { display: 'grid', gap: '10px' } },
-      el('span.muted', { text: t('ad.presetNote') }), presetChips, lutSel, lutCtl.node, colorBox)),
-    grp(t('ad.grpBeauty'), true, beautyBox),
+  const developPanel = makeDevelopPanel({ getOps: () => ops, colorControls: COLOR, geometry: grp(t('ad.grpGeo'), true, geoBox),
+    beauty: el('div.develop-stack', {}, beautyBox, grp(t('ad.grpFace'), true, faceBox), grp(t('portrait.bodyGroup'), true, portraitPanel.bodyNode), grp(t('ad.grpWarp'), true, warpBox)),
+    presets: presetChips, lut: el('div.develop-stack', {}, lutSel, lutCtl.node, lutImport, lutFile),
+    onChange: () => { paintPaints(); paintGeo(); touch(); }, onAuto: () => automatic(), onWhiteBalance: () => toggleMode('white'),
+    onEditMask: () => { if (developPanel.local()) toggleMode('local'); }, onConfirmMask: () => { if (mode === 'local') exitMode(); }, maskEditing: () => mode === 'local',
+    onMaskSelection: () => { if (!developPanel.local() && mode === 'local') exitMode(); localOverlay.sync(); },
+  });
+  const node = el('div.adj-panel.develop-panel', {}, ...developPanel.groups,
     el('div.adj-actions', {},
       el('button.btn.btn--primary.btn--sm', { type: 'button', text: t('ad.render'), onclick: renderFull }),
       el('button.btn.btn--accent.btn--sm', { type: 'button', text: t('ad.fork'), onclick: forkNew }),
@@ -215,6 +232,27 @@ export function createAdjust(deps) {
   const warpCanvas = el('canvas.adj-warp', { 'aria-hidden': 'true', hidden: true });
   const disc = el('div.adj-disc', { hidden: true, 'aria-hidden': 'true' });
   layer.append(el('div.adj-overlay', {}, cropLayer, warpCanvas, disc));
+  const maskOk = el('button.btn.btn--primary.local-mask-confirm', { type: 'button', text: t('dev.confirmMask'), hidden: true, onclick: () => { if (mode === 'local') exitMode(); } });
+  stage.append(maskOk);
+  const localHoverReady = () => !node.inert && !node.closest('[hidden]') && developPanel.moveActive();
+  const localOverlay = makeLocalOverlay({ layer, viewport, modeOf: () => mode, readyOf: () => sourceReady, getLocal: developPanel.local,
+    hoverReady: localHoverReady, moveReady: () => resultReady && localHoverReady(), getOps: () => ops, getInfo: infoOf,
+    onChange: () => { developPanel.sync(); touch(); }, onPick: point => automatic(point) });
+  node.addEventListener('click', () => localOverlay.sync());
+  const gpuPreview = makeGpuPreview({ layer, getInfo: infoOf, allowed: () => mode === 'off' && !geoActive() });
+  const sourceEditOps = frozen => ({ ...frozen, geometry: blankOps().geometry, warp: blankOps().warp, portrait: blankOps().portrait, beauty: blankOps().beauty,
+    develop: { ...frozen.develop, lens: blankOps().develop.lens, locals: [] } });
+  async function automatic(point = null) {
+    const id = idOf(), epoch = imageEpoch, at = rev, pickEpoch = modeEpoch;
+    if (!id) return;
+    try {
+      const result = await api.adjustAuto(id, point);
+      if (id !== idOf() || epoch !== imageEpoch || at !== rev) return;
+      if (point && (mode !== 'white' || modeEpoch !== pickEpoch)) return;
+      Object.assign(ops.color, result.color); if (result.basic) Object.assign(ops.develop.look.basic, result.basic);
+      ops.color.preset = null; if (mode === 'white') exitMode(true); paintPaints(); touch();
+    } catch (e) { if (id === idOf() && epoch === imageEpoch) line(t('ad.previewFail', { msg: short(e) }), true); }
+  }
 
   /* ==================== 参数 ⇄ 界面 ==================== */
   const quad = () => Math.round(ops.geometry.rotate_deg / 90) * 90;
@@ -224,7 +262,7 @@ export function createAdjust(deps) {
     && COLOR_KEYS.every(([k]) => !ops.color[k])
     // texture 不参与判恒等，服务端那条也是同一个口径：磨皮归零时它不碰像素，
     // 算进来只会逼出一张与上一版逐位相同的白渲染
-    && BEAUTY_KEYS.every(([k]) => k === 'texture' || !ops.beauty[k]) && portraitEmpty(ops.portrait) && !ops.lut;
+    && BEAUTY_KEYS.every(([k]) => k === 'texture' || !ops.beauty[k]) && portraitEmpty(ops.portrait) && !ops.lut && developEmpty(ops.develop);
 
   function paintGeo() {
     portraitPanel.syncGuide();
@@ -247,7 +285,8 @@ export function createAdjust(deps) {
     for (const c of presetChips.children) c.classList.toggle('is-on', (c.dataset.p || '') === hit);
   }
   function paintPaints() {
-    for (const [k] of COLOR_KEYS) COLOR[k].set(ops.color[k] ?? 0, true);
+    developPanel.sync();
+    for (const [k] of COLOR_KEYS) COLOR[k].set(k === 'exposure' ? (ops.color[k] || 0) * 1.5 / 100 : ops.color[k] ?? 0, true);
     for (const [k] of BEAUTY_KEYS) BEAUTY[k].set(ops.beauty[k] ?? 0, true);
     BEAUTY.texture.setDisabled(ops.beauty.smooth <= 0);
     maskSw.set(!!ops.beauty.by_mask);
@@ -300,7 +339,7 @@ export function createAdjust(deps) {
   }
 
   /* ==================== 预览与保存 ==================== */
-  function touch() { rev++; dirty = true; clearTimeout(timer); timer = setTimeout(commit, PREVIEW_MS); }
+  function touch() { rev++; dirty = true; resultReady = false; histogram.pending(); gpuPreview.request(idOf(), ops); clearTimeout(timer); timer = setTimeout(commit, PREVIEW_MS); }
 
   /** 一次"存参数 + 拉预览"。seq 守卫：连拖滑杆时旧响应必须闭嘴 */
   function commit() {
@@ -323,22 +362,27 @@ export function createAdjust(deps) {
       if (r?.clamped?.length) line(t('ad.clamped', { n: r.clamped.length, list: r.clamped.slice(0, 2).join(t('settings.sepList')) }));
       // 裁切模式背后必须一直铺"没裁但其它都算完"的那一张：底图自己要是被裁过，
       // 框就画在已经缩过的那张上，再拖一次量的是另一个坐标系
-      const isProbe = mode === 'crop';
-      const p = isProbe
+      const previewMode = mode;
+      const sourceEdit = mode === 'local' || mode === 'white';
+      const isProbe = mode === 'crop' || sourceEdit;
+      const p = sourceEdit ? await api.adjustPreviewWith(id, sourceEditOps(frozen)) : isProbe
         ? await api.adjustPreviewWith(id, { ...frozen, geometry: { ...frozen.geometry, crop: null } })
         : await api.adjustPreview(id);
       if (!mine()) return false;
+      if (at !== rev) return true;
       if (at === rev) dirty = false;   // 在飞的这一趟期间又动了参数就别清标记：那一次还排在定时器里
+      if (mode !== previewMode) return true;
       applyPreview(p, isProbe);
       return true;
     } catch (e) {
-      if (mine()) line(t('ad.previewFail', { msg: short(e) }), true);
+      if (mine()) { histogram.unavailable(); line(t('ad.previewFail', { msg: short(e) }), true); }
       return false;
     }
   }
 
   function applyPreview(p, isProbe = false) {
     if (!p?.preview_url) return;
+    gpuPreview.clear();
     if (p.w > 0 && p.h > 0) frame = { w: p.w, h: p.h };
     // 预览画的是"调整后"的那个域，上一版的瓦片与它对不上：先撤干净再换底
     dropTiles();
@@ -350,8 +394,12 @@ export function createAdjust(deps) {
     poster.src = p.preview_url;
     poster.hidden = false;
     // 海报解出来才知道它那档分辨率够不够屏幕用；不够就补真像素那一档（见 ensureTiles）
-    poster.onload = () => ensureTiles();
+    const epoch = imageEpoch, editingEpoch = modeEpoch;
+    const ready = () => { if (epoch !== imageEpoch || editingEpoch !== modeEpoch) return; resultReady = !isProbe; sourceReady = isProbe && (mode === 'local' || mode === 'white'); localOverlay.sync(); histogram.confirmed(p.histogram); ensureTiles(); };
+    poster.onload = ready;
+    if (poster.complete && poster.naturalWidth) queueMicrotask(ready);
     paintCrop();
+    localOverlay.sync();
     paintRatio();
     ensureTiles();
   }
@@ -409,6 +457,7 @@ export function createAdjust(deps) {
   async function restoreSource(reshowTiles = true) {
     const info = infoOf();
     if (!info) return;
+    histogram.pending();
     if (mode) exitMode(true);      // 源图这一路自己摆底图，别让退出再去要一张调整预览
     frame = { w: info.w, h: info.h };
     viewIdentity = true;
@@ -418,6 +467,9 @@ export function createAdjust(deps) {
     poster.src = info.proxy_url || info.thumb_url || info.orig_url;
     paintCrop();
     paintRatio();
+    const epoch = imageEpoch, at = rev;
+    try { const p = await api.adjustPreviewWith(info.id, blankOps()); if (epoch === imageEpoch && info.id === idOf() && at === rev && viewIdentity) histogram.confirmed(p.histogram); }
+    catch { if (epoch === imageEpoch) histogram.unavailable(); }
     // 源图这一路不等用户放大就补瓦片：装载时本来就要摆好，参数清空同理
     if (reshowTiles && !info.orig_dead) await fetchTiles('src');
   }
@@ -432,9 +484,18 @@ export function createAdjust(deps) {
   }
 
   function toggleMode(m) {
+    gpuPreview.clear();
     if (mode === m) { exitMode(); return; }
-    if (mode) exitMode();
-    if (m === 'crop') {
+    if (mode !== 'off') exitMode();
+    if (m === 'local' || m === 'white') {
+      histogram.pending();
+      mode = m; resultReady = false; sourceReady = false; stage.classList.add('is-adjust'); localOverlay.sync();
+      maskOk.hidden = m !== 'local'; developPanel.syncMaskMode();
+      const id = idOf(), epoch = imageEpoch, at = rev, token = ++modeEpoch;
+      api.adjustPreviewWith(id, sourceEditOps(structuredClone(ops))).then(p => { if (mode === m && id === idOf() && epoch === imageEpoch && at === rev && token === modeEpoch) applyPreview(p, true); }).catch(e => { if (token === modeEpoch && epoch === imageEpoch) line(t('ad.previewFail', { msg: short(e) }), true); });
+      line(t(m === 'white' ? 'dev.whiteHint' : 'dev.maskHint'));
+    } else if (m === 'crop') {
+      histogram.pending();
       mode = 'crop';
       stage.classList.add('is-adjust');
       cropLayer.hidden = false;
@@ -463,8 +524,14 @@ export function createAdjust(deps) {
   /** silent = 只收界面，连"回到库里参数那一张"的预览也不发：
       换图（不能替上一张落参数）、restoreSource（它自己会摆源图）、✔（紧接着要提交）都走这条 */
   function exitMode(silent = false) {
+    gpuPreview.clear();
     const was = mode;
     mode = 'off';
+    modeEpoch++;
+    sourceReady = false;
+    if (was !== 'off') resultReady = false;
+    maskOk.hidden = true; developPanel.syncMaskMode();
+    localOverlay.reset();
     stage.classList.remove('is-adjust', 'is-warp');
     paintWarpBtn();
     cropLayer.hidden = true;
@@ -473,15 +540,16 @@ export function createAdjust(deps) {
     const c = warpCanvas.getContext('2d');
     warpCanvas.hidden = true;
     if (c) c.clearRect(0, 0, warpCanvas.width, warpCanvas.height);
-    if (was === 'crop') {
+    if (was === 'crop' || was === 'local' || was === 'white') {
+      if (!silent) histogram.pending();
       cropDraft = null;              // 没按 ✔ 的框就地作废：参数与库里那份都没动过
       paintCrop();
       if (!silent) {
         // 裁切期间铺的是"没裁"的试算底，退出换回库里参数真正那一张——只读，不改参数
-        const id = idOf();
-        const s = ++seq;
-        const mine = () => s === seq && idOf() === id && mode === 'off';
-        api.adjustPreview(id).then(p => { if (mine()) applyPreview(p); }).catch(e => { if (mine()) line(t('ad.cropResultFail', { msg: short(e) })); });
+        const id = idOf(), epoch = imageEpoch, at = rev;
+        const mine = () => epoch === imageEpoch && idOf() === id && mode === 'off' && at === rev;
+        // Finish an in-flight source-domain edit before restoring the saved full chain.
+        (async () => { if (dirty) await flushNow(); if (!mine()) return; const p = await api.adjustPreview(id); if (mine()) applyPreview(p); })().catch(e => { if (mine()) line(t('ad.cropResultFail', { msg: short(e) })); });
       }
     }
   }
@@ -677,7 +745,7 @@ export function createAdjust(deps) {
   }
 
   async function clearAll() {
-    if (isIdentity()) { line(t('ad.alreadyEmpty')); return; }
+    if (isIdentity() && JSON.stringify(ops.develop) === JSON.stringify(blankOps().develop)) { line(t('ad.alreadyEmpty')); return; }
     if (!await confirm({ title: t('ad.clearAll'), body: t('ad.clearAllBody'), ok: t('ad.clearOnly') })) return;
     if (ops.geometry.crop) lastCrop = [...ops.geometry.crop];
     cropDraft = null;
@@ -693,7 +761,13 @@ export function createAdjust(deps) {
 
   /* ==================== 换图 ==================== */
   async function onImage(info, current = () => true) {
+    resultReady = false;
+    histogram.reset();
+    node.inert = true; node.setAttribute('aria-busy', 'true');
+    gpuPreview.reset();
+    developPanel.resetSelection();
     imageEpoch++; faceAnalysis = null; faceBusy = false; paintFace();
+    const openingEpoch = imageEpoch;
     if (mode) exitMode(true);   // 换图：只把界面收掉，绝不替上一张落定（那一下会把旧裁切写进这张）
     const generation = ++seq;     // A→B→A 也要认会话，不能只认图片号
     const mine = () => generation === seq && current() && idOf() === info.id;
@@ -727,6 +801,7 @@ export function createAdjust(deps) {
         color: { ...d.color, ...(r?.ops?.color || {}) },
         beauty: { ...d.beauty, ...(r?.ops?.beauty || {}) },
         portrait: { ...d.portrait, ...(r?.ops?.portrait || {}), body: { ...d.portrait.body, ...(r?.ops?.portrait?.body || {}) } },
+        develop: restoreDevelop(r?.ops?.develop),
         lut: r?.ops?.lut ?? null,
       };
       faceAnalysis = r?.face_analysis || null;
@@ -739,7 +814,11 @@ export function createAdjust(deps) {
       paintPaints();
       paintGeo();
       paintCrop();
-      if (isIdentity()) return false;   // 空参数不用换底图：装载流程那侧已经把源图与瓦片摆好了
+      if (isIdentity()) {
+        if (!info.orig_dead) { const p = await api.adjustPreview(info.id); if (mine()) { resultReady = true; histogram.confirmed(p.histogram); } }
+        else histogram.unavailable();
+        return false;
+      }
       // 库里带着参数进来：底图直接换成这套参数渲染的那一张，别让用户对着源图想象结果
       const p = await api.adjustPreview(info.id);
       if (!mine()) return false;
@@ -747,7 +826,9 @@ export function createAdjust(deps) {
       if (geoActive()) brushLocked?.(t('ad.geomLocked'));
       return true;   // 这一张的显示已经是调整预览，装载流程就别再去摆源图瓦片了
     } catch (e) {
-      if (mine()) line(t('ad.paramsFail', { msg: short(e) }));
+      if (mine()) { histogram.unavailable(); line(t('ad.paramsFail', { msg: short(e) })); }
+    } finally {
+      if (openingEpoch === imageEpoch) { node.inert = false; node.setAttribute('aria-busy', 'false'); }
     }
     return false;
   }
@@ -777,7 +858,7 @@ export function createAdjust(deps) {
     },
     flush: flushNow,
     restoreSource,
-    exit() { if (mode) exitMode(); },
+    exit() { if (mode !== 'off') exitMode(); },
     get mode() { return mode; },
     get geometryActive() { return geoActive(); },
     get dirty() { return dirty; },

@@ -93,6 +93,35 @@ pub async fn adjust_post(State(ctx): State<Shared>, APath(id): APath<String>, ra
 }
 
 /// 预览：proxy 档同步渲染，回 URL。同参数已有档直接复用（文件名里带参数指纹）。
+pub async fn automatic_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
+    let body=body_of(raw).await?;
+    let iid=path_id(&id)?;
+    let Some(img)=photo_of(&ctx,iid).await? else {return Ok(err(404,"srv.common.noImage"))};
+    let point=body.get("point").filter(|p|!p.is_null()).map(|p|serde_json::from_value::<[f32;2]>(p.clone())).transpose().map_err(|e|AppError::detail("srv.adjust.badOpsJson",e))?;
+    let ctx2=ctx.clone();
+    let result=util::image_work(ctx.clone(),util::image_pixels(&img),move||adjust::automatic(&ctx2,&img,point)).await?;
+    Ok(ok(result))
+}
+
+pub async fn gpu_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes)->Result<Response> {
+    let body=body_of(raw).await?;
+    let iid=path_id(&id)?;
+    if photo_of(&ctx,iid).await?.is_none(){return Ok(err(404,"srv.common.noImage"));}
+    let(mut ops,_)=EditOps::parse(&ops_of_body(&body).to_string()).map_err(|e|AppError::detail("srv.adjust.badOpsJson",e))?;
+    ops.clamp();let ctx2=ctx.clone();
+    let result=util::image_work(ctx.clone(),33*33*33,move||adjust::gpu::table(&ctx2,&ops)).await?;
+    Ok(ok(result))
+}
+
+pub async fn lut_import_post(State(ctx):State<Shared>,APath(id):APath<String>,raw:Bytes)->Result<Response> {
+    let body=body_of(raw).await?;let iid=path_id(&id)?;
+    if photo_of(&ctx,iid).await?.is_none(){return Ok(err(404,"srv.common.noImage"));}
+    let name=body.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
+    let text=body.get("text").and_then(Value::as_str).unwrap_or("").to_owned();let ctx2=ctx.clone();
+    let result=util::library_work(ctx.clone(),move||adjust::lut_import::import(&ctx2,&name,&text)).await?;
+    Ok(ok(result))
+}
+
 pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let body = body_of(raw).await?;
     let iid = path_id(&id)?;
@@ -112,11 +141,13 @@ pub async fn preview_post(State(ctx): State<Shared>, APath(id): APath<String>, r
         if ops.is_identity() {
             // 没参数就别白算一遍：把当前档位原样交回去
             let rel = img.proxy_path.clone().unwrap_or(img.orig_path.clone());
-            return Ok(json!({ "preview_url": format!("/file/{rel}"), "w": img.w, "h": img.h, "ms": 0, "reused": true, "identity": true }));
+            let histogram=adjust::histogram::source(&ctx2,&img)?;
+            return Ok(json!({ "preview_url": format!("/file/{rel}"), "w": img.w, "h": img.h, "ms": 0, "reused": true, "identity": true,"histogram":histogram }));
         }
         let b = adjust::build_preview(&ctx2, &img, &ops)?;
         let mut v = adjust::preview_json(&b).as_object().cloned().unwrap_or_default();
         v.insert("identity".into(), json!(false));
+        v.insert("histogram".into(),serde_json::to_value(adjust::histogram::preview(&ctx2,&img,&ops,&b)?).map_err(|e|AppError::fail_detail("srv.adjust.renderGone",e))?);
         Ok(Value::Object(v))
     })
     .await?;

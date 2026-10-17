@@ -73,6 +73,9 @@ export const api = {
   tiles:   id => request(`/api/images/${id}/tiles`),
   /** 本地调整（0.3）：读参数+预设/LUT 名单、存参数、预览、成图、另存为新图 */
   adjust:       id => request(`/api/images/${id}/adjust`),
+  adjustAuto:   (id, point = null) => request(`/api/images/${id}/adjust/auto`, { method: 'POST', body: { point } }),
+  adjustGpu:    (id, ops) => request(`/api/images/${id}/adjust/gpu`, { method: 'POST', body: { ops } }),
+  importLut:    (id, name, text) => request(`/api/images/${id}/adjust/lut`, { method: 'POST', body: { name, text } }),
   saveAdjust:   (id, ops) => request(`/api/images/${id}/adjust`, { method: 'POST', body: { ops } }),
   faceCrop: (id, ops, ratio) => request(`/api/images/${id}/adjust/face-crop`, { method: 'POST', body: { ops, ratio } }),
   analyzeFaces: id => request(`/api/images/${id}/adjust/faces`, { method: 'POST', body: {} }),

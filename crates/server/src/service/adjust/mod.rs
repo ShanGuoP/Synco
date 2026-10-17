@@ -19,6 +19,17 @@ use photoedit_core::{apply_chain, Chain, EditOps, FaceShape, LutTable};
 use serde_json::{json, Value};
 use stitch_core::{Alpha, Rgba};
 use std::path::PathBuf;
+pub mod gpu;
+pub mod histogram;
+pub mod lut_import;
+
+pub fn automatic(ctx:&Ctx,img:&Image,point:Option<[f32;2]>)->Result<Value> {
+    let base=orig_rgba(ctx,img)?;
+    let base=codec::scale_to_long_edge(&base,1200);
+    let (color,basic)=photoedit_core::develop::automatic::analyze(&base,point);
+    if point.is_some() {Ok(json!({"color":{"temp":color.temp,"tint":color.tint}}))}
+    else {Ok(json!({"color":{"exposure":color.exposure,"contrast":color.contrast,"highlights":color.highlights,"shadows":color.shadows},"basic":basic}))}
+}
 
 /// 预览档质量：与 proxy 同一档偏上，滑杆拖动时要看得清细节
 pub const PREV_Q: u8 = 90;
@@ -63,9 +74,11 @@ pub fn ops_hash(json: &str) -> String {
 /// Face-dependent pixels get a different immutable URL when analysis changes.
 /// Submitted inputs are records: a refresh must never delete their history.
 fn render_hash(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<String> {
-    if ops.warp.auto.is_empty() && !ops.beauty.auto_face && !ops.portrait.needs_faces() { return Ok(ops_hash(&ops.to_json())); }
+    if ops.warp.auto.is_empty() && !ops.beauty.auto_face && !ops.portrait.needs_faces() {
+        return Ok(if ops.lut.is_some() {ops_hash(&json!({"ops":ops,"lut_domain":2}).to_string())}else{ops_hash(&ops.to_json())});
+    }
     let points=radj::landmarks(ctx,img.id)?;
-    Ok(ops_hash(&json!({"ops":ops,"face_pipeline":4,"points":points}).to_string()))
+    Ok(ops_hash(&json!({"ops":ops,"face_pipeline":4,"lut_domain":2,"points":points}).to_string()))
 }
 
 fn stem(img: &Image) -> String {
@@ -231,6 +244,7 @@ pub fn build_preview(ctx: &Ctx, img: &Image, ops: &EditOps) -> Result<Built> {
     imagesvc::write_bytes(&abs, &codec::encode_jpeg(&out, PREV_Q))?;
     // 旧参数的预览档没人再引用了，扫同一张图的前缀清掉，别让目录越堆越厚
     purge_old(ctx, img, "adjprev", &h);
+    histogram::store(&abs.with_extension("hist.json"),&out)?;
     Ok(Built { rel, abs, ms: util::now_ms().saturating_sub(t0), reused: false, w, h: hh })
 }
 

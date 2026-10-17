@@ -4,7 +4,7 @@
   "identifier": "app.synco.desktop",
   "build": {
     "beforeDevCommand": "",
-    "beforeBuildCommand": "",
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-build.ps1",
     "frontendDist": "ui"
   },
   "app": {
