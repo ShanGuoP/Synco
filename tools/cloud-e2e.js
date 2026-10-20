@@ -262,7 +262,8 @@ async function main() {
   const outDir = path.join(data, 'out');
   fs.mkdirSync(outDir, { recursive: true });
   await req(srv.base, 'POST', '/api/export/dir', { dir: outDir });
-  const exRun = (await req(srv.base, 'POST', '/api/export/run', { result_ids: [done.id] })).body;
+  // 与上面的 /lossless 同样重算 24MP；debug 实测超过 15 秒，沿用该路径的 90 秒预算。
+  const exRun = (await req(srv.base, 'POST', '/api/export/run', { result_ids: [done.id] }, 90000)).body;
   const exFile = (exRun?.files || [])[0] || {};
   const exHead = (() => { try { return fs.readFileSync(path.join(outDir, exFile.file)).subarray(0, 4).toString('hex'); } catch (e) { return String(e).slice(0, 40); } })();
   check('导出交出去的是重算的无损 PNG', exFile.lossless === true && String(exFile.file).endsWith('.png') && exHead === '89504e47',

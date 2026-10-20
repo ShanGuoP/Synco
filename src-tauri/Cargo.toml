@@ -1,6 +1,6 @@
 [package]
 name = "synco-desktop"
-description = "Synco 桌面壳：Tauri 2 窗口 + 同进程内嵌 axum 服务"
+description = "Synco Photo 桌面壳：Tauri 2 窗口 + 同进程内嵌 axum 服务"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

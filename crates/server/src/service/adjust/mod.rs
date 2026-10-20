@@ -457,7 +457,7 @@ pub fn preview_json(b: &Built) -> Value {
 }
 
 
-mod snapshot;
+pub(crate) mod snapshot;
 pub(crate) use snapshot::{photo_from_snapshot, snapshot_inputs};
 #[cfg(test)]
 mod tests;

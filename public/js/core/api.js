@@ -40,6 +40,10 @@ async function request(path, { method = 'GET', body, signal } = {}) {
 }
 
 export const api = {
+  interopInbox: () => request('/api/interop/v1/inbox'),
+  interopComplete: (task, resultId) => request(`/api/interop/v1/tasks/${encodeURIComponent(task.task_id)}/complete`, {method:'POST',body:{client_id:task.client_id,result_id:resultId||undefined}}),
+  interopOpened: task => request(`/api/interop/v1/tasks/${encodeURIComponent(task.task_id)}/opened`, {method:'POST',body:{client_id:task.client_id}}),
+  interopCancel: task => request(`/api/interop/v1/tasks/${encodeURIComponent(task.task_id)}/cancel`, {method:'POST',body:{client_id:task.client_id}}),
   get:  p => request(p),
   post: (p, body) => request(p, { method: 'POST', body: body ?? {} }),
   del:  p => request(p, { method: 'DELETE' }),

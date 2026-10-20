@@ -11,6 +11,7 @@ pub mod projects;
 pub mod results;
 pub mod settings;
 pub mod setup;
+pub mod interop;
 
 use crate::web::files;
 use crate::state::Shared;
@@ -40,6 +41,14 @@ async fn releases_get() -> Response {
 
 pub fn router() -> Router<Shared> {
     Router::new()
+        .route("/api/interop/v1/info",get(interop::info))
+        .route("/api/interop/v1/inbox",get(interop::inbox))
+        .route("/api/interop/v1/tasks",get(interop::list).post(interop::create))
+        .route("/api/interop/v1/tasks/{id}",get(interop::get))
+        .route("/api/interop/v1/tasks/{id}/ack",post(interop::ack))
+        .route("/api/interop/v1/tasks/{id}/opened",post(interop::opened))
+        .route("/api/interop/v1/tasks/{id}/complete",post(interop::complete))
+        .route("/api/interop/v1/tasks/{id}/cancel",post(interop::cancel))
         .route("/api/projects", get(projects::projects_list).post(projects::projects_create))
         .route("/api/projects/{id}", get(projects::project_get).delete(projects::project_delete))
         .route("/api/projects/{id}/rename", post(projects::project_rename))

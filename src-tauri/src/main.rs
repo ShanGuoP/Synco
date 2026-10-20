@@ -376,7 +376,7 @@ fn main() {
             let url = format!("http://127.0.0.1:{port}/{}", if prompt { "?firstrun=1" } else { "" });
             let url: tauri::Url = url.parse()?;
             let _w = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
-                .title("Synco 新刻") // i18n-keep 品牌名与 productName 同源，不随界面语言换
+                .title("Synco Photo") // i18n-keep 品牌名与 productName 同源，不随界面语言换
                 // 无边框：页面顶栏兼作标题区（data-tauri-drag-region），窗口三颗键由前端画。
                 // 留着 shadow 与 resizable，否则贴到屏幕边上会像一块没有厚度的纸
                 .decorations(false)
@@ -396,7 +396,7 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("桌面壳建不起来：检查 src-tauri/tauri.conf.json 与 capabilities/default.json")
-        .run(|_, _| {});
+        .run(|app,event| {if matches!(event,tauri::RunEvent::Exit){if let Some(ctx)=app.try_state::<synco_server::state::Shared>(){synco_server::service::interop::shutdown(&ctx);}}});
 }
 
 #[cfg(test)]

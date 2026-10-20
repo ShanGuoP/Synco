@@ -184,7 +184,7 @@ fn start(open: bool) -> Result<()> {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() { up = true; break; }
     }
     if !up {
-        println!("  等 {port} 端口起来超时——多半是这个数据目录已经被另一个 Synco 占着，去看日志");
+        println!("  等 {port} 端口起来超时——多半是这个数据目录已经被另一个 Synco Photo 占着，去看日志");
         return Err(AppError::Fail(format!("服务没起来：{}", log_path.display())));
     }
     let url = format!("http://127.0.0.1:{port}/");
@@ -466,7 +466,7 @@ fn menu() -> Result<()> {
             println!();
         }
         first = false;
-        println!("Synco · 运维菜单");
+        println!("Synco Photo · 运维菜单");
         status_line(port);
         println!(
             "\n  [1] 启动工坊并打开页面      [2] 只启动，不开页面\n  [3] 停掉端口上的工坊        [4] 重启工坊（先停再起）\n  [5] 补齐派生档（320/3072）  [6] 锁定权重指纹（defaults.json）\n  [7] 设 ComfyUI 根目录       [8] 体检：ComfyUI 目录与权重\n  [9] 切换生产（备份库 → 用 Rust 版顶掉 7861）\n  [0] 退出（正在跑的服务不会被打断）\n"

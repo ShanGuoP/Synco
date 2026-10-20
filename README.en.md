@@ -1,4 +1,6 @@
-# Synco 新刻
+# Synco Photo
+
+The app is named **Synco Photo**. Source package names, executable filenames, `SYNCO_*` environment variables, data directories and interop registry keys retain their existing names for compatibility.
 
 **[简体中文](README.md)** · English
 
@@ -6,7 +8,7 @@
 
 Import a photo → paint over the part you want fixed → hand it to your local ComfyUI or a cloud image API → get it stitched back into the original.
 
-Unlike regenerating the whole frame — which quietly changes your background, the fabric texture on the shirt and the face you didn't ask about — Synco replaces pixels inside the mask and nothing else. Outside the feathered transition band the result is **bit-identical** to the original. The seam is closed with multi-band blending, so there's no pasted-on border.
+Unlike regenerating the whole frame — which quietly changes your background, the fabric texture on the shirt and the face you didn't ask about — Synco Photo replaces pixels inside the mask and nothing else. Outside the feathered transition band the result is **bit-identical** to the original. The seam is closed with multi-band blending, so there's no pasted-on border.
 
 This demo started tiny: a Node tool with one button in the rail — **GPT Image redraw**. Then it needed ComfyUI, and the original image handling hit a performance wall (scrubbing through photos kept freezing) that the old code couldn't grow past, and I couldn't fix it from where I was — CRUD is about as deep as I go. So I rewrote it. I went back and forth on the design with 大肥鱼 DeepSeek-v4.1-Flash, GLM-5.3 and GPT-6.1-Sol over a few rounds and landed on a Rust rewrite. Go was the plan — I know it better — but arguing with the models made it clear Rust is the stronger fit for image work. Fine. Rust it is.
 
@@ -46,11 +48,24 @@ Most of the Rust code was written by Qwen-3.8-Flash and GPT-6.1-Sol, then cross-
 
 ---
 
+## Round-trip photo-library handoff (0.4.1)
+
+Trusted desktop applications on the same machine can use `/api/interop/v1` to send a project name, stable source IDs, an immutable local image copy and its SHA-256. Synco Photo imports its own copy and can open it automatically; incoming photos never interrupt an existing editor session. **Finish and return** exports the edited photo; when comparing an AI result, the selected result can be returned instead. Results remain available until the library saves its own copy and acknowledges receipt.
+
+- Installed executable: `HKCU\Software\Synco\Interop`, value `Executable`. Portable installations require a configured executable path.
+- Discover the actual endpoint and instance ID through `%LOCALAPPDATA%\Synco\interop.json`, then verify `GET /api/interop/v1/info`. Do not assume a fixed port. Tests can isolate discovery with `SYNCO_INTEROP_DISCOVERY`.
+- Create: `POST /api/interop/v1/tasks`. Status: `GET /api/interop/v1/tasks/{task_id}?client_id=...`.
+- Collect: `GET /api/interop/v1/tasks?client_id=...&delivery=pending&limit=50`. Copy, verify and register a new version before `POST /api/interop/v1/tasks/{task_id}/ack`.
+- Use one UUID task per photo. Resending the same task is idempotent; source project and image IDs preserve associations. Active handoffs prevent deletion of their source images.
+- Inputs: JPEG, PNG, WebP and BMP, up to 256 MiB and 60 megapixels. Outputs: JPEG or PNG. RAW development and overwriting external originals are outside this protocol.
+
+After building the server, run `node tools/interop-check.cjs` for an isolated sender/receiver and recovery check; add `--browser` for the desktop interaction flow.
+
 ## Download and install
 
-Grab **`Synco_x.x.x_x64-setup.exe`** from [Releases](https://github.com/ShanGuoP/Synco/releases) and double-click it.
+Grab **`Synco Photo_x.x.x_x64-setup.exe`** from [Releases](https://github.com/ShanGuoP/Synco/releases) and double-click it.
 It installs into your user profile, needs no admin rights, and the installer wizard itself is Simplified-Chinese only.
-Launch **Synco** from the Start menu afterwards. The interface starts in Chinese; English is a switch inside the app —
+Launch **Synco Photo** from the Start menu afterwards. The interface starts in Chinese; English is a switch inside the app —
 Settings → Appearance → Language. That's the program's language, not the installer's.
 
 > If Releases is still empty, see [Building from source](#building-from-source) below.
@@ -60,7 +75,7 @@ Settings → Appearance → Language. That's the program's language, not the ins
 
 ## Get an image engine ready first
 
-Synco does not bundle image-generation weights; repainting runs through local ComfyUI or a cloud image API.
+Synco Photo does not bundle image-generation weights; repainting runs through local ComfyUI or a cloud image API.
 Pick one of the two below — or configure both and choose per submit. Crop, colour, liquify, beauty and face analysis
 work offline on their own; the small YuNet and FaceMesh models are bundled with the app.
 
@@ -68,9 +83,9 @@ work offline on their own; the small YuNet and FaceMesh models are bundled with 
 
 | What you need | Notes |
 |---|---|
-| ComfyUI | A local instance that actually runs; Synco looks at `http://127.0.0.1:8188` by default |
+| ComfyUI | A local instance that actually runs; Synco Photo looks at `http://127.0.0.1:8188` by default |
 | Qwen-Image 2.1 weights | `qwen_image_2.1_bf16.safetensors` (unet, ~14.2 GB)<br>`qwen3vl_8b_int8_convrot.safetensors` (clip, ~9.4 GB)<br>`qwen_image_2.1_vae_bf16.safetensors` (vae, ~0.68 GB) |
-| One inpainting workflow | The JSON you exported from ComfyUI with **Save (API Format)** — that file *is* the computation graph we submit. Synco only fills in the photo, mask, prompt, seed/steps/CFG and LoRA switches; crop parameters, models and wiring run exactly as your file has them |
+| One inpainting workflow | The JSON you exported from ComfyUI with **Save (API Format)** — that file *is* the computation graph we submit. Synco Photo only fills in the photo, mask, prompt, seed/steps/CFG and LoRA switches; crop parameters, models and wiring run exactly as your file has them |
 
 ## Dependencies and where the material comes from
 
@@ -103,7 +118,7 @@ Direct from Hugging Face:
   
 The three weights are about 24 GB on disk. Put them under ComfyUI's `models/`, sorted into the category subfolders.
 
-Settings → **Workflow parameters**: point it at that API export. "Role mapping" shows every node Synco
+Settings → **Workflow parameters**: point it at that API export. "Role mapping" shows every node Synco Photo
 recognised (who loads the image, who samples, which node the finished image is read back from); point at the
 ones it can't detect, stored per file. The graph must contain the crop + stitch pair of nodes — if they're
 missing, submission is **refused outright** rather than silently swapped for a different graph, because
@@ -320,7 +335,7 @@ git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # gives you synco.exe / synco-tools.exe / synco-desktop.exe
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
-# Produces target/release/bundle/nsis/Synco_<version>_x64-setup.exe; version comes from Cargo.toml.
+# Produces target/release/bundle/nsis/Synco Photo_<version>_x64-setup.exe; version comes from Cargo.toml.
 ```
 
 Before packaging, the build hook checks absolute paths in Tauri permission caches. After moving a checkout or copying an old target directory, it clears only the affected Tauri package artifacts. Existing installers and photo data are preserved. Direct Tauri CLI builds run the same check.
@@ -399,7 +414,7 @@ the interface doesn't depend on any CDN.
 
 ## Thanks
 
-Thanks to these open-source projects for Synco's dependencies, models and algorithm references. Each entry describes
+Thanks to these open-source projects for Synco Photo's dependencies, models and algorithm references. Each entry describes
 its actual role; versions, licences and reference scopes are in [NOTICE](NOTICE.md).
 
 **Desktop shell and interface**
@@ -446,10 +461,10 @@ its actual role; versions, licences and reference scopes are in [NOTICE](NOTICE.
   Shape protection uses a separate mask from skin retouching so the face silhouette can move.
   [Reference source](https://github.com/SysAdminDoc/FaceSlim/blob/6521f8d118d3c7062d4dfa2279e0160e05ccc8f5/faceslim/pipeline.py)
 - [CainCamera](https://github.com/CainKernel/CainCamera) — informed separate anatomical scales for cheeks, jaw, chin and eyes,
-  using pixel-space feature distances. Synco bounds combined movement per feature.
+  using pixel-space feature distances. Synco Photo bounds combined movement per feature.
   [Reference source](https://github.com/CainKernel/CainCamera/blob/8d1270e2a4d1e0e69940cf806c5c4ae39615eb66/filterlibrary/src/main/assets/shader/face/fragment_face_reshape.glsl)
 
-These are algorithm design references, not bundled SDKs or runtime dependencies. Synco implements its preview and output
+These are algorithm design references, not bundled SDKs or runtime dependencies. Synco Photo implements its preview and output
 calculations in Rust in `crates/photoedit-core/src/warp/face.rs` and `crates/photoedit-core/src/portrait.rs`.
 
 **Transport and odds and ends**

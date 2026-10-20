@@ -23,7 +23,7 @@ static CACHE: Mutex<Option<(i64, Vec<Value>)>> = Mutex::new(None);
 fn gh() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     // GitHub 的 API 对没有 User-Agent 的请求直接 403，这一句不是礼貌是给它的
-    CLIENT.get_or_init(|| reqwest::Client::builder().user_agent("Synco").timeout(Duration::from_secs(8)).build().unwrap_or_default())
+    CLIENT.get_or_init(|| reqwest::Client::builder().user_agent("Synco Photo").timeout(Duration::from_secs(8)).build().unwrap_or_default())
 }
 
 fn now() -> i64 {

@@ -49,12 +49,14 @@ pub struct Ctx {
     pub gate_sync: Mutex<()>,
     /// 资料操作与图像资源只有一个所有者，调用方不能绕过原始锁或许可。
     work: Arc<crate::service::work::Work>,
+    interop: crate::service::interop::discovery::Runtime,
     pub http: reqwest::Client,
 }
 
 pub type Shared = Arc<Ctx>;
 
 impl Ctx {
+    pub(crate) fn interop(&self) -> &crate::service::interop::discovery::Runtime { &self.interop }
     pub(crate) fn work(&self) -> Arc<crate::service::work::Work> { self.work.clone() }
     pub fn new(data: PathBuf, public: PathBuf, conn: Connection) -> Shared {
         Arc::new(Self {
@@ -73,6 +75,7 @@ impl Ctx {
             live: Arc::new(AtomicUsize::new(0)),
             gate_sync: Mutex::new(()),
             work: crate::service::work::Work::new(),
+            interop: Default::default(),
         })
     }
 

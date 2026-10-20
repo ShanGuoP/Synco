@@ -609,7 +609,7 @@ function createAboutPane() {
     const latest = (r.latest || {}).tag ? String(r.latest.tag).replace(/^v/, '') : '';
     const newer = !!latest && latest !== v.version;
     const rows = [
-      // 中文名「新刻」的权威出处在 app.title，界面别处只跟着它走
+      // 品牌名「Synco Photo」的权威出处在 app.title，界面别处只跟着它走
       okRow(true, t('app.title'), t('settings.about.tagline')),
       okRow(true, t('settings.about.version', { v: v.version }), built),
       // 只在真的不是最新时多说一句；一致的时候不写"已是最新版"这种废话

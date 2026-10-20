@@ -21,6 +21,7 @@ pub mod projects;
 pub mod results;
 pub mod settings;
 pub mod deletion;
+pub mod interop;
 
 pub(in crate::repo) fn s(v: &str) -> SqlValue {
     SqlValue::Text(v.to_string())

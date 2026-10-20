@@ -1,6 +1,7 @@
 // 应用入口：装载配置 → 装配外壳 → 注册路由 → 视图切换
 'use strict';
 import { $ } from './core/dom.js';
+import {startInterop} from './interop.js';
 import { api } from './core/api.js';
 import { createRouter, go } from './core/router.js';
 import { store, setHome, loadProjects, loadPhrases } from './state.js';
@@ -155,6 +156,7 @@ async function boot() {
 
   watchJobs();
   await router.start();
+  startInterop();
 
   // 桌面版第一次替我们选了数据目录，把这一页摊开让用户确认（改完就摘掉参数，免得刷新再弹）
   const q = new URLSearchParams(location.search);

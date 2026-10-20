@@ -1,4 +1,6 @@
-# Synco 新刻
+# Synco Photo
+
+应用显示名称为 **Synco Photo**；源码包名、可执行文件名、`SYNCO_*` 环境变量、数据目录和互联注册表项保留原名称，以兼容现有数据与集成。
 
 简体中文 · **[English](README.en.md)**
 
@@ -6,7 +8,7 @@
 
 导入照片 → 涂出要修的区域 → 交给本机 ComfyUI 或云端图像接口重绘 → 自动缝回原图。
 
-和"整图重绘"的区别：整图重绘会顺手改掉你的背景、衣服纹理和没让你动的脸。Synco 只替换蒙版里的像素，羽化过渡带之外与原图**逐位相同**，接缝用多频段融合过渡，不留贴图边框。
+和"整图重绘"的区别：整图重绘会顺手改掉你的背景、衣服纹理和没让你动的脸。Synco Photo 只替换蒙版里的像素，羽化过渡带之外与原图**逐位相同**，接缝用多频段融合过渡，不留贴图边框。
 
 这个Demo最初很小，只是一个 Node 写的工具，功能栏里也只有一个按钮**GPT Image 重绘**，后来要接 ComfyUI，又发现原图处理有性能瓶颈，旧的那点代码撑不住了（图片滑动经常卡死），想改，改不动，毕竟现在我的代码水平，也就写一手 CRUD ，索性推倒重来，方案与大肥鱼DeepSeek-v4.1-Flash、GLM-5.3、GPT-6.1-Sol来来回回讨论了几轮，最后定了 Rust重构的方案，其实本来打算用更为熟悉的Go，但是与AI对线的时候发现Rust在图像处理方面的性能似乎更好。
 
@@ -64,10 +66,23 @@ Rust 版的绝大多数代码是 Qwen-3.8-Flash和GPT-6.1-Sol写的，最后GLM-
 
 ---
 
+## 与图片整理软件双向交接（0.4.1）
+
+同机桌面软件可通过 `/api/interop/v1` 发送项目名、图片 ID、本地交接副本路径及 SHA-256。Synco Photo 导入后可自动打开；正在编辑时，新推送会留在待编辑列表。点击「完成并返回」导出当前精修图；在成图对比中可返回所选 AI 成图。整理软件离线时，结果会一直保留到它领取并确认收到。
+
+- 安装版启动路径：`HKCU\Software\Synco\Interop` 的 `Executable`；便携版需在发送方手动指定一次程序路径。
+- 实际端口与实例 ID：`%LOCALAPPDATA%\Synco\interop.json`，通过 `GET /api/interop/v1/info` 校验；不要假定端口固定。隔离运行时可用 `SYNCO_INTEROP_DISCOVERY` 指定独立发现文件。
+- 创建：`POST /api/interop/v1/tasks`；状态：`GET /api/interop/v1/tasks/{task_id}?client_id=...`。
+- 待领取：`GET /api/interop/v1/tasks?client_id=...&delivery=pending&limit=50`；接收方先复制、校验并登记新版本，再 `POST /api/interop/v1/tasks/{task_id}/ack`。
+- 每张图片一个 UUID 任务，相同任务重复发送不会重复导入；来源项目 ID 用于复用项目，图片 ID 用于关联原片。返回文件与原片分开保存，未确认任务阻止误删关联图片。
+- 输入 JPEG / PNG / WebP / BMP，单文件最多 256 MiB、6000 万像素；输出 JPEG / PNG。这里不包含 RAW 显影，也不直接覆盖外部软件的原片。
+
+开发者可在构建服务端后运行 `node tools/interop-check.cjs`，模拟发送、接收、重复请求与中断恢复；加 `--browser` 验证自动打开和完成返回的界面。
+
 ## 下载与安装
 
-从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco_x.x.x_x64-setup.exe`**，双击安装
-（装到当前用户目录，不需要管理员权限；安装向导只有简体中文）。装完从开始菜单启动 **Synco**。
+从 [Releases](https://github.com/ShanGuoP/Synco/releases) 下载 **`Synco Photo_x.x.x_x64-setup.exe`**，双击安装
+（装到当前用户目录，不需要管理员权限；安装向导只有简体中文）。装完从开始菜单启动 **Synco Photo**。
 界面默认中文，切英文在设置 → 外观 → 界面语言——那是程序内部的语言，跟安装向导不是一回事。
 
 > Releases 里还没有东西时，见下面的[从源码构建](#从源码构建)。
@@ -77,16 +92,16 @@ Rust 版的绝大多数代码是 Qwen-3.8-Flash和GPT-6.1-Sol写的，最后GLM-
 
 ## 先准备好"出图"的那一头
 
-Synco 不附带图像生成权重，重绘由本机 ComfyUI 或云端图像接口完成。下面二选一，两个都配好也行，提交时任选。
+Synco Photo 不附带图像生成权重，重绘由本机 ComfyUI 或云端图像接口完成。下面二选一，两个都配好也行，提交时任选。
 裁切、调色、液化、美颜和内置人脸分析均可独立离线使用；YuNet 与 FaceMesh 的小模型已随程序打包。
 
 ### 路线 A：本机 ComfyUI（推荐，免费、离线）
 
 | 需要 | 说明 |
 |---|---|
-| ComfyUI | 一个能跑起来的本机实例，Synco 默认找 `http://127.0.0.1:8188` |
+| ComfyUI | 一个能跑起来的本机实例，Synco Photo 默认找 `http://127.0.0.1:8188` |
 | Qwen-Image 2.1 权重 | `qwen_image_2.1_bf16.safetensors`（unet，约 14.2 GB）<br>`qwen3vl_8b_int8_convrot.safetensors`（clip，约 9.4 GB）<br>`qwen_image_2.1_vae_bf16.safetensors`（vae，约 0.68 GB） |
-| 一个局部重绘工作流 | 在 ComfyUI 里用 **Save (API Format)** 导出的那份 JSON——**提交用的计算图就是它**。Synco 只往里填照片、遮罩、提示词、种子/步数/CFG 和 LoRA 开关，裁切参数、模型、连线一概照你文件里那样跑 |
+| 一个局部重绘工作流 | 在 ComfyUI 里用 **Save (API Format)** 导出的那份 JSON——**提交用的计算图就是它**。Synco Photo 只往里填照片、遮罩、提示词、种子/步数/CFG 和 LoRA 开关，裁切参数、模型、连线一概照你文件里那样跑 |
 
 ## 依赖与素材来源
 
@@ -120,7 +135,7 @@ Synco 不附带图像生成权重，重绘由本机 ComfyUI 或云端图像接�
 
 三件权重加起来约 24 GB 磁盘，放在 ComfyUI 的 `models/` 下、按类别分子目录即可。
 
-设置 → **工作流参数**：填那份 API 导出，点「角色映射」能看见 Synco 认出的每个节点（谁装图、谁采样、
+设置 → **工作流参数**：填那份 API 导出，点「角色映射」能看见 Synco Photo 认出的每个节点（谁装图、谁采样、
 成图从哪个节点读回来），认不出来的在那里指一次，按文件各存一份。图里必须有「裁切 + 缝合」那一对节点，
 缺了会**直接拒绝提交**而不是改用别的图——否则回来的是一张整图重绘，画面看着却正常。
 填 UI 导出（save 出来的那份）只读参数，提交用程序内置的计算图，界面与历史记录都会写明用的是哪张。
@@ -305,7 +320,7 @@ git clone https://github.com/ShanGuoP/Synco.git
 cd Synco
 cargo build --release        # 得到 synco.exe / synco-tools.exe / synco-desktop.exe
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
-# 得到 NSIS 安装包 target/release/bundle/nsis/Synco_<版本号>_x64-setup.exe（版本号读自 Cargo.toml）
+# 得到 NSIS 安装包 target/release/bundle/nsis/Synco Photo_<版本号>_x64-setup.exe（版本号读自 Cargo.toml）
 ```
 
 打包前会检查 Tauri 权限缓存中的绝对路径。移动项目或复制旧 `target` 后，如果路径失效，会只清理相关 Tauri crate 的构建缓存并重新生成，不删除照片资料或已有安装包。直接运行 Tauri CLI 的 `build` 也会执行同一检查。
@@ -383,7 +398,7 @@ Noto is a trademark of Google Inc.
 
 ## 致谢
 
-感谢以下开源项目为 Synco 提供的程序依赖、模型与算法参考。各条目说明实际用途；
+感谢以下开源项目为 Synco Photo 提供的程序依赖、模型与算法参考。各条目说明实际用途；
 版本号、许可证与算法参考范围见 [NOTICE](NOTICE.md)。
 
 **桌面壳与界面**
@@ -425,9 +440,9 @@ Noto is a trademark of Google Inc.
 - [FaceSlim](https://github.com/SysAdminDoc/FaceSlim) —— 参考按五官组织控制点，以及向脸部轮廓外扩展、羽化背景保护区域的设计；
   塑形保护与皮肤美颜使用不同蒙版，让瘦脸可以移动轮廓。[参考源码](https://github.com/SysAdminDoc/FaceSlim/blob/6521f8d118d3c7062d4dfa2279e0160e05ccc8f5/faceslim/pipeline.py)
 - [CainCamera](https://github.com/CainKernel/CainCamera) —— 参考瘦脸、削脸、下巴、大眼各自独立的控制尺度，以及像素坐标中的五官距离；
-  Synco 分别限制各五官的叠加位移。[参考源码](https://github.com/CainKernel/CainCamera/blob/8d1270e2a4d1e0e69940cf806c5c4ae39615eb66/filterlibrary/src/main/assets/shader/face/fragment_face_reshape.glsl)
+  Synco Photo 分别限制各五官的叠加位移。[参考源码](https://github.com/CainKernel/CainCamera/blob/8d1270e2a4d1e0e69940cf806c5c4ae39615eb66/filterlibrary/src/main/assets/shader/face/fragment_face_reshape.glsl)
 
-这些项目用于算法设计参考，未作为 SDK 或运行时依赖打包。Synco 的实现位于
+这些项目用于算法设计参考，未作为 SDK 或运行时依赖打包。Synco Photo 的实现位于
 `crates/photoedit-core/src/warp/face.rs` 与 `crates/photoedit-core/src/portrait.rs`，由 Rust 完成预览与成图计算。
 
 **收发与杂项**

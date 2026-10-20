@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "Synco 新刻",
+    "title": "Synco Photo",
     "cfgFail": "Can’t read the default parameters",
     "cfgFailBody": "Check ComfyUI and the workflows folder, then refresh",
     "pageError": "Page error",
@@ -83,7 +83,7 @@
       "savedNoRead": "Saved, but the file can’t be read",
       "saveFail": "Save failed",
       "pathTitle": "Workflow file path",
-      "pathNote": "Point it at ComfyUI’s API export (Save (API Format) / Export (API)): that JSON is the computation graph we submit, and Synco only fills in the photo, mask, prompt, seed/steps/CFG and LoRA switches — everything else runs exactly as your file has it. A UI export (save) only carries parameter values; it can’t be the graph.",
+      "pathNote": "Point it at ComfyUI’s API export (Save (API Format) / Export (API)): that JSON is the computation graph we submit, and Synco Photo only fills in the photo, mask, prompt, seed/steps/CFG and LoRA switches — everything else runs exactly as your file has it. A UI export (save) only carries parameter values; it can’t be the graph.",
       "saveVerify": "Save & verify",
       "rolesTip": "Works out which nodes load images, sample and save; pick them yourself if they don’t match",
       "roles": "Role mapping",
@@ -116,7 +116,7 @@
       "rejected": "Some entries weren’t saved",
       "saved": "Role mapping saved",
       "saveFail": "Save failed",
-      "intro": "Synco fills your graph by role, not by node id: moving things around or renumbering changes nothing. Point at the ones we can’t detect here; each file keeps its own mapping.",
+      "intro": "Synco Photo fills your graph by role, not by node id: moving things around or renumbering changes nothing. Point at the ones we can’t detect here; each file keeps its own mapping.",
       "saveSee": "Save & re-check",
       "saveClose": "Save & close"
     },
@@ -293,7 +293,7 @@
       "shellDead": "The shell side can’t be read",
       "shellDeadNote": "{why} (the folder, project count and size come from the shell, so those three rows are gone; the move and copy buttons stop working too)",
       "needDesktop": "Change folder",
-      "needDesktopNote": "This step needs the desktop build: open Synco.exe and the picker and copy buttons appear here",
+      "needDesktopNote": "This step needs the desktop build: open Synco Photo and the picker and copy buttons appear here",
       "readFail": "Can’t read the data folder",
       "restartBtn": "Restart the studio now",
       "chooseBtn": "Pick another folder…",
@@ -372,7 +372,7 @@
     "stitch": "Returning image"
   },
   "desktop": {
-    "needDesktop": "This step needs the desktop shell: open Synco, or start the local service and use the browser page",
+    "needDesktop": "This step needs the desktop shell: open Synco Photo, or start the local service and use the browser page",
     "needFolder": "The desktop shell is required to open a system folder dialog",
     "maximize": "Maximize",
     "minimize": "Minimize",
@@ -388,7 +388,7 @@
     "lostFile": "Original file is missing"
   },
   "api": {
-    "offline": "Cant reach the local service - make sure Synco is running",
+    "offline": "Cant reach the local service - make sure Synco Photo is running",
     "fileRead": "Failed to read: {name}",
     "importAborted": "Interrupted after importing {n} images: {msg}"
   },
@@ -1440,7 +1440,7 @@
       "unknownFormatShort": "This JSON is neither a ComfyUI UI export nor an API export",
       "roleMissing": "No node found for \"{role}\" (class {class})",
       "roleNotInGraph": "Node {id} that \"{role}\" points at is not in this graph",
-      "roleNoInput": "\"{role}\" (node {id}) has no {input} input — Synco cannot fill it",
+      "roleNoInput": "\"{role}\" (node {id}) has no {input} input — Synco Photo cannot fill it",
       "cycle": "This graph has a cycle (a node's input loops back to itself); ComfyUI won't run it",
       "stitchOrder": "The stitch node isn't wired after the crop node: the returned image won't be pasted back",
       "outOfStitch": "The saved image doesn't come from the stitch node (it may store the sampler output directly): you'd get a repainted whole frame back — it looks fine but means something else",
@@ -1457,7 +1457,7 @@
       "noParams": "Recognised a {kind} format, but the file carries none of the node parameters this pipeline knows (not one of UNETLoader / KSampler / TextEncodeQwenImage21)"
     },
     "app": {
-      "dataLocked": "Another Synco is already using this data directory: just go back to the window that's open (double-clicking the icon brings it forward)",
+      "dataLocked": "Another Synco Photo is already using this data directory: just go back to the window that's open (double-clicking the icon brings it forward)",
       "taskPanic": "The server task crashed: {msg}"
     },
     "shell": {
@@ -1509,6 +1509,19 @@
       "output": "Choose a valid SaveImage or PreviewImage result output node.",
       "changed": "The active workflow has changed. Reload before saving the mapping.",
       "maskSize": "Image and mask dimensions differ; cannot compose the alpha mask."
+    },
+    "interop": {
+      "bad_request": "Invalid handoff request",
+      "unsupported_format": "Unsupported image format",
+      "task_missing": "Handoff task not found",
+      "task_conflict": "Task ID is already bound to different content",
+      "result_conflict": "Result identity or checksum does not match",
+      "task_busy": "Operation is not allowed in the current task state",
+      "input_missing": "Input image is missing",
+      "hash_mismatch": "Input checksum differs; send a new handoff copy",
+      "resource_limit": "Image exceeds handoff resource limits",
+      "pending_delivery": "Image has an active handoff; collect the result or cancel before deleting",
+      "io_error": "Handoff file operation failed"
     }
   },
   "wf": {
@@ -1759,5 +1772,19 @@
     "importLut": "Import LUT",
     "lutTooLarge": "LUT files must be no larger than 4 MB",
     "confirmMask": "✓ Confirm mask"
+  },
+  "interop": {
+    "pending": "Pending photos",
+    "open": "Open",
+    "complete": "Finish and return",
+    "completeResult": "Return selected result",
+    "discard": "Cancel handoff",
+    "discardHint": "The library will be notified of cancellation, and any unclaimed result will be discarded. The original and edit settings are preserved.",
+    "pendingCount": "{n} photos waiting for editing",
+    "editing": "From photo library · {name}",
+    "rendering": "Preparing returned image",
+    "ready": "Finished · awaiting collection",
+    "delivered": "Received by photo library",
+    "failed": "Handoff failed"
   }
 }

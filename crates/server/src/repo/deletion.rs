@@ -8,6 +8,8 @@ pub fn delete_image(ctx: &Ctx, id: i64) -> Result<Vec<i64>> { remove(ctx, id, fa
 fn remove(ctx: &Ctx, id: i64, project: bool) -> Result<Vec<i64>> {
     let mut db = ctx.db();
     let tx = db.transaction()?;
+    let protected:i64=tx.query_row(if project {"SELECT count(*) FROM interop_tasks WHERE project_id=? AND state IN ('importing','editing','rendering','ready')"} else {"SELECT count(*) FROM interop_tasks WHERE image_id=? AND state IN ('importing','editing','rendering','ready')"},[id],|r|r.get(0))?;
+    if protected>0 {return Err(crate::error::AppError::coded(409,"srv.interop.pending_delivery"));}
     let images = repo::all_on(&tx, if project { "SELECT * FROM images WHERE project_id=?" } else { "SELECT * FROM images WHERE id=?" }, &[repo::i(id)])?;
     let jobs: Vec<i64> = repo::all_on(&tx, if project { "SELECT id FROM results WHERE project_id=?" } else { "SELECT id FROM results WHERE image_id=?" }, &[repo::i(id)])?.into_iter().filter_map(|r| r["id"].as_i64()).collect();
     let mut files = repo::results::rows_paths_on(&tx, if project { "project_id=?" } else { "image_id=?" }, &[repo::i(id)])?;

@@ -31,6 +31,7 @@ let lastSubmitted = null;   // 上次提交的参数快照，用来判断面板�
 const PAINT_EDGE = 3072;
 
 export const isEditorOpen = () => !!ctx && !$('#editor').hidden;
+export const interopEditor = () => isEditorOpen() ? {imageId:ctx.imgId,projectId:ctx.projectId,resultId:ctx.compare.isOn?ctx.cmpId:null,ready:ctx.info?.id===ctx.imgId&&!ctx.adjust.node.inert} : null;
 
 /* ==================== 骨架（只建一次） ==================== */
 function buildShell() {

@@ -281,6 +281,7 @@ pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
     // 就在外面跑），没有这一句就是一撞 WAL 写锁立刻 SQLITE_BUSY——那句报错只有开发者读得懂
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch(SCHEMA)?;
+    db.execute_batch(super::interop::SCHEMA)?;
     for (table, col, ddl) in MIGRATIONS {
         if !has_column(&db, table, col)? {
             db.execute(ddl, [])?;
@@ -364,7 +365,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let db = open(&dir).unwrap();
         let t = tables(&db);
-        for want in ["app_settings", "backends", "images", "presets", "projects", "results", "job_specs", "image_adjust", "image_face", "image_landmark"] {
+        for want in ["app_settings", "backends", "images", "presets", "projects", "results", "job_specs", "image_adjust", "image_face", "image_landmark", "interop_projects", "interop_tasks"] {
             assert!(t.iter().any(|x| x == want), "缺表 {want}，实有 {t:?}");
         }
         assert!(has_column(&db, "results", "backend").unwrap());
@@ -372,7 +373,7 @@ mod tests {
         // 再开一次必须幂等（迁移循环不能重复 ALTER 报错）
         drop(db);
         let db2 = open(&dir).unwrap();
-        assert_eq!(tables(&db2).len(), 10);
+        assert_eq!(tables(&db2).len(), 12);
         // Windows 上句柄还开着就删不掉：连接必须先撒手，否则这句静默失败，每次跑测试留一个目录
         drop(db2);
         std::fs::remove_dir_all(&dir).ok();

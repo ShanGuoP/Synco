@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Synco",
+  "productName": "Synco Photo",
   "identifier": "app.synco.desktop",
   "build": {
     "beforeDevCommand": "",
@@ -19,10 +19,11 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "shortDescription": "Synco 新刻",
-    "longDescription": "Synco 新刻：本机 ComfyUI / 云端局部重绘工作台",
+    "shortDescription": "Synco Photo",
+    "longDescription": "Synco Photo：本机 ComfyUI / 云端局部重绘工作台",
     "windows": {
       "nsis": {
+        "installerHooks": "installer-hooks.nsh",
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "installMode": "currentUser",

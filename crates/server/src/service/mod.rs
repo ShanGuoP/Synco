@@ -22,3 +22,4 @@ pub mod localgen;
 pub mod work;
 
 pub mod library;
+pub mod interop;

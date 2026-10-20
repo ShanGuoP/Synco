@@ -128,6 +128,7 @@ pub static DESKTOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// 返回的 server 一旦完成，端口与队列就已经在跑了。
 pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     fs::create_dir_all(&data).map_err(AppError::Io)?;
+    let data=fs::canonicalize(data)?;
     lock_data_dir(&data)?;
     sweep_legacy_runtime_files(&data);
     let ctx = Ctx::new(data.clone(), public, db::open(&data)?);
@@ -145,6 +146,7 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
         Err(e) => return Err(AppError::Io(e)),
     };
     let real = listener.local_addr()?.port();
+    service::interop::start(&ctx,real).await?;
 
     let app = Router::new()
         .merge(api::router())
@@ -157,7 +159,7 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
         .layer(axum::middleware::from_fn(web::csp::apply))
         .with_state(ctx.clone());
 
-    println!("Synco 新刻（Rust {}）  SYNCO_URL=http://127.0.0.1:{real}", version::VERSION);
+    println!("Synco Photo（Rust {}）  SYNCO_URL=http://127.0.0.1:{real}", version::VERSION);
     println!("  数据目录 {}", data.display());
     let c = service::workflow::get_cfg(&ctx);
     // 横幅写在一行里：控制台归控制台，但"中文只在语言包里"这条判据是按行认的

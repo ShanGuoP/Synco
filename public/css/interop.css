@@ -1,0 +1,6 @@
+.interop-bar { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); z-index:180; display:flex; align-items:center; gap:var(--s-2); max-width:calc(100vw - 40px); padding:var(--s-2) var(--s-3); background:var(--bg-app); border:1px solid var(--line); border-radius:var(--r-3); box-shadow:0 3px 16px #0002; }
+.interop-bar[hidden],.interop-bar [hidden] { display:none!important; }
+.interop-bar__label { flex:1 0 180px; max-width:280px; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+html:root .interop-bar .input { width:200px; max-width:200px; flex:0 1 200px; }
+.interop-bar .btn { white-space:nowrap; }
+@media(max-width:850px){.interop-bar{flex-wrap:wrap;min-width:280px}.interop-bar__label{width:100%;max-width:none}.interop-bar .input{max-width:150px}}

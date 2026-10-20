@@ -1,6 +1,6 @@
 [package]
 name = "synco-server"
-description = "Synco 的 Axum 服务端：接管 lib/routes.js 的 API、文件服务与图像管线"
+description = "Synco Photo 的 Axum 服务端：接管 lib/routes.js 的 API、文件服务与图像管线"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

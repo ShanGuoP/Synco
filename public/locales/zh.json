@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "Synco 新刻",
+    "title": "Synco Photo",
     "cfgFail": "读不到默认参数",
     "cfgFailBody": "检查 ComfyUI 与 workflows 目录后刷新",
     "pageError": "页面异常",
@@ -83,7 +83,7 @@
       "savedNoRead": "已保存，但读不到该文件",
       "saveFail": "保存失败",
       "pathTitle": "工作流文件路径",
-      "pathNote": "填 ComfyUI 的 API 导出（Save (API Format) / Export (API)）：那份 JSON 就是提交用的计算图，Synco 只往里面填照片、遮罩、提示词、种子/步数/CFG 和 LoRA 开关，其余按你文件里那样跑。UI 导出（save）只读参数，当不了计算图。",
+      "pathNote": "填 ComfyUI 的 API 导出（Save (API Format) / Export (API)）：那份 JSON 就是提交用的计算图，Synco Photo 只往里面填照片、遮罩、提示词、种子/步数/CFG 和 LoRA 开关，其余按你文件里那样跑。UI 导出（save）只读参数，当不了计算图。",
       "saveVerify": "保存并校验",
       "rolesTip": "认出哪些节点负责装图 / 采样 / 出图，对不上就自己指",
       "roles": "角色映射",
@@ -116,7 +116,7 @@
       "rejected": "有几项没存进去",
       "saved": "角色映射已保存",
       "saveFail": "保存失败",
-      "intro": "Synco 按角色往你的图里填东西，不认节点号：挪位置、改编号都不影响。认不出来的在这里指一次，按文件各存一份。",
+      "intro": "Synco Photo 按角色往你的图里填东西，不认节点号：挪位置、改编号都不影响。认不出来的在这里指一次，按文件各存一份。",
       "saveSee": "存一下看校验",
       "saveClose": "保存并关闭"
     },
@@ -293,7 +293,7 @@
       "shellDead": "壳那一侧读不到",
       "shellDeadNote": "{why}（目录、项目数与体积要问壳，所以这三行没了；换址与搬家按钮也会失灵）",
       "needDesktop": "换目录",
-      "needDesktopNote": "这一步要桌面版：用 Synco.exe 打开后这里会出现选址与搬家按钮",
+      "needDesktopNote": "这一步要桌面版：用 Synco Photo 打开后这里会出现选址与搬家按钮",
       "readFail": "读不到数据目录",
       "restartBtn": "立即重启工坊",
       "chooseBtn": "换一个目录…",
@@ -372,7 +372,7 @@
     "stitch": "回传成图"
   },
   "desktop": {
-    "needDesktop": "这一步要桌面版：用 Synco 打开，或启动本地服务后用浏览器页面",
+    "needDesktop": "这一步要桌面版：用 Synco Photo 打开，或启动本地服务后用浏览器页面",
     "needFolder": "要桌面版才能弹系统目录框",
     "maximize": "最大化",
     "minimize": "最小化",
@@ -388,7 +388,7 @@
     "lostFile": "原图文件已丢失"
   },
   "api": {
-    "offline": "连不上本地服务，确认 Synco 还开着",
+    "offline": "连不上本地服务，确认 Synco Photo 还开着",
     "fileRead": "读取失败：{name}",
     "importAborted": "已导入 {n} 张后中断：{msg}"
   },
@@ -1440,7 +1440,7 @@
       "unknownFormatShort": "这个 JSON 既不是 ComfyUI 的 UI 导出，也不是 API 导出",
       "roleMissing": "「{role}」找不到节点（类名 {class}）",
       "roleNotInGraph": "「{role}」指向的节点 {id} 不在这张图里",
-      "roleNoInput": "「{role}」(节点 {id}) 没有 {input} 这个输入，Synco 没法往里填",
+      "roleNoInput": "「{role}」(节点 {id}) 没有 {input} 这个输入，Synco Photo 没法往里填",
       "cycle": "这张图里有环（某个节点的输入绕回了自己），ComfyUI 不会执行它",
       "stitchOrder": "缝合节点没有接在裁切节点之后：回来的图不会被贴回原图",
       "outOfStitch": "输出成图不是从缝合节点出来的（可能直接存了采样结果）：那样回来的是一张重绘过的整图，画面看着正常但语义已经变了",
@@ -1457,7 +1457,7 @@
       "noParams": "认出了{kind}格式，但文件里没有本管线认识的节点参数（UNETLoader / KSampler / TextEncodeQwenImage21 这些一个都没找到）"
     },
     "app": {
-      "dataLocked": "这个数据目录已经有另一个 Synco 在用了：回到已经开着的那个窗口即可（再双击图标会把它叫到前面）",
+      "dataLocked": "这个数据目录已经有另一个 Synco Photo 在用了：回到已经开着的那个窗口即可（再双击图标会把它叫到前面）",
       "taskPanic": "服务任务崩了：{msg}"
     },
     "shell": {
@@ -1509,6 +1509,19 @@
       "output": "请选择有效的 SaveImage 或 PreviewImage 结果输出节点。",
       "changed": "当前工作流已切换，请重新读取后再保存映射。",
       "maskSize": "原图与蒙版尺寸不一致，不能合成 Alpha 蒙版。"
+    },
+    "interop": {
+      "bad_request": "交接请求格式不正确",
+      "unsupported_format": "不支持此图片格式",
+      "task_missing": "交接任务不存在",
+      "task_conflict": "此任务编号已用于其他内容",
+      "result_conflict": "返回结果或校验值不一致",
+      "task_busy": "任务当前状态不允许此操作",
+      "input_missing": "输入图片不存在",
+      "hash_mismatch": "交接图片内容已改变，请重新发送",
+      "resource_limit": "图片超过交接资源上限",
+      "pending_delivery": "图片仍有关联交接任务，请先完成领取或取消交接",
+      "io_error": "交接文件处理失败"
     }
   },
   "wf": {
@@ -1759,5 +1772,19 @@
     "importLut": "导入 LUT",
     "lutTooLarge": "LUT 文件不能超过 4 MB",
     "confirmMask": "✓ 确认蒙版"
+  },
+  "interop": {
+    "pending": "待编辑图片",
+    "open": "打开",
+    "complete": "完成并返回",
+    "completeResult": "返回所选成图",
+    "discard": "取消交接",
+    "discardHint": "此任务将通知整理软件已取消，尚未领取的成图将被放弃。原片和当前精修参数仍会保留。",
+    "pendingCount": "收到 {n} 张待编辑图片",
+    "editing": "来自整理软件 · {name}",
+    "rendering": "正在准备返回图片",
+    "ready": "已完成，等待整理软件领取",
+    "delivered": "整理软件已接收",
+    "failed": "交接失败"
   }
 }
