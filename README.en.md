@@ -1,6 +1,6 @@
-# Synco Photo
+# Synco Photo 新刻
 
-The app is named **Synco Photo**. Source package names, executable filenames, `SYNCO_*` environment variables, data directories and interop registry keys retain their existing names for compatibility.
+The app is named **Synco Photo**, with the Chinese name **新刻** retained. Source package names, executable filenames, `SYNCO_*` environment variables, data directories and interop registry keys retain their existing names for compatibility.
 
 **[简体中文](README.md)** · English
 
