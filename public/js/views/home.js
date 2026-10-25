@@ -2,7 +2,7 @@
 'use strict';
 import { el, $, fill } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { api, importPhotos, dropToFiles } from '../core/api.js';
+import { api, importPhotos, dropToFiles, IMAGE_ACCEPT } from '../core/api.js';
 import { t } from '../core/i18n.js';
 import { store, loadProjects, setHome, statOf, setStat } from '../state.js';
 import { go } from '../core/router.js';
@@ -100,7 +100,7 @@ function heroRow() {
 
 function heroCard() {
   const name = el('input.input', { type: 'text', placeholder: t('home.namePh'), maxlength: '60' });
-  const picker = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true,
+  const picker = el('input', { type: 'file', accept: IMAGE_ACCEPT, multiple: true, hidden: true,
     onchange: e => importFiles(e.target.files, name.value) });
 
   const card = el('div.hero-card', {

@@ -3,7 +3,7 @@
 'use strict';
 import { el, $, $$, fill, raf } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { api, importPhotos } from '../core/api.js';
+import { api, importPhotos, IMAGE_ACCEPT } from '../core/api.js';
 import { store, loadProject, saveSettings, selectWhere, clearSel, invertSel, toggleSel, isSel, stateOf, isCloud, cloudPrompt } from '../state.js';
 import { go, back, routeGen } from '../core/router.js';
 import { setCrumb } from '../shell.js';
@@ -81,7 +81,7 @@ function header(p, images) {
 }
 
 function importBtn() {
-  const picker = el('input', { type: 'file', id: 'pjPicker', accept: 'image/*', multiple: true, hidden: true,
+  const picker = el('input', { type: 'file', id: 'pjPicker', accept: IMAGE_ACCEPT, multiple: true, hidden: true,
     onchange: e => appendFiles(e.target.files) });
   return el('label.btn.btn--ghost', { 'data-tip': t('pj.appendTip') },
     el('span.ic', { html: icon('upload', { cls: 'icon icon--sm' }) }), el('span', { text: t('pj.appendBtn') }), picker);

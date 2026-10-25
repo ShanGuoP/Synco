@@ -87,6 +87,13 @@ else console.log('  ✓ 字典里没有悬空键');
 const rsCodes = new Set();
 for (const m of rsCode.matchAll(/"(srv\.[A-Za-z0-9_.]+)"/g)) rsCodes.add(m[1]);
 const zhSet = new Set(kz), enSet = new Set(ke);
+// 直接调用的前端文案必须存在，避免中英同时丢键时仅靠键位对齐漏检。
+const uiKeys = new Set();
+for (const f of sources) {
+  for (const m of fs.readFileSync(f, 'utf8').matchAll(/\b(?:t|tr)\(\s*['"]([\w.]+)['"]/g)) uiKeys.add(m[1]);
+}
+const uiMissing = [...uiKeys].filter(k => !zhSet.has(k) || !enSet.has(k));
+if (uiMissing.length) bad(`前端缺少翻译：${uiMissing.join(', ')}`);
 const rsMissing = [...rsCodes].filter(k => !zhSet.has(k) || !enSet.has(k));
 if (rsMissing.length) bad(`${rsMissing.length} 把 Rust 用到的钥匙不在字典里（界面会看到裸钥匙名）：${rsMissing.slice(0, 6).join(', ')}`);
 else console.log(`  ✓ Rust 用到的 ${rsCodes.size} 把 srv.* 钥匙都在字典里`);

@@ -168,14 +168,15 @@ export async function fileToPayload(file) {
   return { name: file.name, b64, w, h };
 }
 
-const isImage = f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|bmp|avif)$/i.test(f.name);
+export const IMAGE_ACCEPT = '.jpg,.jpeg,.png,.webp,.bmp,image/jpeg,image/png,image/webp,image/bmp';
+export const isImageFile = f => /\.(jpe?g|png|webp|bmp)$/i.test(f.name) ||
+  (!/\.[^.]+$/.test(f.name) && /^image\/(jpeg|png|webp|bmp)$/i.test(f.type));
 /* 整包转 base64 会多占三分之一内存，所以一批既限张数也限体积：
-   后端 body 上限 80MB，只按张数切的话 8 张 9MB 的照片（一张漫展原图就是这个量级）
-   编出来就超 100MB，第一批正撞 413——建第一个项目恰好卡在这里 */
+   这里的体积预算只用于分批节省内存，不拒收超过预算的单张图片。 */
 const CHUNK = 8;
 const CHUNK_BYTES = 40 * 1024 * 1024;
 
-/** 张数与体积双限切批：单张就超预算的也照样自成一批，让后端的"太大"话说给那一张 */
+/** 按张数与体积分批：超预算的单张自成一批，仍正常接收。 */
 function batches(files) {
   const out = [];
   let cur = [];
@@ -196,7 +197,7 @@ function batches(files) {
  */
 export async function importPhotos(list, { projectId = null, name = '', onProgress } = {}) {
   const all = Array.from(list || []);
-  const files = all.filter(isImage);
+  const files = all.filter(isImageFile);
   const groups = batches(files);
   const ids = [];
   let pid = projectId;

@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::Path,
 };
 fn hash(b: &[u8]) -> String {
@@ -41,16 +41,7 @@ pub(super) fn import(ctx: &Ctx, row: &Value) -> Result<()> {
     if !meta.is_file() {
         return Err(AppError::bad("srv.interop.bad_request"));
     }
-    if meta.len() > super::MAX_FILE_BYTES {
-        return Err(AppError::coded(422, "srv.interop.resource_limit"));
-    }
-    let mut bytes = Vec::new();
-    fs::File::open(path)?
-        .take(super::MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > super::MAX_FILE_BYTES {
-        return Err(AppError::coded(422, "srv.interop.resource_limit"));
-    }
+    let bytes = fs::read(path)?;
     if hash(&bytes) != spec.input.sha256 {
         return Err(AppError::coded(409, "srv.interop.hash_mismatch"));
     }
@@ -63,13 +54,8 @@ pub(super) fn import(ctx: &Ctx, row: &Value) -> Result<()> {
         image::ImageFormat::Bmp => "bmp",
         _ => return Err(AppError::coded(415, "srv.interop.unsupported_format")),
     };
-    let (w, h) = codec::dimensions(&bytes).map_err(|e| {
-        if e.keyed().is_some_and(|(k, _)| k == "srv.image.dimsOut") {
-            AppError::coded(422, "srv.interop.resource_limit")
-        } else {
-            AppError::coded(415, "srv.interop.unsupported_format")
-        }
-    })?;
+    let (w, h) = codec::dimensions(&bytes)
+        .map_err(|_| AppError::coded(415, "srv.interop.unsupported_format"))?;
     drop(
         codec::decode(&bytes)
             .map_err(|_| AppError::coded(415, "srv.interop.unsupported_format"))?,

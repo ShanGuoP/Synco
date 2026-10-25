@@ -15,7 +15,7 @@ pub mod interop;
 
 use crate::web::files;
 use crate::state::Shared;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -49,10 +49,10 @@ pub fn router() -> Router<Shared> {
         .route("/api/interop/v1/tasks/{id}/opened",post(interop::opened))
         .route("/api/interop/v1/tasks/{id}/complete",post(interop::complete))
         .route("/api/interop/v1/tasks/{id}/cancel",post(interop::cancel))
-        .route("/api/projects", get(projects::projects_list).post(projects::projects_create))
+        .route("/api/projects", get(projects::projects_list).post(projects::projects_create).layer(DefaultBodyLimit::disable()))
         .route("/api/projects/{id}", get(projects::project_get).delete(projects::project_delete))
         .route("/api/projects/{id}/rename", post(projects::project_rename))
-        .route("/api/projects/{id}/images", post(projects::images_add))
+        .route("/api/projects/{id}/images", post(projects::images_add).layer(DefaultBodyLimit::disable()))
         .route("/api/projects/{id}/settings", get(projects::project_settings_get).post(projects::project_settings_set))
         .route("/api/images/{id}", get(images::image_get).delete(images::image_delete))
         .route("/api/images/{id}/mask", post(images::mask_post))
@@ -73,7 +73,7 @@ pub fn router() -> Router<Shared> {
         .route("/api/canvas/create", post(canvas::canvas_create))
         .route("/api/canvas/{id}", get(canvas::canvas_get))
         .route("/api/canvas/{id}/sketch", post(canvas::sketch_post))
-        .route("/api/canvas/{id}/refs", post(canvas::canvas_refs_add).put(canvas::canvas_refs_set))
+        .route("/api/canvas/{id}/refs", post(canvas::canvas_refs_add).put(canvas::canvas_refs_set).layer(DefaultBodyLimit::disable()))
         .route("/api/canvas/{id}/use-sketch", post(canvas::canvas_use_sketch))
         .route("/api/canvas/{id}/generate", post(canvas::canvas_generate))
         .route("/api/results", get(results::results_list))

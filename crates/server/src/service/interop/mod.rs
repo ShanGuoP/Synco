@@ -9,7 +9,6 @@ use crate::{
     util,
 };
 use serde_json::{json, Value};
-pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 pub fn shutdown(ctx: &Ctx) {
     ctx.interop().unpublish();
 }

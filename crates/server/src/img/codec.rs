@@ -6,48 +6,32 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ExtendedColorType as ColorType, ImageDecoder, ImageEncoder, ImageReader};
-use serde_json::json;
 use stitch_core::Rgba;
 use std::io::Cursor;
 
-/// 解码前先按**头部声明的**尺寸判一次：`DynamicImage::from_decoder` 按那个尺寸一次性分配 RGBA，
-/// 一张几十 KB 的 PNG 声明 30000×30000 就能要 3.6GB——高压缩比炸弹用字节数挡不住（80MB 的
-/// 请求体上限只管得到传输，管不到解码），只能在分配之前挡。
-/// 60MP 单份 RGBA 已是 240MB；几何与编码还会分配中间缓冲。异步入口必须经过共同
-/// 图像预算，不能把单张像素上限或 CPU 槽位数当作进程内存峰值。
-const MAX_DECODE_EDGE: u32 = 30000;
-pub(crate) const MAX_DECODE_PX: u64 = 60_000_000;
-
-/// 解码成 RGBA，并把 EXIF 方向烘焙进像素。
-/// 浏览器渲染 `<img>` 时自己按 EXIF 转，我们的缩略图不转就会出现"原图正着看、缩略图横着躺"，
-/// 所以这一步必须在服务端做，而不是指望前端。
-fn validate_dimensions(dw: u32, dh: u32) -> Result<()> {
-    if dw == 0 || dh == 0 || dw.max(dh) > MAX_DECODE_EDGE || dw as u64 * dh as u64 > MAX_DECODE_PX {
-        return Err(AppError::bad_args(
-            "srv.image.dimsOut",
-            json!({ "w": dw, "h": dh, "edge": MAX_DECODE_EDGE, "px": MAX_DECODE_PX }),
-        ));
+/// 只接受已启用的普通图片格式；不设置文件体积、长边、像素或解码分配上限。
+/// 图像任务仍由共同资源许可串行/限并发调度，实际容量取决于可用内存。
+fn reader(bytes: &[u8]) -> Result<ImageReader<Cursor<&[u8]>>> {
+    let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()
+        .map_err(|e| AppError::detail("srv.image.badFormat", e))?;
+    if !matches!(reader.format(), Some(image::ImageFormat::Jpeg | image::ImageFormat::Png | image::ImageFormat::WebP | image::ImageFormat::Bmp)) {
+        return Err(AppError::bad("srv.image.unsupportedFormat"));
     }
-    Ok(())
+    reader.no_limits();
+    Ok(reader)
 }
 
 /// 只读真实尺寸与方向，不分配像素，导入时就建立可信的尺寸元数据。
 pub(crate) fn dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
-    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|e| AppError::detail("srv.image.badFormat", e))?;
-    let mut decoder = reader.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
+    let mut decoder = reader(bytes)?.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
     let (w, h) = decoder.dimensions();
-    validate_dimensions(w, h)?;
     let swap = matches!(decoder.orientation().unwrap_or(Orientation::NoTransforms), Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH);
     Ok(if swap { (h, w) } else { (w, h) })
 }
 
+/// 解码成 RGBA，并把 EXIF 方向烘焙进像素，保证缩略图与原图显示方向一致。
 pub fn decode(bytes: &[u8]) -> Result<Rgba> {
-    let reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|e| AppError::detail("srv.image.badFormat", e))?;
-    let mut decoder = reader.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
-    let (dw, dh) = decoder.dimensions();
-    validate_dimensions(dw, dh)?;
+    let mut decoder = reader(bytes)?.into_decoder().map_err(|e| AppError::detail("srv.image.decoderFail", e))?;
     // PNG/WEBP 的解码器没有 orientation()，默认就是 Unspecified；JPEG/TIFF 会真读
     let orient = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| AppError::detail("srv.image.decodeFail", e))?;
@@ -109,6 +93,32 @@ pub fn scale_to_long_edge(img: &Rgba, edge: usize) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_images_have_no_application_dimension_or_allocation_cap() {
+        let img = Rgba::new(40_001, 1);
+        let bytes = encode_png(&img);
+        assert_eq!(dimensions(&bytes).unwrap(), (40_001, 1));
+        assert_eq!(decode(&bytes).unwrap(), img);
+        // 只读头部：超过旧像素门槛与解码器默认 512 MiB，不分配整幅像素。
+        let mut bmp = vec![0u8; 54];
+        bmp[..2].copy_from_slice(b"BM");
+        bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&16_000u32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&10_000u32.to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
+        assert_eq!(dimensions(&bmp).unwrap(), (16_000, 10_000));
+    }
+
+    #[test]
+    fn raw_tiff_and_non_image_content_are_rejected() {
+        for bytes in [b"II\x2a\x00\x08\x00\x00\x00".as_slice(), b"not an image".as_slice()] {
+            assert!(dimensions(bytes).is_err());
+            assert!(decode(bytes).is_err());
+        }
+    }
 
     #[test]
     fn png_jpeg_往回一致() {

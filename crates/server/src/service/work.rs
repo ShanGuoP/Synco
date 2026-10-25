@@ -71,10 +71,11 @@ impl Work {
     pub fn stats(&self) -> WorkStats { self.stats.lock().unwrap_or_else(|e| e.into_inner()).clone() }
 
     pub async fn image(self: &Arc<Self>, pixels: u64) -> Result<ImageLease> {
-        // 未知尺寸按既有解码上限预约；64 B/px 覆盖几何扩幅和多份 RGBA/alpha 中间缓冲。
+        // 未知尺寸独占预约预算；64 B/px 覆盖几何扩幅和多份 RGBA/alpha 中间缓冲。
         // 这是准入估算，不是进程 RSS 的硬上限；网络载荷与模型常驻内存另计。
-        let px = if pixels == 0 { crate::img::codec::MAX_DECODE_PX } else { pixels };
-        let mib = ((px.saturating_mul(64).saturating_add(1_048_575) / 1_048_576) + 64).min(IMAGE_BUDGET_MIB as u64) as u32;
+        let mib = if pixels == 0 { IMAGE_BUDGET_MIB } else {
+            ((pixels.saturating_mul(64).saturating_add(1_048_575) / 1_048_576) + 64).min(IMAGE_BUDGET_MIB as u64) as u32
+        };
         let cpu = self.cpu.clone().acquire_owned().await.map_err(|_| AppError::fail("srv.util.poolDead"))?;
         let memory = self.memory.clone().acquire_many_owned(mib).await.map_err(|_| AppError::fail("srv.util.poolDead"))?;
         let mut stats = self.stats.lock().unwrap_or_else(|e| e.into_inner());

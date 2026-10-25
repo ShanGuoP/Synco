@@ -49,7 +49,7 @@ impl Runtime {
                         .join("Synco/interop.json")
                 }
             });
-        let info = json!({"protocol":1,"instance_id":self.instance_id,"base_url":format!("http://127.0.0.1:{port}"),"executable":std::env::current_exe()?.display().to_string(),"input_formats":["jpeg","png","webp","bmp"],"output_formats":["jpeg","png"],"max_pixels":60_000_000,"max_edge":30000,"max_file_bytes":super::MAX_FILE_BYTES});
+        let info = json!({"protocol":1,"instance_id":self.instance_id,"base_url":format!("http://127.0.0.1:{port}"),"executable":std::env::current_exe()?.display().to_string(),"input_formats":["jpeg","png","webp","bmp"],"output_formats":["jpeg","png"],"max_pixels":null,"max_edge":null,"max_file_bytes":null});
         fs::create_dir_all(p.parent().unwrap())?;
         let _lock = lock(&p)?;
         let tmp = p.with_extension(format!("{}.part", self.instance_id));

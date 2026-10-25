@@ -4,7 +4,7 @@
 'use strict';
 import { el, $, fill } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
-import { api, fileToPayload } from '../../core/api.js';
+import { api, fileToPayload, IMAGE_ACCEPT, isImageFile } from '../../core/api.js';
 import { encodeMask } from '../../core/maskEncode.js';
 import { dx, t } from '../../core/i18n.js';
 import { store, loadProject, loadPhrases } from '../../state.js';
@@ -169,7 +169,7 @@ function build() {
   /* 参考图槽带：两条来源各一个按钮，不做弹出菜单——槽位状态要一眼看得见 */
   const refGrid = el('div.refslots');
   const refCount = el('span.muted', { text: '' });
-  const refFile = el('input', { type: 'file', accept: 'image/*', multiple: 'multiple', hidden: 'hidden', style: { display: 'none' } });
+  const refFile = el('input', { type: 'file', accept: IMAGE_ACCEPT, multiple: 'multiple', hidden: 'hidden', style: { display: 'none' } });
   refFile.onchange = () => { const fs = [...refFile.files]; refFile.value = ''; addRefFiles(fs); };
   const refUp = el('button.btn.btn--ghost.btn--sm', {
     type: 'button', 'data-tip': t('cv.refUpTip'),
@@ -342,10 +342,8 @@ async function refreshRefs() {
   try { const d = await api.canvas(c.imgId); if (same()) paintRefs(d.refs || []); } catch { /* 集合读不到就维持屏幕上那一版 */ }
 }
 
-const isImgFile = f => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|bmp|avif)$/i.test(f.name || '');
-
 async function addRefFiles(files) {
-  const list = files.filter(isImgFile);
+  const list = files.filter(isImageFile);
   if (!list.length) { toastErr(t('cv.notImage'), t('cv.formats')); return; }
   const room = c.refMax - c.refList.length;
   if (room <= 0) { toastErr(t('cv.refMax', { n: c.refMax }), t('cv.refFullUpload')); return; }

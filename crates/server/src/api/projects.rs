@@ -1,6 +1,6 @@
 //! 路由薄层：只做参数解析、状态码与响应形状；业务在 `crate::service`，读写在 `crate::repo`。
 
-use super::common::{bad, bad_args, batch_limit, body_of, err, ok, path_id, save_batch};
+use super::common::{bad, bad_args, batch_limit, body_of, image_body_of, err, ok, path_id, save_batch};
 use crate::error::Result;
 use crate::models::dto;
 use crate::repo::{images as rimg, projects as rproj};
@@ -40,7 +40,7 @@ fn project_name(body: &Value) -> String {
 }
 
 pub async fn projects_create(State(ctx): State<Shared>, raw: Bytes) -> Result<Response> {
-    let mut body = body_of(raw).await?;
+    let mut body = image_body_of(raw).await?;
     let name = project_name(&body);
     // 张数在建项目之前先判：反过来先建后判会留下一个空项目挂在库里
     if let Some(files) = body.get("files").and_then(|v| v.as_array()) {
@@ -90,7 +90,7 @@ pub async fn project_delete(State(ctx): State<Shared>, APath(id): APath<String>)
 
 pub async fn images_add(State(ctx): State<Shared>, APath(id): APath<String>, raw: Bytes) -> Result<Response> {
     let pid = path_id(&id)?;
-    let mut body = body_of(raw).await?;
+    let mut body = image_body_of(raw).await?;
     let mut ids: Vec<Value> = Vec::new();
     if let Some(files) = body.get_mut("files").and_then(|v| v.as_array_mut()) {
         ids = save_batch(&ctx, pid, files).await?.into_iter().map(Value::from).collect();

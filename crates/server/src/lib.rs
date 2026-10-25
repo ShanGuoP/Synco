@@ -151,8 +151,7 @@ pub async fn serve(data: PathBuf, public: PathBuf, want: u16) -> Result<Boot> {
     let app = Router::new()
         .merge(api::router())
         .fallback(files::fallback)
-        // 一批 8 张 24MP 的 base64 有几十 MB，默认 2MB 上限会把导入直接挡掉；
-        // 超限由 extractor 兜住（状态码 413），不让超大 body 把内存打爆
+        // 普通控制请求保留体积上限；图片导入路由在 api::router 中单独关闭此限制。
         .layer(DefaultBodyLimit::max(api::BODY_LIMIT))
         .layer(axum::middleware::from_fn_with_state(ctx.clone(), guard::library))
         .layer(axum::middleware::from_fn(guard::loopback_only))

@@ -9,7 +9,7 @@ use axum::http::{header::CONTENT_TYPE, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Map, Value};
 
-/// 一批 base64 的体积按 80MB 收：前端按 8 张一批上传，正常永远碰不到
+/// 普通控制请求上限；图片导入入口单独关闭体积限制。
 pub const BODY_LIMIT: usize = 80 * 1024 * 1024;
 pub use crate::service::comfy::SEED_MAX;
 #[cfg(test)]
@@ -79,6 +79,11 @@ pub async fn body_of(raw: Bytes) -> Result<Value> {
             json!({ "got": raw.len() / 1048576, "cap": BODY_LIMIT >> 20 }),
         ));
     }
+    image_body_of(raw).await
+}
+
+/// 图片导入不设请求体积上限，仍验证 JSON 结构。
+pub(crate) async fn image_body_of(raw: Bytes) -> Result<Value> {
     let text = String::from_utf8_lossy(&raw);
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -92,7 +97,7 @@ pub(crate) fn path_id(s: &str) -> Result<i64> {
     s.parse::<i64>().map_err(|_| AppError::bad("srv.common.idNotNumber"))
 }
 
-/// 一批导入的张数上限。80MB 的 body 限的是**字节**不是张数：几千张 1×1 的小图照样塞得下，
+/// 一批导入的张数上限。几千张 1×1 的小图字节数很少，
 /// 而每一张都是"落盘 + 建行 + 排一次派生"，一个请求就能把队列和磁盘 IO 排满。
 /// 前端按 8 张一批发，正常永远碰不到。
 pub const BATCH_MAX: usize = 200;
@@ -140,12 +145,7 @@ pub(crate) fn save_image_file(ctx: &Shared, pid: i64, f: &Value) -> Result<i64> 
     if bytes.is_empty() {
         return Err(AppError::bad("srv.common.dataEmpty"));
     }
-    // 客户端尺寸只用于请求校验，实际几何与资源预算使用头部/方向得到的真实尺寸。
-    let reported_w = util::num_or(f.get("w"), 0.0);
-    let reported_h = util::num_or(f.get("h"), 0.0);
-    if !(1.0..=30000.0).contains(&reported_w) || !(1.0..=30000.0).contains(&reported_h) {
-        return Err(AppError::bad_args("srv.common.badDims", json!({ "w": reported_w.to_string(), "h": reported_h.to_string() })));
-    }
+    // 格式与尺寸以真实内容为准，不依赖浏览器能否解码大图。
     let (w, h) = crate::img::codec::dimensions(&bytes)?;
     std::fs::write(ctx.data.join(&rel), &bytes)
         .map_err(|e| AppError::fail_args("srv.common.writeFail", json!({ "msg": e.to_string() })))?;

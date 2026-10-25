@@ -75,7 +75,7 @@ Rust 版的绝大多数代码是 Qwen-3.8-Flash和GPT-6.1-Sol写的，最后GLM-
 - 创建：`POST /api/interop/v1/tasks`；状态：`GET /api/interop/v1/tasks/{task_id}?client_id=...`。
 - 待领取：`GET /api/interop/v1/tasks?client_id=...&delivery=pending&limit=50`；接收方先复制、校验并登记新版本，再 `POST /api/interop/v1/tasks/{task_id}/ack`。
 - 每张图片一个 UUID 任务，相同任务重复发送不会重复导入；来源项目 ID 用于复用项目，图片 ID 用于关联原片。返回文件与原片分开保存，未确认任务阻止误删关联图片。
-- 输入 JPEG / PNG / WebP / BMP，单文件最多 256 MiB、6000 万像素；输出 JPEG / PNG。这里不包含 RAW 显影，也不直接覆盖外部软件的原片。
+- 输入 JPEG / PNG / WebP / BMP，不设文件体积、总像素或长边上限，实际处理容量取决于可用内存；输出 JPEG / PNG。不接收 RAW，也不直接覆盖外部软件的原片。
 
 开发者可在构建服务端后运行 `node tools/interop-check.cjs`，模拟发送、接收、重复请求与中断恢复；加 `--browser` 验证自动打开和完成返回的界面。
 

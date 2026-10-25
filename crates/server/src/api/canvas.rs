@@ -5,7 +5,7 @@
 //! 所以出图走 `service::queue` 里的画布分支，而照片那两条入口（`/api/run`、`/api/cloud/queue`）
 //! 会按 `kind` 显式拒绝画稿。
 
-use super::common::{bad, bad_args, body_of, err, ok, path_id};
+use super::common::{bad, bad_args, body_of, image_body_of, err, ok, path_id};
 use crate::error::{AppError, Result};
 use crate::models::{dto, entity::Image};
 use crate::repo::{images as rimg, projects as rproj, results as rres};
@@ -148,7 +148,7 @@ pub async fn canvas_refs_add(State(ctx): State<Shared>, APath(id): APath<String>
     if !img.is_sketch() {
         return Ok(bad("srv.canvas.notSketch"));
     }
-    let body = body_of(raw).await?;
+    let body = image_body_of(raw).await?;
     // 三条来源的校验留在 handler 里（拒绝的理由要说准），解码/折档/重编码/落盘整段过阻塞池：
     // 一张参考图是全分辨率的 PNG，四张就是四次"解码 + 缩放 + 重编码"
     let row_opt = match body.get("from_result").and_then(|v| v.as_i64()) {
@@ -217,7 +217,7 @@ pub async fn canvas_refs_set(State(ctx): State<Shared>, APath(id): APath<String>
     if !img.is_sketch() {
         return Ok(bad("srv.canvas.notSketch"));
     }
-    let body = body_of(raw).await?;
+    let body = image_body_of(raw).await?;
     let want: Vec<String> = body
         .get("paths")
         .and_then(|v| v.as_array())

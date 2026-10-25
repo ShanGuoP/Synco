@@ -57,7 +57,7 @@ Trusted desktop applications on the same machine can use `/api/interop/v1` to se
 - Create: `POST /api/interop/v1/tasks`. Status: `GET /api/interop/v1/tasks/{task_id}?client_id=...`.
 - Collect: `GET /api/interop/v1/tasks?client_id=...&delivery=pending&limit=50`. Copy, verify and register a new version before `POST /api/interop/v1/tasks/{task_id}/ack`.
 - Use one UUID task per photo. Resending the same task is idempotent; source project and image IDs preserve associations. Active handoffs prevent deletion of their source images.
-- Inputs: JPEG, PNG, WebP and BMP, up to 256 MiB and 60 megapixels. Outputs: JPEG or PNG. RAW development and overwriting external originals are outside this protocol.
+- Inputs: JPEG, PNG, WebP and BMP, with no application limit on file size, pixel count or edge length; processing capacity depends on available memory. Outputs: JPEG or PNG. RAW input and overwriting external originals are outside this protocol.
 
 After building the server, run `node tools/interop-check.cjs` for an isolated sender/receiver and recovery check; add `--browser` for the desktop interaction flow.
 

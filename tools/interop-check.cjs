@@ -2,6 +2,7 @@
 const fs=require('fs'),path=require('path'),os=require('os'),assert=require('assert/strict'),crypto=require('crypto'),zlib=require('zlib');
 const {spawn,spawnSync}=require('child_process');
 const ROOT=path.resolve(__dirname,'..'),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const VERSION=/^version\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(ROOT,'Cargo.toml'),'utf8'))[1];
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
 function png(w,h){
   const crc=b=>{let n=0xffffffff;for(const v of b){n^=v;for(let k=0;k<8;k++)n=(n>>>1)^((n&1)?0xedb88320:0);}return(n^0xffffffff)>>>0;};
@@ -15,7 +16,7 @@ async function main(){
   const source=path.join(temp,'source.png'),bytes=png(320,240);fs.writeFileSync(source,bytes);
   const discovery=path.join(temp,'interop.json');let child,exited,base,browser,stderr='';
   async function start(){
-    child=spawn(path.join(ROOT,'target/debug/synco.exe'),[],{cwd:ROOT,env:{...process.env,SYNCO_DATA:data,SYNCO_PORT:'0',SYNCO_PUBLIC:path.join(ROOT,'public'),SYNCO_INTEROP_DISCOVERY:discovery},stdio:['ignore','ignore','pipe'],windowsHide:true});
+    child=spawn(process.env.SYNCO_BIN||path.join(ROOT,'target/debug/synco.exe'),[],{cwd:ROOT,env:{...process.env,SYNCO_DATA:data,SYNCO_PORT:'0',SYNCO_PUBLIC:path.join(ROOT,'public'),SYNCO_INTEROP_DISCOVERY:discovery},stdio:['ignore','ignore','pipe'],windowsHide:true});
     child.stderr.on('data',b=>stderr+=b);exited=new Promise(r=>child.once('exit',r));
     for(let i=0;i<100;i++){try{const found=JSON.parse(fs.readFileSync(discovery));const r=await fetch(found.base_url+'/api/interop/v1/info');const info=await r.json();if(r.ok&&info.instance_id===found.instance_id){base=found.base_url;return info;}}catch{}await sleep(100);}throw Error('Server did not start: '+stderr);
   }
@@ -26,7 +27,7 @@ async function main(){
   const task=s=>request(`${prefix}/${s.task_id}?client_id=${s.client_id}`);
   async function wait(s,state){for(let i=0;i<160;i++){const t=await task(s);if(t.state===state)return t;if(t.state==='failed'&&state!=='failed')throw Error(JSON.stringify(t));await sleep(100);}throw Error('Timed out: '+JSON.stringify(await task(s)));}
   try{
-    const info=await start();assert.equal(info.protocol,1);assert.equal((await request('/api/version')).version,'0.4.2');
+    const info=await start();assert.equal(info.protocol,1);assert.equal((await request('/api/version')).version,VERSION);
     assert.deepEqual(info.input_formats,['jpeg','png','webp','bmp']);
     await request(prefix,make({input:{path:'relative.png',sha256:sha(bytes)}}),400);
     await request(prefix,make({output:{format:'raw',quality:95}}),415);
